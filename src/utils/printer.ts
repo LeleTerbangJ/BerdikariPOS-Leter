@@ -37,6 +37,7 @@ export interface ReceiptData {
   receiptHeader?: string;
   receiptFooter?: string;
   isReprint?: boolean;
+  showLogoOnReceipt?: boolean;
 }
 
 export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettings, isReprint: boolean = false): ReceiptData {
@@ -61,6 +62,7 @@ export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettin
     receiptHeader: settings.receiptHeader,
     receiptFooter: settings.receiptFooter,
     isReprint,
+    showLogoOnReceipt: settings.showLogoOnReceipt !== false,
   };
 }
 
@@ -288,7 +290,7 @@ async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Prom
 // MODE 1: BROWSER PRINT (window.print)
 // ============================================================
 
-export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
+export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', preOpenedWindow?: Window | null) {
   const fontSize = width === '58mm' ? '10px' : '12px';
   const paperWidth = width === '58mm' ? '48mm' : '72mm';
   const separator = width === '58mm' ? '-'.repeat(32) : '-'.repeat(42);
@@ -307,11 +309,15 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
   lines.push(separator);
 
   // Transaction info
-  lines.push(`No: #${data.queueNumber}`);
-  lines.push(`Tgl: ${dateStr}`);
+  const orderHeader = getOrderTypeHeaderLines(data.orderType, data.tableNumber);
+  lines.push(leftRight(`No: #${data.queueNumber}`, orderHeader.line1, width));
+  if (orderHeader.line2) {
+    lines.push(leftRight(`Tgl: ${dateStr}`, orderHeader.line2, width));
+  } else {
+    lines.push(`Tgl: ${dateStr}`);
+  }
   lines.push(`Kasir: ${data.cashierName}`);
   if (data.customerName) lines.push(`Pelanggan: ${data.customerName}`);
-  if (data.orderType) lines.push(`Tipe: ${data.orderType}${data.tableNumber ? ` (${data.tableNumber})` : ''}`);
   lines.push(separator);
 
   // Items
@@ -356,9 +362,12 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
   }
   lines.push('');
 
-  // Open print window
-  const printWindow = window.open('', '_blank', 'width=400,height=600');
-  if (!printWindow) return;
+  // Use pre-opened window if available, otherwise open a new one
+  const printWindow = preOpenedWindow || window.open('', '_blank', 'width=400,height=600');
+  if (!printWindow) {
+    console.warn('[printReceiptBrowser] Pop-up blocked. Please allow pop-ups for this site.');
+    return;
+  }
 
   printWindow.document.write(`
     <!DOCTYPE html>
@@ -367,8 +376,8 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
       <title>Struk #${data.queueNumber}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; }
-        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; color: #000; }
+        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; font-family: inherit; }
         @media print {
           @page { margin: 0; size: ${width} auto; }
           body { width: 100%; padding: 2mm; }
@@ -376,6 +385,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
       </style>
     </head>
     <body>
+      ${data.storeLogo && data.showLogoOnReceipt !== false ? `<div style="text-align: center; margin-bottom: 6px;"><img src="${data.storeLogo}" style="max-height: 48px; max-width: 100%; object-fit: contain;" /></div>` : ''}
       <pre>${lines.join('\n')}</pre>
     </body>
     </html>
@@ -383,6 +393,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm') {
   printWindow.document.close();
 
   setTimeout(() => {
+    printWindow.focus();
     printWindow.print();
     setTimeout(() => printWindow.close(), 1000);
   }, 300);
@@ -423,14 +434,18 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
   // Transaction info
-  commands.push(...encoder.encode(`No: #${data.queueNumber}\n`));
-  commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\n`));
+  const orderHeader = getOrderTypeHeaderLines(data.orderType, data.tableNumber);
+  const line1 = leftRight(`No: #${data.queueNumber}`, orderHeader.line1, width);
+  commands.push(...encoder.encode(line1 + '\n'));
+  if (orderHeader.line2) {
+    const line2 = leftRight(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}`, orderHeader.line2, width);
+    commands.push(...encoder.encode(line2 + '\n'));
+  } else {
+    commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\n`));
+  }
   commands.push(...encoder.encode(`Kasir: ${data.cashierName}\n`));
   if (data.customerName) {
     commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\n`));
-  }
-  if (data.orderType) {
-    commands.push(...encoder.encode(`Tipe: ${data.orderType}${data.tableNumber ? ` (${data.tableNumber})` : ''}\n`));
   }
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
@@ -540,18 +555,15 @@ export function printKitchenReceiptBrowser(data: ReceiptData, items: CartItem[],
   lines.push(center('Selesai Tiket', kp.width));
   lines.push('');
 
-  const printWindow = window.open('', '_blank', 'width=400,height=600');
-  if (!printWindow) return;
-
-  printWindow.document.write(`
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <title>Tiket Dapur #${data.queueNumber} - ${kp.name}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; }
-        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; font-weight: bold; }
+        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; color: #000; }
+        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; font-weight: bold; font-family: inherit; }
         @media print {
           @page { margin: 0; size: ${kp.width} auto; }
           body { width: 100%; padding: 2mm; }
@@ -562,13 +574,8 @@ export function printKitchenReceiptBrowser(data: ReceiptData, items: CartItem[],
       <pre>${lines.join('\n')}</pre>
     </body>
     </html>
-  `);
-  printWindow.document.close();
-
-  setTimeout(() => {
-    printWindow.print();
-    setTimeout(() => printWindow.close(), 1000);
-  }, 300);
+  `;
+  printHtmlInIframe(html);
 }
 
 // ============================================================
@@ -643,7 +650,8 @@ async function printKitchenReceiptBluetooth(data: ReceiptData, items: CartItem[]
 export async function printReceipt(
   data: ReceiptData,
   settings: AppSettings,
-  targetPrinter: 'all' | 'cashier' = 'all'
+  targetPrinter: 'all' | 'cashier' = 'all',
+  preOpenedWindow?: Window | null
 ): Promise<PrintJobResult[]> {
   const results: PrintJobResult[] = [];
 
@@ -653,7 +661,7 @@ export async function printReceipt(
       if (settings.printerType === 'bluetooth') {
         await printReceiptBluetooth(data, settings.printerWidth);
       } else {
-        printReceiptBrowser(data, settings.printerWidth);
+        printReceiptBrowser(data, settings.printerWidth, preOpenedWindow);
       }
       results.push({ printer: 'Printer Kasir', status: 'success' });
     } catch (err: any) {
@@ -802,20 +810,61 @@ export async function printTextRaw(lines: string[], settings: AppSettings) {
   }
 }
 
+export function printHtmlInIframe(htmlContent: string) {
+  let iframe = document.getElementById('thermal-print-iframe') as HTMLIFrameElement;
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'thermal-print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0px';
+    iframe.style.height = '0px';
+    iframe.style.border = '0px';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
+  }
+
+  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+  if (doc) {
+    doc.open();
+    doc.write(htmlContent);
+    doc.close();
+
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (e) {
+        console.error('Iframe print error:', e);
+      }
+    }, 250);
+  } else {
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      setTimeout(() => {
+        printWindow.print();
+        setTimeout(() => printWindow.close(), 1000);
+      }, 300);
+    }
+  }
+}
+
 function fallbackBrowserPrintText(lines: string[], width: '58mm' | '80mm') {
   const fontSize = width === '58mm' ? '10px' : '12px';
   const paperWidth = width === '58mm' ? '48mm' : '72mm';
-  const printWindow = window.open('', '_blank', 'width=400,height=600');
-  if (!printWindow) return;
-  printWindow.document.write(`
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <title>Ringkasan</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; }
-        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; color: #000; }
+        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; font-family: inherit; }
         @media print {
           @page { margin: 0; size: ${width} auto; }
           body { width: 100%; padding: 2mm; }
@@ -826,9 +875,8 @@ function fallbackBrowserPrintText(lines: string[], width: '58mm' | '80mm') {
       <pre>${lines.join('\n')}</pre>
     </body>
     </html>
-  `);
-  printWindow.document.close();
-  printWindow.print();
+  `;
+  printHtmlInIframe(html);
 }
 
 // ============================================================
@@ -851,4 +899,32 @@ function padLeft(text: string, width: '58mm' | '80mm'): string {
   const maxChars = width === '58mm' ? 32 : 42;
   const pad = Math.max(1, maxChars - text.length - 10);
   return ' '.repeat(pad) + text;
+}
+
+export function getOrderTypeHeaderLines(orderType?: string, tableNumber?: string): { line1: string; line2?: string } {
+  const type = (orderType || 'Dine In').trim();
+
+  if (type.toLowerCase() === 'dine in') {
+    let tableStr = '';
+    if (tableNumber) {
+      const cleanTable = tableNumber.replace(/^meja\s*/i, '').trim();
+      tableStr = `MEJA ${cleanTable}`;
+    }
+    return {
+      line1: 'DINE IN',
+      line2: tableStr || undefined,
+    };
+  }
+
+  if (type.toLowerCase() === 'take away' || type.toLowerCase() === 'takeaway') {
+    return {
+      line1: 'TAKE',
+      line2: 'AWAY',
+    };
+  }
+
+  return {
+    line1: type.toUpperCase(),
+    line2: tableNumber ? `MEJA ${tableNumber.replace(/^meja\s*/i, '').toUpperCase()}` : undefined,
+  };
 }

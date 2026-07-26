@@ -184,6 +184,20 @@ CREATE TABLE IF NOT EXISTS stock_opnames (
   notes TEXT
 );
 
+-- 12. Cash Movements table (Rekap Kas: Kas Masuk & Kas Keluar)
+CREATE TABLE IF NOT EXISTS cash_movements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+  amount FLOAT NOT NULL DEFAULT 0,
+  category TEXT NOT NULL,
+  notes TEXT,
+  cashier_id TEXT NOT NULL,
+  cashier_name TEXT NOT NULL,
+  date TIMESTAMPTZ DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- ============================================================
 -- Enable Realtime for ALL tables (required for multi-device sync)
 -- ============================================================
@@ -239,6 +253,12 @@ END $$;
 DO $$
 BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE stock_opnames;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
@@ -320,4 +340,21 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_shades JSONB;
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}';
 
 ALTER PUBLICATION supabase_realtime ADD TABLE stock_opnames;
+
+-- Skrip untuk fitur Rekap Kas (Kas Masuk & Kas Keluar):
+CREATE TABLE IF NOT EXISTS cash_movements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+  amount FLOAT NOT NULL DEFAULT 0,
+  category TEXT NOT NULL,
+  notes TEXT,
+  cashier_id TEXT NOT NULL,
+  cashier_name TEXT NOT NULL,
+  date TIMESTAMPTZ DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
+ALTER TABLE cash_movements ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all for anon" ON cash_movements FOR ALL USING (true) WITH CHECK (true);
 */

@@ -10,7 +10,7 @@ import { formatRupiah, formatDate } from '../utils/format';
 import type { StockOpnameItem, StockOpname as StockOpnameType } from '../types';
 import PinModal from '../components/PinModal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { AlertTriangle, CheckCircle, History, Search, ClipboardCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle, History, Search, ClipboardCheck, EyeOff } from 'lucide-react';
 
 const REASON_OPTIONS = ['Basi', 'Bahan Rusak', 'Salah Input', 'Tercecer', 'Penyusutan', 'Lainnya'];
 
@@ -31,6 +31,8 @@ export default function StockOpname() {
   const { currentUser } = useAuthStore();
   const { settings } = useSettingsStore();
   const { addLog: addAuditLog } = useAuditLogStore();
+
+  const isWarehouseStaff = currentUser?.role === 'Staf Gudang';
 
   const [view, setView] = useState<'form' | 'history'>('form');
   const [rows, setRows] = useState<OpnameRow[]>(() =>
@@ -99,10 +101,15 @@ export default function StockOpname() {
 
   const handleSubmitAttempt = () => {
     if (filledCount === 0) return alert('Mohon isi setidaknya 1 item stok aktual.');
-    const missingReason = opnameItems.filter((i) => i.difference !== 0 && (!i.reason || i.reason === '-'));
-    if (missingReason.length > 0) {
-      return alert(`${missingReason.length} item dengan selisih belum diisi alasannya.`);
+    
+    // Only require reasons for differences if the user is NOT Staf Gudang (blind opname mode)
+    if (!isWarehouseStaff) {
+      const missingReason = opnameItems.filter((i) => i.difference !== 0 && (!i.reason || i.reason === '-'));
+      if (missingReason.length > 0) {
+        return alert(`${missingReason.length} item dengan selisih belum diisi alasannya.`);
+      }
     }
+
     if (hasLargeDifference) {
       setShowPinModal(true);
     } else {
@@ -166,6 +173,16 @@ export default function StockOpname() {
 
       {view === 'form' && (
         <div className="space-y-4">
+          {/* Blind Opname Banner for Staf Gudang */}
+          {isWarehouseStaff && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl flex items-center gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+              <EyeOff size={18} className="text-amber-600 flex-shrink-0" />
+              <span>
+                <strong>Mode Stock Opname Buta:</strong> Untuk meningkatkan akurasi perhitungan fisik, stok sistem dan indikator selisih disembunyikan untuk akun Staf Gudang.
+              </span>
+            </div>
+          )}
+
           {/* Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="card p-4">
@@ -174,11 +191,15 @@ export default function StockOpname() {
             </div>
             <div className="card p-4">
               <p className="text-xs text-slate-500 dark:text-slate-400">Item Selisih</p>
-              <p className={`text-xl font-bold ${itemsWithDiff > 0 ? 'text-amber-600' : 'text-green-600'}`}>{itemsWithDiff}</p>
+              <p className={`text-xl font-bold ${isWarehouseStaff ? 'text-slate-400 text-sm font-medium' : itemsWithDiff > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                {isWarehouseStaff ? '🔒 Sembunyi (Opname Buta)' : itemsWithDiff}
+              </p>
             </div>
             <div className="card p-4">
               <p className="text-xs text-slate-500 dark:text-slate-400">Estimasi Kerugian</p>
-              <p className={`text-xl font-bold ${totalLoss > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatRupiah(totalLoss)}</p>
+              <p className={`text-xl font-bold ${isWarehouseStaff ? 'text-slate-400 text-sm font-medium' : totalLoss > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {isWarehouseStaff ? '🔒 Sembunyi (Opname Buta)' : formatRupiah(totalLoss)}
+              </p>
             </div>
           </div>
 
@@ -221,31 +242,40 @@ export default function StockOpname() {
                     const diff = row.actualStock !== '' ? actual - row.systemStock : null;
                     const loss = diff !== null && diff < 0 ? Math.abs(diff) * row.costPerUnit : 0;
                     const hasDiff = diff !== null && diff !== 0;
+                    const showRowHighlight = !isWarehouseStaff && hasDiff;
                     return (
-                      <tr key={row.inventoryId} className={`border-b border-slate-50 dark:border-slate-700/40 ${hasDiff ? (diff! < 0 ? 'bg-red-50/50 dark:bg-red-950/10' : 'bg-blue-50/50 dark:bg-blue-950/10') : ''}`}>
+                      <tr key={row.inventoryId} className={`border-b border-slate-50 dark:border-slate-700/40 ${showRowHighlight ? (diff! < 0 ? 'bg-red-50/50 dark:bg-red-950/10' : 'bg-blue-50/50 dark:bg-blue-950/10') : ''}`}>
                         <td className="p-3">
                           <span className="font-medium">{row.name}</span>
                           <span className="text-xs text-slate-400 ml-1">({row.unit})</span>
                         </td>
-                        <td className="p-3 text-right font-mono">{row.systemStock.toFixed(1)}</td>
+                        <td className="p-3 text-right font-mono">
+                          {isWarehouseStaff ? <span className="text-slate-400 text-xs font-normal">🔒 ***</span> : row.systemStock.toFixed(1)}
+                        </td>
                         <td className="p-3">
                           <input type="number" step="0.1" min="0" value={row.actualStock} onChange={(e) => updateRow(idx, 'actualStock', e.target.value)}
                             className="input py-1 px-2 text-center text-sm w-full" placeholder="—" />
                         </td>
                         <td className="p-3 text-right font-mono">
-                          {diff !== null ? (
+                          {isWarehouseStaff ? (
+                            <span className="text-slate-300">—</span>
+                          ) : diff !== null ? (
                             <span className={`font-bold ${diff > 0 ? 'text-blue-600' : diff < 0 ? 'text-red-600' : 'text-green-600'}`}>
                               {diff > 0 ? '+' : ''}{diff.toFixed(1)}
                             </span>
                           ) : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="p-3 text-right font-mono">
-                          {loss > 0 ? <span className="text-red-600 font-semibold">{formatRupiah(loss)}</span> : <span className="text-slate-300">—</span>}
+                          {isWarehouseStaff ? (
+                            <span className="text-slate-300">—</span>
+                          ) : loss > 0 ? (
+                            <span className="text-red-600 font-semibold">{formatRupiah(loss)}</span>
+                          ) : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="p-3">
-                          {hasDiff ? (
+                          {isWarehouseStaff || hasDiff ? (
                             <select value={row.reason} onChange={(e) => updateRow(idx, 'reason', e.target.value)} className="input py-1 px-2 text-xs w-full">
-                              <option value="">Pilih alasan...</option>
+                              <option value="">Pilih alasan (opsional)...</option>
                               {REASON_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
                             </select>
                           ) : <span className="text-slate-300 text-xs">—</span>}
@@ -283,7 +313,7 @@ export default function StockOpname() {
               <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl flex items-start gap-2">
                 <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  <strong>Selisih Besar Terdeteksi.</strong> Item dengan selisih ≥10% dari stok sistem ditemukan. PIN Manager diperlukan.
+                  <strong>Selisih Besar Terdeteksi.</strong> Item dengan selisih ≥10% dari stok sistem ditemukan. PIN Manager diperlukan untuk menyetujui opname.
                 </p>
               </div>
             )}
@@ -315,12 +345,18 @@ export default function StockOpname() {
                   <p className="text-xs text-slate-500 dark:text-slate-400">Oleh: {rec.staffName} {rec.pinVerified && <span className="text-green-600">✓ PIN Verified</span>}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-slate-400">{rec.totalItems} item, {rec.itemsWithDifference} selisih</p>
-                  <p className={`text-sm font-bold ${rec.totalLossValue > 0 ? 'text-red-600' : 'text-green-600'}`}>Kerugian: {formatRupiah(rec.totalLossValue)}</p>
+                  {isWarehouseStaff ? (
+                    <p className="text-xs text-slate-400 font-medium">{rec.totalItems} item dihitung (🔒 Opname Buta)</p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-slate-400">{rec.totalItems} item, {rec.itemsWithDifference} selisih</p>
+                      <p className={`text-sm font-bold ${rec.totalLossValue > 0 ? 'text-red-600' : 'text-green-600'}`}>Kerugian: {formatRupiah(rec.totalLossValue)}</p>
+                    </>
+                  )}
                 </div>
               </div>
               {rec.notes && <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">{rec.notes}</p>}
-              {rec.items.filter((i) => i.difference !== 0).length > 0 && (
+              {rec.items.length > 0 && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 dark:bg-slate-800/80">
@@ -334,15 +370,15 @@ export default function StockOpname() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rec.items.filter((i) => i.difference !== 0).map((item, idx) => (
+                      {rec.items.filter((i) => !isWarehouseStaff ? i.difference !== 0 : true).map((item, idx) => (
                         <tr key={idx} className="border-t border-slate-100 dark:border-slate-700/30">
                           <td className="p-2 font-medium">{item.inventoryName} <span className="text-slate-400">({item.unit})</span></td>
-                          <td className="p-2 text-right font-mono">{item.systemStock.toFixed(1)}</td>
+                          <td className="p-2 text-right font-mono">{isWarehouseStaff ? '🔒 ***' : item.systemStock.toFixed(1)}</td>
                           <td className="p-2 text-right font-mono">{item.actualStock.toFixed(1)}</td>
-                          <td className={`p-2 text-right font-mono font-bold ${item.difference < 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                            {item.difference > 0 ? '+' : ''}{item.difference.toFixed(1)}
+                          <td className={`p-2 text-right font-mono ${isWarehouseStaff ? 'text-slate-400' : item.difference < 0 ? 'text-red-600 font-bold' : 'text-blue-600 font-bold'}`}>
+                            {isWarehouseStaff ? '🔒 ***' : `${item.difference > 0 ? '+' : ''}${item.difference.toFixed(1)}`}
                           </td>
-                          <td className="p-2 text-right">{item.lossValue > 0 ? <span className="text-red-600">{formatRupiah(item.lossValue)}</span> : '—'}</td>
+                          <td className="p-2 text-right">{isWarehouseStaff ? '🔒 ***' : item.lossValue > 0 ? <span className="text-red-600">{formatRupiah(item.lossValue)}</span> : '—'}</td>
                           <td className="p-2">{item.reason}</td>
                         </tr>
                       ))}
@@ -361,7 +397,7 @@ export default function StockOpname() {
       <ConfirmDialog open={showConfirm} onClose={() => setShowConfirm(false)}
         onConfirm={() => { setShowConfirm(false); doSubmit(false); }}
         title="Konfirmasi Stock Opname"
-        message={`Simpan hasil opname ${filledCount} item? ${itemsWithDiff} item memiliki selisih. Stok di inventory akan diperbarui sesuai stok fisik.`} />
+        message={isWarehouseStaff ? `Simpan hasil opname ${filledCount} item fisik? Data stok inventory akan diperbarui.` : `Simpan hasil opname ${filledCount} item? ${itemsWithDiff} item memiliki selisih. Stok di inventory akan diperbarui sesuai stok fisik.`} />
     </div>
   );
 }

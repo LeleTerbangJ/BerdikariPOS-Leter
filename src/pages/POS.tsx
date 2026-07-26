@@ -387,6 +387,12 @@ export default function POS() {
     // Safety guard: Cash payment must have sufficient funds
     if (payMethod === 'Cash' && cash < total) return;
 
+    // Pre-open print window BEFORE any async calls to avoid popup blocker
+    let preOpenedPrintWindow: Window | null = null;
+    if ((settings.printerEnabled || settings.autoPrintOnCheckout) && settings.printerType !== 'bluetooth') {
+      preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
+    }
+
     const queueNum = await getNextQueueNumber();
 
     const hpp = calculateTransactionHPP(cart.items, menus, inventory);
@@ -424,9 +430,12 @@ export default function POS() {
     if (currentUser) {
       addLog(currentUser.id, currentUser.name, currentUser.role, 'create_transaction', `Transaksi #${queueNum} sebesar ${formatRupiah(total)}`, { transactionId: tx.id, queueNumber: queueNum, total });
     }
-    if (settings.printerEnabled) {
+    if (settings.printerEnabled || settings.autoPrintOnCheckout) {
       const receiptData = buildReceiptFromTransaction(tx, settings);
-      printReceipt(receiptData, settings);
+      printReceipt(receiptData, settings, 'all', preOpenedPrintWindow);
+    } else if (preOpenedPrintWindow) {
+      // Close the pre-opened window if printing is not needed
+      preOpenedPrintWindow.close();
     }
 
     // Record customer visit

@@ -62,6 +62,7 @@ export default function Catalog() {
 
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [fabOpen, setFabOpen] = useState(false);
 
   // Category management
   const [showCatManager, setShowCatManager] = useState(false);
@@ -244,13 +245,7 @@ export default function Catalog() {
     <div>
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📦 Katalog Menu</h1>
-        <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
-          <button onClick={openAdd} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
-            <Plus size={16} /> Tambah Menu
-          </button>
-          <button onClick={() => setShowCatManager(true)} className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
-            <Tag size={16} /> Kelola Kategori
-          </button>
+        <div className="flex items-center justify-center sm:justify-end gap-2 w-full sm:w-auto">
           <button onClick={handleExport} className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
             <Download size={16} /> Export CSV
           </button>
@@ -646,6 +641,55 @@ export default function Catalog() {
         message="Yakin ingin menghapus menu ini? Tindakan ini tidak bisa dibatalkan."
         confirmText="Ya, Hapus"
       />
+
+      {/* Floating Action Button (FAB) Speed Dial */}
+      <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-3">
+        {/* Speed Dial Options */}
+        {fabOpen && (
+          <div className="flex flex-col items-end gap-2.5 animate-in fade-in slide-in-from-bottom-3 duration-200">
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 bg-slate-900/30 backdrop-blur-[1px] -z-10"
+              onClick={() => setFabOpen(false)}
+            />
+
+            {/* Tambah Menu */}
+            <button
+              onClick={() => {
+                setFabOpen(false);
+                openAdd();
+              }}
+              className="btn bg-brand-600 hover:bg-brand-700 text-white font-semibold text-xs px-4 py-2.5 rounded-full shadow-xl flex items-center gap-2 transition-transform hover:scale-105 active:scale-95 border border-white/20"
+            >
+              <Plus size={18} /> Tambah Menu
+            </button>
+
+            {/* Kelola Kategori */}
+            <button
+              onClick={() => {
+                setFabOpen(false);
+                setShowCatManager(true);
+              }}
+              className="btn bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2.5 rounded-full shadow-xl flex items-center gap-2 transition-transform hover:scale-105 active:scale-95 border border-white/20"
+            >
+              <Tag size={18} /> Kelola Kategori
+            </button>
+          </div>
+        )}
+
+        {/* Main Floating Button */}
+        <button
+          onClick={() => setFabOpen(!fabOpen)}
+          className={`w-14 h-14 rounded-full shadow-2xl flex items-center justify-center text-white transition-all duration-300 active:scale-95 border border-white/20 ${
+            fabOpen
+              ? 'bg-slate-800 dark:bg-slate-700 rotate-45 scale-105 ring-4 ring-slate-400/30'
+              : 'bg-brand-600 hover:bg-brand-700 hover:scale-105 ring-4 ring-brand-500/20'
+          }`}
+          title={fabOpen ? 'Tutup' : 'Aksi Katalog'}
+        >
+          <Plus size={28} />
+        </button>
+      </div>
     </div>
   );
 }

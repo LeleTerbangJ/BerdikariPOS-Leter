@@ -172,17 +172,41 @@ export function exportInventoryPDF(data: {
 export function exportShiftPDF(data: {
   storeName: string;
   period: string;
-  shifts: { name: string; txCount: string; revenue: string; avg: string; from: string; to: string }[];
+  shifts: {
+    name: string;
+    txCount: string;
+    revenue: string;
+    avg: string;
+    from: string;
+    to: string;
+    cashSales?: string;
+    qrisSales?: string;
+    transferSales?: string;
+    cashIn?: string;
+    cashOut?: string;
+    diff?: string;
+  }[];
 }) {
   const doc = createPDF({ title: 'Laporan Shift Karyawan', storeName: data.storeName, period: data.period });
 
   autoTable(doc, {
     startY: 50,
-    head: [['Nama', 'Transaksi', 'Revenue', 'Rata-rata', 'Mulai', 'Akhir']],
-    body: data.shifts.map((s) => [s.name, s.txCount, s.revenue, s.avg, s.from, s.to]),
+    head: [['Kasir', 'Transaksi', 'Omset', 'Rata-rata', 'Tunai', 'QRIS', 'Transfer', 'Kas Masuk', 'Kas Keluar', 'Selisih Kas']],
+    body: data.shifts.map((s) => [
+      s.name,
+      s.txCount,
+      s.revenue,
+      s.avg,
+      s.cashSales || '-',
+      s.qrisSales || '-',
+      s.transferSales || '-',
+      s.cashIn || '-',
+      s.cashOut || '-',
+      s.diff || 'Pas',
+    ]),
     theme: 'grid',
     headStyles: { fillColor: [184, 95, 33] },
-    styles: { fontSize: 8 },
+    styles: { fontSize: 7 },
   });
 
   doc.save(`laporan-shift-${data.period.replace(/\s/g, '-')}.pdf`);
@@ -191,17 +215,38 @@ export function exportShiftPDF(data: {
 export function exportCashPDF(data: {
   storeName: string;
   shifts: { cashier: string; open: string; close: string; opening: string; expected: string; actual: string; diff: string; sales: string; tx: string }[];
+  cashMovements?: { date: string; cashier: string; type: string; category: string; amount: string; notes: string }[];
 }) {
-  const doc = createPDF({ title: 'Laporan Kas Kasir', storeName: data.storeName });
+  const doc = createPDF({ title: 'Laporan Kas Kasir & Arus Kas', storeName: data.storeName });
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.text('1. Riwayat Shift Kasir', 14, 52);
 
   autoTable(doc, {
-    startY: 50,
+    startY: 56,
     head: [['Kasir', 'Buka', 'Tutup', 'Modal', 'Expected', 'Aktual', 'Selisih', 'Sales', 'Tx']],
     body: data.shifts.map((s) => [s.cashier, s.open, s.close, s.opening, s.expected, s.actual, s.diff, s.sales, s.tx]),
     theme: 'grid',
     headStyles: { fillColor: [184, 95, 33] },
     styles: { fontSize: 7 },
   });
+
+  if (data.cashMovements && data.cashMovements.length > 0) {
+    const y2 = (doc as any).lastAutoTable.finalY + 10;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('2. Riwayat Arus Kas (Kas Masuk & Kas Keluar)', 14, y2);
+
+    autoTable(doc, {
+      startY: y2 + 4,
+      head: [['Tanggal', 'Kasir', 'Tipe', 'Kategori', 'Nominal', 'Catatan']],
+      body: data.cashMovements.map((m) => [m.date, m.cashier, m.type, m.category, m.amount, m.notes]),
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 7 },
+    });
+  }
 
   doc.save('laporan-kas-kasir.pdf');
 }

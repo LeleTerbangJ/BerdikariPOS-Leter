@@ -149,12 +149,29 @@ export interface AppSettings {
   };
   tableFeaturesEnabled?: boolean;
   availableTableNumbers?: string[];
-  // Receipt Customization (v3.7)
+  // Receipt Customization (v3.7 & v4.0)
   receiptHeader?: string;
   receiptFooter?: string;
   receiptAsciiOnly?: boolean;
   autoPrintReceipt?: boolean;
   autoPrintKitchen?: boolean;
+  showLogoOnReceipt?: boolean;
+}
+
+// Cash Movement (Rekap Kas: Kas Masuk & Kas Keluar)
+export type CashMovementType = 'in' | 'out'; // 'in' = Kas Masuk, 'out' = Kas Keluar
+
+export interface CashMovement {
+  id: string;
+  shiftId?: string;
+  type: CashMovementType;
+  amount: number;
+  category: string; // e.g. 'Modal Tambahan', 'Pembelian Bahan', 'Operasional Toko', 'Lain-lain'
+  notes?: string;
+  cashierId: string;
+  cashierName: string;
+  date: string; // ISO String
+  createdAt: string;
 }
 
 // Shift Management
@@ -166,7 +183,7 @@ export interface CashierShift {
   closedAt?: string; // ISO
   openingCash: number; // modal awal
   closingCash?: number; // kas akhir di laci (input manual)
-  expectedCash?: number; // kalkulasi sistem (opening + cash sales)
+  expectedCash?: number; // kalkulasi sistem (opening + cash sales + cashIn - cashOut)
   cashDifference?: number; // closingCash - expectedCash
   totalSales: number;
   totalTransactions: number;
@@ -221,6 +238,7 @@ export type AuditAction =
   | 'open_shift' | 'close_shift'
   | 'update_settings' | 'create_promo' | 'update_promo' | 'delete_promo'
   | 'create_customer' | 'update_customer' | 'delete_customer'
+  | 'update_cash_movement' | 'delete_cash_movement'
   | 'stock_opname';
 
 export interface AuditLogEntry {

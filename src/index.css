@@ -127,3 +127,44 @@
 }
 
 /* Force Tailwind CSS styles cache rebuild: dynamic-theme-colors-v2 */
+
+/* Printer Status Banner */
+@keyframes banner-slide-down {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.printer-banner {
+  @apply flex items-center justify-between gap-3 px-4 py-1.5 text-xs font-medium z-50;
+  animation: banner-slide-down 0.3s ease-out;
+}
+
+.printer-banner--success {
+  @apply bg-green-50 text-green-700 border-b border-green-200;
+}
+.dark .printer-banner--success {
+  @apply bg-green-950/30 text-green-300 border-green-900/50;
+}
+
+.printer-banner--warning {
+  @apply bg-amber-50 text-amber-800 border-b border-amber-200;
+}
+.dark .printer-banner--warning {
+  @apply bg-amber-950/30 text-amber-300 border-amber-900/50;
+}
+
+.printer-banner--error {
+  @apply bg-red-50 text-red-700 border-b border-red-200;
+}
+.dark .printer-banner--error {
+  @apply bg-red-950/30 text-red-300 border-red-900/50;
+}
+
+.printer-banner__btn {
+  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold
+         bg-white/70 hover:bg-white border border-slate-300/40 transition
+         active:scale-95 disabled:opacity-50 disabled:pointer-events-none;
+}
+.dark .printer-banner__btn {
+  @apply bg-white/10 hover:bg-white/20;
+}
