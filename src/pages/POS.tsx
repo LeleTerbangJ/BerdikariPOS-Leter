@@ -379,7 +379,8 @@ export default function POS() {
     const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
     
     // GAP-3 & LOGIC-05 fix: Calculate tax rounded to whole integer Rupiah
-    const taxPercent = settings.taxPercent || 0;
+    const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
+    const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
     const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
     const total = Math.round(netSubtotal + taxAmount);
     const cash = parseInt(cashReceived) || 0;
@@ -460,7 +461,8 @@ export default function POS() {
     addToast(`Pesanan #${queueNum} berhasil! 🎉`, 'success');
   };
 
-  const taxPercent = settings.taxPercent || 0;
+  const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
+  const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
   // LOGIC-ERR-02 fix: Use same capping formula as finalizeTransaction()
   const rawPreviewDiscount = (parseInt(discountInput) || 0) + promoDiscount + loyaltyDiscount;
   const cappedPreviewDiscount = Math.min(rawPreviewDiscount, cart.getSubtotal());

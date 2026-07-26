@@ -120,7 +120,8 @@ export interface AppSettings {
   storeName: string;
   storeLogo?: string; // base64 data URL
   address?: string;
-  taxPercent?: number;
+  taxEnabled?: boolean; // toggle on/off fitur pajak
+  taxPercent?: number; // persentase pajak (misal 10%, 11%, dll)
   categories: string[]; // daftar kategori menu
   // Printer settings
   printerEnabled: boolean;

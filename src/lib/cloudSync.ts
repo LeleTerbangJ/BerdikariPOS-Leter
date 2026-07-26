@@ -135,13 +135,22 @@ export async function runMigrations() {
       console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_number TEXT;');
       migrationNeeded.tableNumber = true;
     }
+
+    // Migration 13: Add tax_enabled column to settings table
+    const { error: taxEnabledError } = await supabase.from('settings').select('tax_enabled').limit(1);
+    if (taxEnabledError && taxEnabledError.message.includes('tax_enabled')) {
+      console.warn('[Migration] Column "tax_enabled" missing in settings table.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;');
+      migrationNeeded.taxEnabled = true;
+    }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
   }
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -484,6 +493,9 @@ export async function syncSettings(settings: AppSettings) {
       tables: settings.availableTableNumbers ?? ['Meja 1', 'Meja 2', 'Meja 3', 'Meja 4', 'Meja 5']
     };
   }
+  if (!migrationNeeded.taxEnabled) {
+    data.tax_enabled = settings.taxEnabled ?? false;
+  }
   await smartUpsert('settings', data);
 }
 
@@ -497,6 +509,7 @@ export async function fetchSettingsFromCloud(): Promise<AppSettings | null> {
       storeName: data.store_name,
       storeLogo: data.store_logo || undefined,
       address: data.address || undefined,
+      taxEnabled: data.tax_enabled !== undefined && data.tax_enabled !== null ? data.tax_enabled : (data.tax_percent ? data.tax_percent > 0 : false),
       taxPercent: data.tax_percent || 0,
       categories: data.categories || [],
       printerEnabled: data.printer_enabled || false,

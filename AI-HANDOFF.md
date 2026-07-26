@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.0
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.2
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -23,7 +23,8 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `src/lib/cloudSync.ts` | Cloud sync logic (Supabase integration) |
 | `src/lib/offlineQueue.ts` | Offline queue & auto-retry |
-| `src/store/*.ts` | State management (semua Zustand stores) |
+| `src/store/*.ts` | State management (semua 14 Zustand stores, termasuk `cashMovementStore`) |
+| `src/hooks/usePrinterMonitor.ts` | Background service polling koneksi printer Bluetooth |
 | `vite.config.ts` | Build config + PWA setup |
 | `supabase/schema.sql` | Database schema |
 
@@ -33,8 +34,11 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `src/pages/POS.tsx` | Halaman kasir (paling kompleks) |
 | `src/pages/Kitchen.tsx` | KDS dengan real-time |
-| `src/pages/Reports.tsx` | Laporan dengan chart + PDF |
-| `src/components/Layout.tsx` | Sidebar, shift modals, navigation |
+| `src/pages/Reports.tsx` | Laporan dengan chart, filter tanggal presisi + PDF |
+| `src/pages/CashMovements.tsx` | Rekap kas masuk & kas keluar dengan verifikasi PIN |
+| `src/pages/StockOpname.tsx` | Modul stock opname (dengan mode blind opname Staf Gudang) |
+| `src/components/Layout.tsx` | Sidebar, shift modals, printer status banner |
+| `src/components/PrinterStatusBanner.tsx` | Banner indikator status koneksi printer & tombol reconnect |
 
 ---
 
@@ -43,7 +47,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 Copy-paste prompt ini saat memulai percakapan dengan AI baru:
 
 ```
-Saya memiliki aplikasi POS (Point of Sale) bernama "BerdikariPOS" yang sudah production dan bersifat umum/multi-purpose (v3.5).
+Saya memiliki aplikasi POS (Point of Sale) bernama "BerdikariPOS" yang sudah production dan bersifat umum/multi-purpose (v4.2).
 
 Tech Stack:
 - React 18 + TypeScript + Vite 5
@@ -59,6 +63,7 @@ Arsitektur:
 - Offline queue: operasi gagal di-queue, auto-retry saat online
 - Real-time: Supabase subscriptions untuk KDS multi-device
 - Code-splitting: React.lazy() per halaman
+- Printer Background Monitor: polling Web Bluetooth printer connections setiap 3 detik dengan UI status banner
 
 Saya akan berikan file PRD.md dan types/index.ts sebagai konteks.
 Tolong pelajari dulu sebelum mulai coding.
@@ -87,11 +92,6 @@ Tolong pelajari dulu sebelum mulai coding.
 2. Copy-paste isi `src/types/index.ts` sebagai pesan kedua
 3. Baru mulai berikan instruksi pengembangan
 
-### Opsi D: GitHub Copilot Workspace
-1. Buka repo di GitHub
-2. Copilot otomatis memahami codebase
-3. Buat issue → Copilot suggest implementation
-
 ---
 
 ## 4. Konteks Penting yang Harus AI Tahu
@@ -112,9 +112,9 @@ Tolong pelajari dulu sebelum mulai coding.
 ```
 
 ### Cloud Sync Coverage (100%):
-- **14 data types** di-push ke cloud (termasuk customCategories, themeColor, themeShades, stock_opname)
-- **11 stores** fetch dari cloud saat boot (ditambah stockOpnameStore)
-- **7 stores** support `fullSync` mode untuk delete propagation (ditambah stockOpnameStore)
+- **16 data types** di-push ke cloud (termasuk customCategories, themeColor, themeShades, stock_opnames, cash_movements, tax_enabled)
+- **12 stores** fetch dari cloud saat boot (termasuk stockOpnameStore dan cashMovementStore)
+- **8 stores** support `fullSync` mode untuk delete propagation
 - **Real-time subscriptions** di SEMUA halaman:
   - `POS.tsx`: menus, inventory, customers, settings
   - `Kitchen.tsx`: transactions
@@ -125,11 +125,13 @@ Tolong pelajari dulu sebelum mulai coding.
   - `Promos.tsx`: promos
   - `SettingsPage.tsx`: users
   - `StockOpname.tsx`: stock_opnames, inventory
+  - `CashMovements.tsx`: cash_movements
   - `App.tsx` (Global): users (untuk restriksi multi-login device secara real-time)
 - **fullSync pattern**: Saat real-time event, cloud = sumber kebenaran. Item yang dihapus di cloud dihapus dari lokal (grace period 30s untuk item baru).
 - **Offline queue sorting**: Queue di-sort (insert -> upsert -> update -> delete) sebelum flush untuk menjaga integritas dependensi.
-- **Settings merge conflict warning**: Saat cloud settings menimpa modifikasi lokal yang bertabrakan, user diberi tahu via warning toast.
-- **Bluetooth Printer Device Registry (v4.0)**: Setiap logical printer (Kasir, Kitchen Makanan, Kitchen Minuman) memiliki koneksi Bluetooth & device binding independen via `Map<string, BluetoothConnection>`. Penanganan error print menggunakan `Promise.allSettled` (error isolation), dilengkapi Test Print per printer dan warning duplicate physical device.
+- **Printer Monitor & Status Banner (v4.2)**: Service background (`usePrinterMonitor.ts`) secara berkala (3s) memeriksa koneksi Web Bluetooth printer Kasir & Dapur, serta menampilkan `PrinterStatusBanner.tsx` dengan opsi *Reconnect* 1-klik.
+- **Revert Stok pada Delete Transaksi**: Menghapus transaksi berstatus `Selesai` secara otomatis me-revert stok bahan baku dan akumulasi belanja/visit pelanggan.
+- **Akuntansi P&L & Dashboard**: Formula Laba Kotor menggunakan Net Sales ($\text{subtotal} - \text{diskon}$) dikurang HPP. Pajak PPN dikategorikan sebagai kewajiban (*liability*) dan disajikan secara terpisah.
 
 ### Konvensi Kode:
 - **Store pattern**: Zustand + persist + cloud sync di setiap mutasi
@@ -156,8 +158,8 @@ git push origin main → Vercel auto-deploy (1-2 menit)
 - Schema di `supabase/schema.sql`
 - Semua tabel di schema `public`
 - RLS enabled dengan policy "allow all" (MVP)
-- Real-time enabled untuk SEMUA tabel (transactions, menus, inventory, customers, users, promos, settings, stock_opnames)
-- `settings` table rows: id=1 (app settings, including loyalty settings, custom categories, theme_color, and theme_shades consolidated on id=1 to satisfy check constraints)
+- Real-time enabled untuk SEMUA tabel (transactions, menus, inventory, customers, users, promos, settings, stock_opnames, cash_movements)
+- `settings` table rows: id=1 (app settings, including loyalty settings, custom categories, theme_color, theme_shades, and tax_enabled consolidated on id=1)
 
 ---
 
@@ -200,8 +202,6 @@ Jika ingin melanjutkan development, berikut prioritas:
 | 6 | QR Self-Order | Medium | Generate QR per meja, halaman order publik |
 | 7 | Push Notification | Medium | Web Push API + service worker |
 | 8 | Multi-language | Medium | i18n library (react-i18next) |
-| 9 | Stock log viewer UI | Low | Halaman baru untuk lihat riwayat stok |
-| 10| Printer Queue Logs & Retry | Medium | Menyimpan log kegagalan cetak dapur dan fitur cetak ulang manual jika printer macet |
 
 ---
 
@@ -214,12 +214,13 @@ Setelah AI membuat perubahan, pastikan:
 npx tsc --noEmit
 
 # 2. Build (harus success)
-npx vite build
+npm run build
 
 # 3. Test manual:
-# - Login semua role (manager, kasir, acaraki)
-# - Buat pesanan → cek masuk KDS
-# - Tutup shift → cek print
+# - Login semua role (manager, kasir, acaraki, gudang)
+# - Buat pesanan → cek masuk KDS & potong stok
+# - Catat kas masuk/keluar → cek di ringkasan tutup shift
+# - Stock opname mode blind untuk gudang
 # - Cek di device berbeda (multi-device sync)
 
 # 4. Deploy
@@ -232,7 +233,7 @@ git add . && git commit -m "description" && git push origin main
 
 - **Repository**: https://github.com/Lemillion-base/rempah-story-pos
 - **Hosting**: Vercel (auto-deploy on push)
-- **Database**: Supabase (ppffuacvktsgfhacilte.supabase.co)
+- **Database**: Supabase
 - **PRD lengkap**: `PRD.md` di root project
 - **Fitur lengkap**: `FEATURES.md` di root project
 - **Deploy guide**: `DEPLOYMENT.md` di root project

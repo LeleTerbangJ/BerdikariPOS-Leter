@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS settings (
   store_name TEXT DEFAULT 'BerdikariPOS',
   store_logo TEXT,
   address TEXT,
+  tax_enabled BOOLEAN DEFAULT false,
   tax_percent FLOAT DEFAULT 0,
   categories JSONB DEFAULT '["Jamu Murni", "Wedang", "Signature", "Segar"]',
   printer_enabled BOOLEAN DEFAULT false,

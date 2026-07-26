@@ -146,6 +146,7 @@ export const seedSettings: AppSettings = {
   storeName: 'BerdikariPOS',
   storeLogo: undefined,
   address: 'Jl. Jamu Modern No. 1',
+  taxEnabled: false,
   taxPercent: 0,
   categories: ['Jamu Murni', 'Wedang', 'Signature', 'Segar'],
   printerEnabled: false,

@@ -29,6 +29,8 @@ import {
   Palette,
   FileText,
   Upload,
+  Percent,
+  Receipt,
 } from 'lucide-react';
 import { generateShades, THEME_PRESETS, hexToRgbValues } from '../utils/theme';
 
@@ -55,6 +57,36 @@ export default function SettingsPage() {
   const [storeAddress, setStoreAddress] = useState(settings.address || '');
   const [storeLogo, setStoreLogo] = useState(settings.storeLogo || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Tax settings state
+  const [taxEnabled, setTaxEnabled] = useState<boolean>(
+    settings.taxEnabled ?? (settings.taxPercent ? settings.taxPercent > 0 : false)
+  );
+  const [taxPercentInput, setTaxPercentInput] = useState<string>(
+    String(settings.taxPercent !== undefined ? settings.taxPercent : 0)
+  );
+
+  const saveTaxSettings = () => {
+    const val = parseFloat(taxPercentInput) || 0;
+    if (val < 0 || val > 100) {
+      alert('Persentase pajak harus di antara 0% dan 100%');
+      return;
+    }
+    updateSettings({
+      taxEnabled,
+      taxPercent: val,
+    });
+    if (currentUser) {
+      addLog(
+        currentUser.id,
+        currentUser.name,
+        currentUser.role,
+        'update_settings',
+        `Update pengaturan pajak: Status=${taxEnabled ? 'Aktif' : 'Nonaktif'}, Persentase=${val}%`
+      );
+    }
+    alert('Pengaturan pajak berhasil disimpan! 🎉');
+  };
 
   // UI Theme Settings
   const [themeColor, setThemeColor] = useState(settings.themeColor || '#b85f21');
@@ -378,6 +410,119 @@ export default function SettingsPage() {
             <button onClick={saveStoreSettings} className="btn-primary">
               <Save size={16} /> Simpan Pengaturan Toko
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Pengaturan Pajak (PB1 / PPN) */}
+      <div className="card p-5">
+        <h2 className="font-bold text-lg flex items-center gap-2 mb-2">
+          <Percent size={18} className="text-brand-600" /> Pengaturan Pajak (PB1 / PPN)
+        </h2>
+        <p className="text-xs text-slate-500 mb-6">
+          Aktifkan atau nonaktifkan pemotongan pajak secara otomatis pada setiap transaksi kasir (POS), dan sesuaikan besaran persentasenya (misal PB1 10% atau PPN 11%).
+        </p>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-5">
+            {/* Toggle Status Pajak */}
+            <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
+              <div>
+                <p className="font-semibold text-sm text-slate-800 dark:text-slate-100">Status Fitur Pajak</p>
+                <p className="text-xs text-slate-500">
+                  {taxEnabled ? 'Pajak AKTIF — dikenakan pada transaksi POS' : 'Pajak NONAKTIF — tidak ada pajak pada transaksi POS'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTaxEnabled(!taxEnabled)}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  taxEnabled ? 'bg-brand-600' : 'bg-slate-300 dark:bg-slate-600'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    taxEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Input Persentase Pajak */}
+            <div className={taxEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none transition-opacity'}>
+              <label className="label">Persentase Pajak (%)</label>
+              <div className="flex gap-2 mb-3">
+                <div className="relative flex-1">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    value={taxPercentInput}
+                    onChange={(e) => setTaxPercentInput(e.target.value)}
+                    placeholder="0"
+                    className="input pr-8 font-semibold text-lg"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">%</span>
+                </div>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-medium">Preset Cepat:</span>
+                {[0, 5, 10, 11, 12].map((pct) => (
+                  <button
+                    key={pct}
+                    type="button"
+                    onClick={() => setTaxPercentInput(String(pct))}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition ${
+                      parseFloat(taxPercentInput) === pct
+                        ? 'bg-brand-100 text-brand-700 border-brand-300 dark:bg-brand-900/50 dark:text-brand-300'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {pct}%
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={saveTaxSettings} className="btn-primary">
+              <Save size={16} /> Simpan Pengaturan Pajak
+            </button>
+          </div>
+
+          {/* Live Preview Calculation */}
+          <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/50 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                <Receipt size={14} /> Simulasi Perhitungan Transaksi
+              </div>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                  <span>Subtotal Pesanan (Contoh)</span>
+                  <span className="font-medium">Rp 100.000</span>
+                </div>
+                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                  <span>
+                    Pajak ({taxEnabled ? `${parseFloat(taxPercentInput) || 0}%` : 'Nonaktif'})
+                  </span>
+                  <span className={`font-medium ${taxEnabled && (parseFloat(taxPercentInput) || 0) > 0 ? 'text-green-600 font-semibold' : 'text-slate-400'}`}>
+                    + {formatRupiah(taxEnabled ? Math.round(100000 * ((parseFloat(taxPercentInput) || 0) / 100)) : 0)}
+                  </span>
+                </div>
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex justify-between font-bold text-base text-slate-900 dark:text-slate-100">
+                  <span>Total Tagihan POS</span>
+                  <span className="text-brand-700 dark:text-brand-400">
+                    {formatRupiah(100000 + (taxEnabled ? Math.round(100000 * ((parseFloat(taxPercentInput) || 0) / 100)) : 0))}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/40 text-xs text-blue-700 dark:text-blue-300">
+              💡 <strong>Catatan:</strong> Jika pajak diaktifkan, pajak akan dihitung dari Net Subtotal (setelah diskon) dan dibulatkan ke rupiah terdekat saat checkout.
+            </div>
           </div>
         </div>
       </div>
@@ -1116,7 +1261,7 @@ export default function SettingsPage() {
                     <span>Subtotal</span>
                     <span>49.000</span>
                   </div>
-                  {settings.taxPercent && settings.taxPercent > 0 ? (
+                  {settings.taxEnabled !== false && settings.taxPercent && settings.taxPercent > 0 ? (
                     <div className="flex justify-between">
                       <span>Pajak ({settings.taxPercent}%)</span>
                       <span>4.900</span>
@@ -1124,7 +1269,7 @@ export default function SettingsPage() {
                   ) : null}
                   <div className="flex justify-between font-bold text-xs pt-1 border-t border-slate-200">
                     <span>TOTAL</span>
-                    <span>{formatRupiah(settings.taxPercent && settings.taxPercent > 0 ? 53900 : 49000)}</span>
+                    <span>{formatRupiah(settings.taxEnabled !== false && settings.taxPercent && settings.taxPercent > 0 ? 53900 : 49000)}</span>
                   </div>
                   <div className="flex justify-between pt-1">
                     <span>Bayar (Cash)</span>
