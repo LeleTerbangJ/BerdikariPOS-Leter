@@ -1,9 +1,9 @@
 # Product Requirements Document (PRD)
 
 ## Project Name: BerdikariPOS
-## Product Version: 3.4 (Production)
+## Product Version: 4.2 (Production)
 ## Document Status: Production Ready
-## Last Updated: 16 Juli 2026
+## Last Updated: 27 Juli 2026
 ## Production URL: Deployed on Vercel
 ## Repository: https://github.com/Lemillion-base/rempah-story-pos
 
@@ -11,7 +11,7 @@
 
 ## 1. Product Overview
 
-**BerdikariPOS** adalah aplikasi Point of Sale (Sistem Kasir) berbasis web yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Sistem ini menghubungkan pesanan dari Kasir langsung ke layar Dapur/Pemenuhan secara real-time melalui shared state, menyediakan dashboard analitik komprehensif untuk Manager, serta fitur CRM pelanggan, manajemen shift kasir, dan integrasi multi-printer.
+**BerdikariPOS** adalah aplikasi Point of Sale (Sistem Kasir) berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Sistem ini menghubungkan pesanan dari Kasir langsung ke layar Dapur/Pemenuhan secara real-time melalui shared state, menyediakan dashboard analitik komprehensif untuk Manager, modul Rekap Kas & Stock Opname, serta fitur CRM pelanggan, manajemen shift kasir, dan integrasi multi-printer dengan background monitor koneksi.
 
 ### 1.1. Tech Stack
 
@@ -31,16 +31,16 @@
 | ID Generation | uuid v9 |
 | Hosting | Vercel (Production) |
 | Repository | GitHub |
-| ID Generation | uuid v9 |
 
 ### 1.2. Objektif
 
 - Menyediakan antarmuka kasir yang cepat, intuitif, dan mobile-friendly.
 - Menghilangkan miskomunikasi antara kasir dan dapur melalui Kitchen Display System (KDS).
 - Mengotomatisasi perhitungan Harga Pokok Penjualan (HPP) berdasarkan komposisi bahan baku.
-- Menyediakan laporan penjualan, inventaris, shift karyawan, dan kas kasir secara real-time.
+- Menyediakan laporan penjualan, inventaris, shift karyawan, rekap kas, dan kas kasir secara real-time.
 - Mengelola data pelanggan (CRM) dengan fitur WhatsApp marketing.
-- Menerapkan manajemen shift kasir dengan serah terima kas yang akuntabel.
+- Menerapkan manajemen shift kasir & rekap kas dengan serah terima kas yang akuntabel.
+- Menyediakan pemantau koneksi printer Bluetooth otomatis (*Printer Connection Monitor*) dengan opsi *reconnect* 1-klik.
 
 ---
 
@@ -49,12 +49,12 @@
 Sistem menggunakan Role-Based Access Control (RBAC) dengan 4 peran utama:
 
 ### 2.1. Manager (Admin)
-- **Akses**: Seluruh sistem (Dashboard, POS, Dapur, Transaksi, Katalog, Inventaris, Laporan, Pelanggan, Settings)
-- **Fokus**: Analisis dashboard, manajemen katalog & harga, laporan keuangan, otorisasi void transaksi, pengaturan toko & printer
+- **Akses**: Seluruh sistem (Dashboard, POS, Dapur, Transaksi, Katalog, Inventaris, Rekap Kas, Laporan, Pelanggan, Audit Log, Settings)
+- **Fokus**: Analisis dashboard, manajemen katalog & harga, laporan keuangan, otorisasi void/pembatalan/penghapusan transaksi & kas, pengaturan toko, pajak & printer
 
 ### 2.2. Kasir (Frontdesk)
-- **Akses**: POS, Transaksi, Pelanggan
-- **Fokus**: Pembuatan pesanan, serah terima kas (shift management), melihat riwayat transaksi harian
+- **Akses**: POS, Transaksi, Pelanggan, Rekap Kas
+- **Fokus**: Pembuatan pesanan, pencatatan kas masuk/keluar, serah terima kas (shift management), melihat riwayat transaksi harian
 - **Wajib**: Input modal kas awal saat buka shift, input kas aktual + print ringkasan saat tutup shift
 
 ### 2.3. Acaraki (Kitchen)
@@ -64,13 +64,13 @@ Sistem menggunakan Role-Based Access Control (RBAC) dengan 4 peran utama:
 
 ### 2.4. Staf Gudang (Warehouse Staff)
 - **Akses**: Inventaris (modul bahan baku & stock opname) saja
-- **Fokus**: Melihat, menambah, dan mengubah detail bahan baku serta melakukan Stock Opname (rekonsiliasi fisik)
+- **Fokus**: Melihat, menambah, dan mengubah detail bahan baku serta melakukan Stock Opname (rekonsiliasi fisik) dengan mode *Blind Opname*
 
 ---
 
 ## 3. Functional Requirements (Fitur Lengkap)
 
-### 3.1. Modul Autentikasi
+### 3.1. Modul Autentikasi & Sesi
 - **Login**: Username + password
 - **Routing otomatis**: Manager → Dashboard, Kasir → POS, Acaraki → Kitchen, Staf Gudang → Inventaris
 - **Demo accounts** ditampilkan di halaman login:
@@ -80,764 +80,143 @@ Sistem menggunakan Role-Based Access Control (RBAC) dengan 4 peran utama:
   - Staf Gudang: `gudang` / `gudang123`
 - **Restriksi Multi-login Device**: Setiap user dibatasi hanya boleh memiliki satu session aktif di satu perangkat. Jika user login di perangkat/browser lain, session di perangkat lama otomatis ter-logout (kicked out) secara real-time via Supabase realtime subscription.
 
-### 3.2. Modul Shift Management (Kasir)
+### 3.2. Modul Shift Management & Rekap Kas
 - **Buka Shift (Wajib)**:
   - Modal muncul otomatis setelah login Kasir. Untuk Manager, kemunculan modal ditunda hingga ia mengakses menu POS.
   - Input modal kas awal (quick amount buttons: 100rb–1jt)
   - Tidak bisa mengakses POS sebelum shift dibuka
   - Indikator "Shift Aktif" di sidebar dengan info modal awal
+- **Modul Rekap Kas (Kas Masuk & Kas Keluar)**:
+  - Pencatatan arus kas operasional non-transaksi (e.g. Pembelian bahan darurat, bayar galon, kas modal tambahan)
+  - Nominal bebas diinput tanpa batasan
+  - Pembatalan / penghapusan / pengubahan entri kas memerlukan izin & PIN Manager + tercatat di Audit Log
+  - Sinkronisasi penuh ke cloud Supabase (`cash_movements` table)
 - **Tutup Shift (Wajib)**:
   - Tombol "Tutup Shift" menggantikan "Keluar" di sidebar
-  - Modal menampilkan ringkasan: modal awal, total penjualan, jumlah transaksi, expected cash
+  - Modal menampilkan ringkasan: modal awal, total penjualan, jumlah transaksi, Kas Masuk (`+`), Kas Keluar (`-`), expected cash
+  - Formula: $\text{Expected Cash} = \text{Modal Awal} + \text{Penjualan Tunai} + \text{Kas Masuk} - \text{Kas Keluar}$
   - Input kas aktual di laci **WAJIB** (tidak bisa di-skip)
   - Kalkulasi selisih otomatis (warna hijau/merah)
-  - **Wajib print** ringkasan transaksi hari ini sebelum logout
-  - Data shift tersimpan untuk laporan Manager
+  - **Wajib print** ringkasan transaksi & breakdown arus kas sebelum logout
 
 ### 3.3. Modul POS (Kasir)
 - **Katalog Produk**: Grid card dengan gambar produk (atau inisial nama jika belum ada foto)
 - **Filter**: Kategori (Semua, Best Seller, per kategori) + Search
 - **Kustomisasi Pesanan (Modal)**:
-  - Pilihan Suhu: Hangat / Dingin (dapat dinonaktifkan per produk, misal untuk makanan)
+  - Pilihan Suhu: Hangat / Dingin (dapat dinonaktifkan per produk)
   - Level Gula: Normal / Less / None (dapat dinonaktifkan per produk)
   - Add-ons opsional (multi-select)
   - Quantity selector
   - Pilihan Tipe Pesanan: Dine In / Take Away
-  - Preview total harga
+  - Pilihan Nomor Meja (untuk Dine In)
 - **Keranjang Belanja**:
-  - Item list dengan quantity +/- controls
-  - Detail kustomisasi per item
-  - Hapus item
-  - **Mobile: Minimize/Maximize**
-    - Minimized: Floating bar di bawah layar (jumlah item + total). Tap untuk expand.
-    - Maximized: Overlay slide-up dari bawah (max 85vh) dengan backdrop. Tap backdrop/chevron untuk minimize.
-    - Product grid mendapat padding-bottom agar tidak tertutup floating bar.
-    - Desktop: Tetap sidebar kanan (tidak berubah).
-- **Pilih Pelanggan**: Dropdown dari daftar CRM (opsional)
-- **Diskon Manual**: Input nominal Rupiah
-- **Promo & Voucher di POS**:
-  - Input kode voucher (monospace) + tombol OK → validasi otomatis
-  - Dropdown pilih promo aktif yang sedang berjalan
-  - Badge hijau saat promo diterapkan (nama + nominal + tombol hapus)
-  - Loyalty discount otomatis jika pelanggan terpilih punya tier
-  - Total diskon = manual + promo + loyalty (ditampilkan gabungan)
-  - Promo usage count otomatis bertambah setelah transaksi
-- **Checkout**:
-  - 3 metode pembayaran: Cash, QRIS, Transfer Bank
-  - Kalkulator kembalian otomatis (Cash)
-  - Quick cash buttons (Rp 20rb, 50rb, 100rb)
-  - Nomor antrean otomatis
-  - Info pelanggan terpilih
-- **Auto-deduct inventory**: Stok bahan baku otomatis berkurang sesuai komposisi
-- **HPP tracking**: Setiap transaksi menyimpan total HPP
-- **Cetak Struk Otomatis**: Setelah pembayaran selesai, jika printer diaktifkan di Settings, struk otomatis dicetak (format monospace, lebar sesuai pengaturan 58mm/80mm). Berisi: nama toko, alamat, nomor antrean, tanggal, kasir, pelanggan, daftar item + kustomisasi, subtotal, diskon, total, metode bayar, kembalian.
-- **Validasi Stok**: Sebelum checkout, sistem mengecek ketersediaan bahan baku. Jika kurang, muncul modal peringatan (detail bahan + jumlah). Kasir bisa batal atau lanjutkan tetap.
-- **Nomor Antrean Reset Harian**: Otomatis reset ke 1 setiap hari baru (menggunakan `lastQueueDate` tracking).
-- **Menu Availability Filter**: Menu dengan `isAvailable: false` otomatis tersembunyi dari grid POS.
-- **Keyboard Shortcuts**: F1 = Bayar, Escape = Tutup modal.
-- **Toast Notifications**: Feedback visual saat tambah ke cart dan transaksi berhasil.
-- **Clear Cart (FEAT-4)**: Tombol kosongkan keranjang di header cart (muncul jika item ≥ 2) dengan konfirmasi. Tersedia di mobile dan desktop.
-- **Real-time Sync (GAP-3 fix)**: POS subscribe ke tabel menus, inventory, customers, dan settings. Perubahan dari device lain (Manager) langsung ter-reflect tanpa reload.
-- **Order Type**: Pilihan Dine In / Take Away per transaksi, tersimpan di data transaksi, ditampilkan di KDS dan struk.
-- **Discount Capping (LOGIC-ERR-02 fix)**: Preview diskon di cart footer menggunakan formula identik dengan finalizeTransaction(), sehingga angka preview selalu konsisten dengan total akhir.
+  - Item list dengan quantity +/- controls, kustomisasi, & hapus item
+  - **Mobile: Minimize/Maximize** (floating bar & overlay slide-up)
+- **Perhitungan Pajak Terintegrasi (PB1 / PPN)**:
+  - Dihitung dari Net Subtotal (setelah diskon) dan dibulatkan ke Rupiah terdekat jika fitur pajak diaktifkan di Settings
+- **Checkout & cetak struk otomatis**:
+  - Cetak struk dengan teks `DINE IN MEJA X` atau `TAKE AWAY` ukuran besar & bold
+  - Validasi stok sebelum checkout
 
 ### 3.4. Modul KDS / Acaraki (Dapur)
-- **Kanban Board 3 kolom**:
-  1. Antrean Menunggu (Waiting) — border amber
-  2. Sedang Diproses (Processing) — border blue
-  3. Selesai (Done) — border green
-- **Detail Tiket**: Nomor antrean (bold besar), nama produk, suhu, level gula, quantity, add-ons, waktu masuk, nama kasir, tipe pesanan (Dine In/Take Away)
-- **Aksi**: Tombol 1-klik untuk memindahkan status ke tahap berikutnya
-- **Alert 5 Menit**:
-  - Pesanan Waiting > 5 menit: card merah + animasi pulse + badge durasi
-  - Tombol "Proses" animasi bounce untuk menarik perhatian
-  - Banner global di atas: "X pesanan menunggu > 5 menit!"
-- **Sound Alert**: Bunyi alarm custom (`/sounds/kds-alarm.wav`) otomatis saat pesanan baru masuk ke Waiting. File audio bisa diganti sesuai keinginan.
-- **Reset KDS**: Setelah Acaraki print & logout, kolom "Done" di-reset (pesanan lama tidak tampil lagi)
-- **Filter Hari Ini**: KDS hanya menampilkan transaksi hari ini. Transaksi dari hari sebelumnya tidak muncul.
-- **Logout Acaraki**: Modal ringkasan pesanan selesai hari ini + opsi Print / Lewati
+- **Kanban Board 3 kolom**: Waiting → Processing → Done
+- **Detail Tiket**: Nomor antrean, nama produk, suhu, gula, quantity, add-ons, waktu masuk, kasir, tipe pesanan (Dine In/Take Away), dan **Nomor Meja**
+- **Alert 5 Menit & Sound Notification**
+- **Reset KDS** saat Acaraki logout + print ringkasan
 
-### 3.5. Modul Riwayat Transaksi
-- **Daftar Transaksi Harian**: Nomor antrean, waktu, metode pembayaran, total, status
-- **Detail Akordeon**: Klik untuk lihat rincian item, kustomisasi, diskon
-- **Ubah Status / Void**: Selesai, Cancel, Demo
-- **Hapus Permanen**
-- **Keamanan**: Non-manager wajib input PIN Manager (modal custom, bukan browser prompt)
-- **Konfirmasi Void (FEAT-5)**: Manager mendapat ConfirmDialog sebelum void/cancel/delete transaksi (warna merah untuk delete/cancel, kuning untuk ubah status lain)
-- **Real-time Sync**: Transaksi yang dihapus/diubah di device lain langsung ter-reflect
-- **Customer Visit Revert (LOGIC-ERR-03 fix)**: Saat transaksi di-cancel, visitCount dan totalSpent pelanggan otomatis dikurangi. Saat transaksi di-re-enable dari Cancel → Selesai, data pelanggan otomatis di-record kembali.
+### 3.5. Modul Riwayat Transaksi & Revert Stok
+- **Daftar & Detail Transaksi**: Nomor antrean, waktu, metode pembayaran, total, status, item akordeon
+- **Revert Stok & Customer pada Penghapusan / Void Transaksi**:
+  - Mengabaikan atau membatalkan (*Cancel*) transaksi berstatus `Selesai` secara otomatis mengembalikan stok bahan baku (`revertStock`) dan mengurangi riwayat belanja/visit pelanggan (`revertVisit`)
+  - Menghapus (*Delete*) transaksi `Selesai` me-revert stok & data pelanggan secara aman sebelum data dihapus
+  - Re-enable transaksi dari `Cancel → Selesai` memotong stok kembali (`deductStock`) dan merekam kunjungan pelanggan kembali
+- **Keamanan**: PIN Manager untuk otorisasi void & delete transaksi
 
-### 3.6. Modul Dashboard (Manager)
+### 3.6. Modul Dashboard & Analitik
 - **Stats Cards**: Pendapatan hari ini, jumlah transaksi, menu terlaris, laba kotor
-- **Grafik Omset (Chart.js Bar)**: Filter Harian/Mingguan/Bulanan/Tahunan
-- **Metode Pembayaran (Doughnut Chart)**: Cash, QRIS, Transfer
-- **Top Menu**: Daftar menu terlaris (max-height scroll, hingga 10 item)
-- **Stok Rendah Alert**: Daftar bahan di bawah minimum (max-height scroll)
-- **P&L Sederhana**: Pendapatan, HPP, Laba Kotor, Expected Cash
+- **Grafik Omset & Trend Profitabilitas (Net Sales - HPP)**: Menggunakan Pendapatan Bersih ($\text{subtotal} - \text{diskon}$) dikurang HPP agar tidak terpengaruh pajak (pajak dipisahkan sebagai liability)
+- **Top Menu & Profitabilitas Menu 30 Hari Terakhir**
 
 ### 3.7. Modul Katalog & Harga (Manager)
-- **Tabel Katalog**: Pagination (10/halaman), Search, Filter Category
-- **CRUD Menu**: Tambah/Edit/Hapus produk (dengan konfirmasi dialog sebelum hapus)
-- **Menu Availability Toggle**: Tombol on/off per menu di tabel katalog. Menu nonaktif tidak tampil di POS tapi tetap ada di katalog. Badge "Nonaktif" ditampilkan.
-- **Form Menu**:
-  - Nama, Kategori (dropdown dari daftar), Harga Jual
-  - Best Seller toggle
-  - **Upload Foto Produk** (base64, maks 500KB)
-  - Komposisi Bahan (pilih dari inventaris + jumlah) → HPP otomatis
-  - **HPP Manual (Opsi)**: Input HPP manual jika produk tidak menggunakan Komposisi Bahan (produk jadi seperti minuman botol atau makanan ringan)
-  - Add-ons (nama + harga)
-  - Preview HPP estimasi real-time (atau input manual HPP)
-- **Manajemen Kategori**: Modal terpisah untuk tambah/hapus kategori
-- **Import/Export CSV**: Download & upload katalog menu lengkap
+- CRUD menu lengkap dengan foto produk & **Floating Action Buttons (FAB)**
+- HPP otomatis berbasis bahan baku ATAU HPP Manual
+- Add-ons per menu & toggle ketersediaan menu
 
-### 3.8. Modul Inventaris (Manager)
-- **Summary Cards**: Total item, stok rendah, nilai inventaris total
-- **Tabel Bahan Baku**: ID, nama, stok, unit, harga/unit, min. stok, nilai, status
-- **Pagination**: 10/25/50/100 item per halaman
-- **Filter**: Search + status (Semua / Stok Rendah)
-- **CRUD Bahan**: Tambah/Edit/Hapus
-- **Pengaturan Min. Stok Global**: Terapkan threshold ke semua item sekaligus
-- **Import/Export CSV**: Download & upload data inventaris
-
-### 3.8a. Modul Stock Opname (Manager)
-- **Tujuan**: Rekonsiliasi stok fisik vs stok sistem secara berkala
-- **Alur Kerja**: Pilih item inventaris → input stok fisik aktual → sistem hitung selisih otomatis → input alasan penyesuaian → verifikasi PIN Manager (wajib jika selisih signifikan) → submit
-- **Fitur**:
-  - Stok sistem otomatis diambil dari inventaris terkini
-  - Kalkulasi kerugian/selisih otomatis per item dan total
-  - Pencatatan alasan per item (Basi, Rusak, Salah Input, dll)
-  - Stock log otomatis tercatat sebagai "Stock Opname" (tanpa duplikasi log)
-  - Riwayat stock opname tersimpan untuk audit
-  - Halaman khusus di sidebar navigasi Manager
-- **Auto-deduct**: Stok otomatis berkurang saat transaksi POS
+### 3.8. Modul Inventaris & Stock Opname
+- CRUD bahan baku, min. stok alert, & stock log trail
+- **Stock Opname (Rekonsiliasi Fisik)**:
+  - Rekonsiliasi stok fisik vs stok sistem
+  - **Mode Blind Opname (Staf Gudang)**: Sembunyikan stok sistem & selisih dari Staf Gudang agar pencatatan stok fisik di lapangan murni akurat tanpa manipulasi
+  - Verifikasi PIN Manager untuk selisih besar ($\ge 10\%$)
 
 ### 3.9. Modul Laporan (Manager)
-- **Filter Tanggal**: Hari Ini, 7 Hari, Bulan (month picker), Custom (date range)
-- **5 Tab Laporan**:
-
-#### Tab 1: Laba Rugi (P&L)
-- Cards: Total Pendapatan, HPP, Laba Kotor, Margin %
-- Detail: Revenue, Diskon, HPP, Laba Kotor, Jumlah Tx, Rata-rata/Tx
-- Distribusi Pembayaran (Doughnut Chart + breakdown)
-- Distribusi Tipe Pesanan: Dine In vs Take Away (Doughnut Chart + breakdown)
-- Penjualan per Kategori
-
-#### Tab 2: Transaksi
-- Cards: Total Transaksi, Total Pendapatan, Rata-rata/Transaksi
-- Tabel riwayat transaksi (scrollable, max-height 500px, sticky header): No. antrean, tanggal, kasir, pelanggan, items, total, metode pembayaran, status
-- Badge warna per metode pembayaran dan status
-
-#### Tab 3: Kas Kasir
-- Summary: Total shift, total selisih kas, shift bermasalah
-- Tabel riwayat: Kasir, waktu buka/tutup, modal awal, expected, aktual, selisih, penjualan, jumlah Tx
-- Highlight merah untuk shift dengan selisih negatif
-
-#### Tab 4: Stok Bahan
-- Summary: Total item, nilai inventaris, stok rendah
-- Alert stok rendah (list)
-- Tabel lengkap semua bahan (scrollable, max-height 384px, sticky header)
-
-#### Tab 5: Shift Karyawan
-- Per karyawan: avatar, nama, periode, jumlah Tx, total revenue, rata-rata/Tx
-
-- **Export Excel (CSV)**: Setiap tab bisa di-export (dengan BOM untuk kompatibilitas Excel)
-- **Export PDF**: Setiap tab bisa di-export sebagai PDF (jsPDF + jspdf-autotable). Format profesional dengan header toko, judul, periode, tabel data berwarna. Siap di-share ke owner/investor.
+- **Filter Tanggal Presisi**: Hari Ini, 7 Hari, Bulan, Custom (date range) menyaring transaksi, shift, dan arus kas secara akurat
+- **5 Tab Laporan**: Laba Rugi (P&L), Transaksi, Kas Kasir, Stok Bahan, Shift Karyawan
+- **Export CSV & PDF**: Format profesional dengan header toko & periode
+- **Tabel Scrollable (`max-h-80`)**: Dengan sticky header untuk efisiensi ruang
 
 ### 3.10. Modul Pelanggan / CRM
-- **CRUD Pelanggan**: Nama, No. HP (WhatsApp), Email, Catatan
-- **Tracking otomatis**: Total belanja, jumlah kunjungan (auto-update saat transaksi)
-- **Search**: Cari nama, telepon, email
-- **Card view**: Grid responsif
-- **Aksi WhatsApp**:
-  - Tombol hijau di setiap card pelanggan yang punya nomor HP
-  - Modal compose pesan dengan template promosi (editable)
-  - Kirim via `wa.me` API (format otomatis 08xx → 62xx)
-- **Integrasi POS**: Dropdown pilih pelanggan saat transaksi
+- CRUD pelanggan + Floating Action Button (FAB)
+- Tracking otomatis total belanja & kunjungan (dengan auto-revert jika transaksi dibatal/dihapus)
+- Integrasi WhatsApp Marketing
 
-### 3.11. Modul Promo & Loyalty (Manager)
-- **CRUD Promo/Voucher**:
-  - Nama, kode voucher (opsional, uppercase)
-  - Tipe diskon: persentase (%) atau nominal tetap (Rp)
-  - Scope: semua menu, kategori tertentu, atau pelanggan loyal
-  - Tanggal mulai & berakhir (masa berlaku)
-  - Min. belanja, maks. diskon, batas penggunaan
-  - Toggle aktif/nonaktif per promo
-  - Badge status: Aktif, Expired, Upcoming
-  - Usage tracking (berapa kali sudah dipakai)
-- **Loyalty Member System**:
-  - Toggle enable/disable
-  - 3 tier: 🥉 Bronze, 🥈 Silver, 🥇 Gold
-  - Pengaturan per tier: minimum kunjungan + persentase diskon
-  - Diskon otomatis diterapkan di POS berdasarkan visitCount pelanggan
-- **Integrasi POS**: Input kode voucher, dropdown promo aktif, loyalty auto-discount
+### 3.11. Modul Printer Thermal & Background Connection Monitor
+- **Split Printing (Printer Dapur & Bar)**: Mencetak pesanan makanan & minuman ke printer terpisah
+- **Background Printer Connection Monitor**:
+  - Polling Web Bluetooth connection status setiap 3 detik via `usePrinterMonitor.ts`
+  - **UI Status Banner**: Banner top-bar aplikasi (Hijau = Terhubung, Kuning = 1 Offline, Merah = Multiple Offline) dengan tombol **[Reconnect]** 1-klik untuk reconnect otomatis jika koneksi Bluetooth terputus akibat browser refresh
 
-### 3.12. Modul Audit Log (Manager)
-- **Tabel log**: Timestamp, user, role, aksi, detail
-- **Aksi yang dicatat**: Login/logout, CRUD transaksi/menu/user/inventaris/promo/pelanggan, shift open/close, update settings
-- **Filter**: Search (user/detail) + dropdown aksi
-- **Pagination**: 25 per halaman
-- **Export CSV**
-- **Cleanup**: Hapus log > 90 hari
-- **Max entries**: 10.000 (auto-trim)
-
-### 3.13. Modul Settings (Manager)
-- **Tabbed Layout**: Halaman pengaturan diorganisasikan ke dalam 3 tab utama (*Umum & Tampilan*, *Printer & KDS*, *Pengguna & Sistem*) untuk mempermudah navigasi dan mengurangi space vertikal yang terlalu banyak di mobile maupun desktop.
-- **Pengaturan Toko**:
-  - Upload logo toko (base64, maks 500KB) — tampil di login, sidebar, header mobile
-  - Nama toko (tampil di login, sidebar, header, struk)
-  - Alamat toko
-- **Pengaturan Tema Warna UI**:
-  - Memilih preset tema warna (Jamu Original, Matcha Green, Telang Blue, Rosella Red, Charcoal Slate)
-  - Men-generate 10 shades warna (50-900) otomatis dari warna dasar (color picker)
-  - Penyesuaian manual detail hex code per shade warna
-  - Live preview instan di seluruh elemen aplikasi sebelum disimpan ke cloud settings.
-- **PIN Manager**: 4-6 digit untuk otorisasi tindakan krusial (void/pembatalan transaksi)
-- **Integrasi Printer Thermal**:
-  - Toggle aktifkan printer
-  - Toggle auto-print saat checkout
-  - Metode cetak: Browser Print (window.print) / Bluetooth (Web Bluetooth API)
-  - Lebar kertas: 58mm / 80mm
-  - Info kontekstual per metode
-  - **Printer Dapur & Bar (Split Printing)**:
-    - Opsi untuk menambahkan beberapa printer dapur/bar tambahan.
-    - Setiap printer dapur memiliki: Nama Printer, Target Kategori Dapur, Tipe (Browser / Bluetooth), Lebar Kertas (58mm / 80mm), dan status Aktif.
-- **Manajemen User**: CRUD karyawan (nama, username, password, role)
-- **Settings Merge Conflict Notification (LOGIC-ERR-01 fix)**: Saat loadFromCloud mendeteksi bahwa pengaturan lokal dan cloud sama-sama berubah untuk field yang sama, cloud tetap menang namun toast warning ditampilkan agar user tahu perubahannya digantikan.
+### 3.12. Modul Settings & Konfigurasi Pajak
+- **Tabbed Layout**: Umum & Tampilan, Printer & KDS, Pengguna & Sistem
+- **Pengaturan Pajak (PB1 / PPN)**:
+  - Toggle sakelar Aktif/Nonaktif fitur pajak
+  - Input persentase pajak (%) + preset cepat (0%, 5%, 10%, 11%, 12%)
+  - Simulasi kalkulasi tagihan live preview
+- **Pengaturan Tema Warna UI**: Dynamic palette switcher dengan live preview
+- **PIN Manager & User Management**
 
 ---
 
-## 4. Non-Functional Requirements
+## 4. Database Schema (Supabase PostgreSQL)
 
-### 4.1. UI/UX & Responsiveness
-- Desain modern: sudut membulat (rounded-2xl), whitespace memadai, shadow subtle
-- 100% responsif: layout vertikal di mobile, berdampingan di desktop/tablet
-- Sidebar collapsible (icon-only mode) di desktop
-- Mobile: hamburger menu + header dengan logo & nama toko
-- **Mobile POS Cart**: Floating bar (minimized) + slide-up overlay (maximized) agar tidak menutupi area menu
-- Color scheme: warm earth tones (brand-600: #b85f21)
-- Font: Inter (Google Fonts)
-- Animasi: pulse untuk alert, bounce untuk CTA urgent, scale pada button press, slide-in-from-bottom untuk mobile cart
+```sql
+-- Settings Table Schema (v4.2)
+CREATE TABLE IF NOT EXISTS settings (
+  id INT PRIMARY KEY DEFAULT 1,
+  manager_pin TEXT DEFAULT '1234',
+  store_name TEXT DEFAULT 'BerdikariPOS',
+  store_logo TEXT,
+  address TEXT,
+  tax_enabled BOOLEAN DEFAULT false,
+  tax_percent FLOAT DEFAULT 0,
+  categories JSONB DEFAULT '["Jamu Murni", "Wedang", "Signature", "Segar"]',
+  printer_enabled BOOLEAN DEFAULT false,
+  printer_type TEXT DEFAULT 'browser',
+  printer_width TEXT DEFAULT '58mm',
+  auto_print_on_checkout BOOLEAN DEFAULT false,
+  super_admin_pin TEXT DEFAULT '000000',
+  kitchen_printers JSONB DEFAULT '[]',
+  theme_color TEXT,
+  theme_shades JSONB,
+  table_features_enabled BOOLEAN DEFAULT false,
+  available_table_numbers JSONB DEFAULT '[]'
+);
 
-### 4.2. Keamanan
-- Tindakan penghapusan/void oleh non-manager → validasi PIN Manager (modal custom)
-- Kasir wajib serah terima kas (tidak bisa skip)
-- Role-based route protection
-- **Password hashing**: bcryptjs (10 salt rounds). Auto-migrasi dari plain text saat pertama load.
-- **Audit log**: Semua aksi user tercatat (login, CRUD, transaksi, shift)
-- **Konfirmasi dialog**: Semua aksi destruktif (hapus) memerlukan konfirmasi
-- **Void confirmation**: Manager mendapat ConfirmDialog sebelum void/cancel transaksi
-- **Username uniqueness**: Validasi duplikat saat tambah/edit user
-
-### 4.3. Performa
-- Pencarian produk menggunakan `useMemo` (no delay)
-- Lazy filtering & pagination untuk tabel besar
-- State persist ke localStorage (instant load)
-- Auto-cleanup: stock log > 30 hari, audit log > 90 hari (on app load)
-- Code-splitting: React.lazy() per halaman (bundle utama ~450KB)
-- Error boundary: Crash pada halaman lazy-loaded tidak menyebabkan white-screen, menampilkan UI recovery
-
-### 4.5. PWA (Progressive Web App)
-- **Installable**: Bisa di-install ke homescreen (tablet/HP) tanpa browser bar
-- **Standalone display**: Tampil seperti native app
-- **Offline-capable**: Assets di-cache oleh Workbox service worker
-- **Auto-update**: Service worker otomatis update saat ada versi baru
-- **Dynamic favicon**: Icon tab browser mengikuti logo toko yang diupload
-
-### 4.6. Offline & Sync
-- **Local-first architecture**: Semua data tersimpan di localStorage, app berfungsi 100% tanpa internet
-- **Offline Queue**: Operasi cloud yang gagal (saat offline) disimpan di antrian lokal
-- **Auto-retry**: Saat internet kembali, antrian otomatis di-flush ke Supabase
-- **Max 5 retries**: Operasi yang gagal 5x dihapus dari antrian
-- **Flush on app start**: Pending items dari sesi sebelumnya langsung di-retry
-- **Dependency-ordered flush (LOGIC-ERR-04 fix)**: Operasi di-sort sebelum flush (insert → upsert → update → delete) untuk mencegah update diproses sebelum insert parent record
-- **Queue indicator**: Badge di sidebar menampilkan jumlah operasi tertunda secara real-time
-- **Real-time sync**: Supabase real-time subscriptions di SEMUA halaman
-  - POS: menus, inventory, customers, settings
-  - Kitchen: transactions
-  - Transactions: transactions
-  - Customers: customers
-  - Catalog: menus
-  - Inventory: inventory
-  - Promos: promos
-  - Settings: users
-- **fullSync pattern**: Saat real-time event, `loadFromCloud(true)` menjadikan cloud sebagai sumber kebenaran. Item yang dihapus di cloud dihapus dari lokal (grace period 30 detik)
-- **Cloud sync coverage**: 13 data types, 10 stores, 6 stores dengan fullSync, 100% halaman dengan real-time
-- **Custom Categories Sync**: Disimpan di settings table (id=1) di kolom categories sebagai JSON, sync antar device
-
-### 4.4. Print & Thermal Printer
-- **Browser Print**: `window.open` + CSS `@page` optimized untuk thermal paper (58mm/80mm)
-- **Bluetooth ESC/POS**: Web Bluetooth API untuk cetak langsung ke printer thermal
-  - Scan & pair printer dari Settings
-  - ESC/POS commands: initialize, bold, center, left align, feed, cut
-  - Data dikirim dalam chunks 20 bytes (BLE MTU)
-  - Status koneksi real-time (terhubung/tidak)
-- **Split Printing (Printer Dapur & Bar)**:
-  - Menu dapat dikonfigurasi target dapurnya (misal: "Minuman" untuk Bar, "Makanan" untuk Dapur).
-  - Ketika pesanan checkout, selain mencetak struk penuh di printer kasir, sistem menyaring item pesanan berdasarkan target dapurnya.
-  - Tiket dapur hanya mencetak informasi antrean, nama kasir/pelanggan, nama produk, add-on, dan kuantitas (tanpa harga/subtotal/total).
-  - Setiap tiket dikirim secara terpisah ke printer dapur yang sesuai (baik lewat dialog Browser Print terpisah maupun Bluetooth).
-- **Utility**: `src/utils/printer.ts` — `printReceipt()`, `connectBluetoothPrinter()`, `disconnectBluetoothPrinter()`, `printKitchenReceiptBrowser()`, `printKitchenReceiptBluetooth()`
-- Format struk: nama toko, alamat, nomor antrean, tanggal, kasir, pelanggan, items + kustomisasi, subtotal, diskon, total, metode bayar, kembalian, footer
-
----
-
-## 5. Data Model Architecture
-
-### 5.1. Table: users
-```typescript
-{
-  id: string (UUID)
-  name: string
-  username: string (unique)
-  password: string (bcrypt hashed — auto-migrasi dari plain text)
-  role: 'Manager' | 'Kasir' | 'Acaraki'
-  activeSessionId?: string (untuk deteksi & batasi multi-device login)
-  createdAt: string (ISO)
-}
-```
-
-### 5.2. Table: inventory
-```typescript
-{
-  id: string (slug, e.g. "kunyit")
-  name: string
-  stock: number (float)
-  unit: string ("kg", "L", "pcs", "ml", "g")
-  costPerUnit: number (Rp per unit — untuk hitung HPP)
-  minStock?: number (threshold alert, default 3)
-}
-```
-
-### 5.3. Table: menus
-```typescript
-{
-  id: string (UUID)
-  name: string
-  category: string
-  price: number (harga jual)
-  image?: string (base64 data URL)
-  isBestSeller?: boolean
-  isAvailable?: boolean (default true — false hides from POS)
-  ingredients: Record<string, number> // { inventory_id: amount }
-  availableAddons: Array<{ name: string, price: number }>
-  description?: string
-  manualHpp?: number // HPP manual jika tanpa komposisi bahan
-  kitchenTarget?: string // Target printer dapur ("Bar", "Dapur Makanan")
-  showSugarLevel?: boolean // false = sembunyikan opsi level gula
-  showTemperature?: boolean // false = sembunyikan opsi suhu (untuk makanan)
-}
-```
-
-### 5.4. Table: transactions
-```typescript
-{
-  id: string (UUID)
-  queueNumber: number (auto-reset daily)
-  date: string (ISO timestamp)
-  items: CartItem[] // detail pesanan
-  subtotal: number
-  discount: number
-  totalAmount: number
-  paymentMethod: 'Cash' | 'QRIS' | 'Transfer'
-  cashReceived?: number
-  change?: number
-  kitchenStatus: 'Waiting' | 'Processing' | 'Done'
-  txStatus: 'Selesai' | 'Cancel' | 'Demo'
-  cashierId: string
-  cashierName: string
-  customerId?: string
-  customerName?: string
-  hpp: number (total cost of goods sold)
-  tax?: number // nilai pajak dalam Rupiah
-  orderType?: 'Dine In' | 'Take Away' // tipe pesanan
-}
-```
-
-### 5.5. Table: CartItem (embedded in transaction)
-```typescript
-{
-  lineId: string (UUID)
-  menuId: string
-  name: string
-  basePrice: number
-  quantity: number
-  temperature: 'Hangat' | 'Dingin'
-  sugar: 'Normal' | 'Less' | 'None'
-  addons: Array<{ name: string, price: number }>
-  subtotal: number
-  kitchenTarget?: string // target printer dapur untuk split print
-  showSugarLevel?: boolean
-  showTemperature?: boolean
-}
-```
-
-### 5.6. Table: customers
-```typescript
-{
-  id: string (UUID)
-  name: string
-  phone?: string
-  email?: string
-  notes?: string
-  totalSpent: number (auto-updated)
-  visitCount: number (auto-updated)
-  lastVisit?: string (ISO)
-  createdAt: string (ISO)
-}
-```
-
-### 5.7. Table: shifts (CashierShift)
-```typescript
-{
-  id: string (UUID)
-  userId: string
-  userName: string
-  openedAt: string (ISO)
-  closedAt?: string (ISO)
-  openingCash: number (modal awal)
-  closingCash?: number (kas aktual di laci)
-  expectedCash?: number (kalkulasi sistem)
-  cashDifference?: number (closingCash - expectedCash)
-  totalSales: number
-  totalTransactions: number
-  status: 'open' | 'closed'
-}
-```
-
-### 5.8. Table: settings (AppSettings)
-```typescript
-{
-  managerPin: string
-  storeName: string
-  storeLogo?: string (base64)
-  address?: string
-  taxPercent?: number
-  categories: string[]
-  printerEnabled: boolean
-  printerType: 'browser' | 'bluetooth'
-  printerWidth: '58mm' | '80mm'
-  autoPrintOnCheckout: boolean
-}
-```
-
-### 5.9. Table: stockLogs (StockLogEntry)
-```typescript
-{
-  id: string (UUID)
-  inventoryId: string
-  inventoryName: string
-  type: 'deduct' | 'add' | 'adjust' | 'import'
-  amount: number (positive = added, negative = deducted)
-  stockBefore: number
-  stockAfter: number
-  unit: string
-  reason?: string (e.g. "Transaksi POS", "Adjustment manual")
-  date: string (ISO)
-}
-```
-Max 5000 entries retained. Auto-logged on every stock change.
-
----
-
-## 6. Project Structure
-
-```
-rempah-story-pos/
-├── index.html
-├── package.json
-├── vite.config.ts
-├── tsconfig.json
-├── tailwind.config.js
-├── postcss.config.js
-├── tunnel.mjs              # Ngrok tunnel script (public access)
-├── PRD.md                  # This document
-├── public/
-│   ├── icons/
-│   │   ├── icon-192.svg    # PWA icon 192x192
-│   │   └── icon-512.svg    # PWA icon 512x512
-│   └── sounds/
-│       └── kds-alarm.wav   # Custom KDS notification sound
-└── src/
-    ├── main.tsx
-    ├── App.tsx
-    ├── index.css
-    ├── types/
-    │   └── index.ts          # All TypeScript interfaces & types
-    ├── utils/
-    │   ├── format.ts         # formatRupiah, formatDate, formatTime, isSameDay
-    │   ├── hpp.ts            # calculateMenuHPP, calculateTransactionHPP
-    │   ├── printer.ts        # Thermal printer (Browser Print + Bluetooth ESC/POS)
-    │   ├── pdfExport.ts     # PDF report generation (jsPDF + autotable)
-    │   ├── sound.ts         # Custom audio notification (KDS alarm)
-    │   ├── stockCheck.ts    # Stock availability validation before checkout
-    │   └── seed.ts          # Initial data (users, inventory, menus, settings)
-    ├── store/
-    │   ├── authStore.ts      # Users, login/logout, RBAC
-    │   ├── menuStore.ts      # Menus CRUD, categories management
-    │   ├── inventoryStore.ts # Inventory CRUD, deductStock + auto stock logging
-    │   ├── transactionStore.ts # Transactions, kitchen status, KDS clear, daily queue reset
-    │   ├── cartStore.ts      # Cart state (persisted to localStorage)
-    │   ├── customerStore.ts  # CRM customers
-    │   ├── shiftStore.ts     # Shift open/close, history
-    │   ├── settingsStore.ts  # App settings, PIN verification
-    │   ├── toastStore.ts     # Toast notification system
-    │   ├── stockLogStore.ts  # Stock change history/audit log
-    │   ├── promoStore.ts     # Promo/voucher CRUD + loyalty settings
-    │   └── auditLogStore.ts  # Audit log (all user actions)
-    ├── components/
-    │   ├── Layout.tsx        # Sidebar, header, shift modals, Acaraki summary
-    │   ├── Modal.tsx         # Reusable modal component
-    │   ├── PinModal.tsx      # PIN verification modal
-    │   ├── ConfirmDialog.tsx # Reusable confirmation dialog (delete actions)
-    │   ├── ErrorBoundary.tsx # React error boundary untuk crash recovery
-    │   ├── ToastContainer.tsx # Toast notification renderer
-    │   └── OpenShiftModal.tsx # Open shift modal for Kasir
-    └── pages/
-        ├── Login.tsx         # Login page with store branding
-        ├── POS.tsx           # Point of Sale (order creation + promo/voucher)
-        ├── Kitchen.tsx       # Kitchen Display System (KDS)
-        ├── Transactions.tsx  # Transaction history
-        ├── Dashboard.tsx     # Manager dashboard & analytics
-        ├── Catalog.tsx       # Menu catalog management
-        ├── Inventory.tsx     # Inventory management
-        ├── Promos.tsx        # Promo/voucher & loyalty management
-        ├── Reports.tsx       # Reports (P&L, Transactions, Cash, Stock, Shift) + PDF
-        ├── Customers.tsx     # CRM & WhatsApp marketing
-        ├── AuditLog.tsx      # Audit log viewer (Manager only)
-        ├── StockOpname.tsx   # Modul Stock Opname / rekonsiliasi stok fisik
-        └── SettingsPage.tsx  # Store, PIN, Printer, User settings
+-- Cash Movements Table Schema
+CREATE TABLE IF NOT EXISTS cash_movements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id TEXT,
+  type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+  amount FLOAT NOT NULL DEFAULT 0,
+  category TEXT NOT NULL,
+  notes TEXT,
+  cashier_id TEXT,
+  cashier_name TEXT NOT NULL,
+  date TIMESTAMPTZ DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 ```
 
 ---
 
-## 7. State Persistence
-
-Semua store menggunakan Zustand `persist` middleware dengan localStorage:
-
-| Store | localStorage Key |
-|-------|-----------------|
-| authStore | `rempah-auth` |
-| menuStore | `rempah-menus` |
-| inventoryStore | `rempah-inventory` |
-| transactionStore | `rempah-transactions` |
-| cartStore | `rempah-cart` |
-| customerStore | `rempah-customers` |
-| shiftStore | `rempah-shifts` |
-| settingsStore | `rempah-settings` |
-| stockLogStore | `rempah-stock-logs` |
-| promoStore | `rempah-promos` |
-| auditLogStore | `rempah-audit-logs` |
-| stockOpnameStore | `rempah-stock-opnames` |
-
-**Catatan**: `toastStore` tidak di-persist (transient UI state).
-
----
-
-## 8. Key Business Logic
-
-### 8.1. HPP Calculation
-```
-HPP per menu = Σ (ingredient_amount × inventory_costPerUnit)
-HPP per transaction = Σ (menu_HPP × quantity)
-```
-
-### 8.2. Expected Cash Calculation
-```
-Expected Cash = Opening Cash + Cash Sales - Cash Change Given
-```
-
-### 8.3. Inventory Auto-Deduction
-Saat transaksi selesai, untuk setiap item di cart:
-```
-For each ingredient in menu.ingredients:
-  inventory[ingredient_id].stock -= ingredient_amount × item.quantity
-  → auto-logged to stockLogStore
-```
-
-### 8.4. Stock Validation (Pre-Checkout)
-```
-For each cart item → sum required ingredients
-Compare required vs available stock
-If any ingredient insufficient → show warning modal
-Kasir can override (proceed anyway) or cancel
-```
-
-### 8.5. Queue Number Daily Reset
-```
-On getNextQueueNumber():
-  if lastQueueDate !== today → reset to 1, update lastQueueDate
-  else → return current nextQueueNumber
-```
-
-### 8.6. KDS Clear Logic
-- `lastKdsClearTime` disimpan saat Acaraki print & logout
-- Kitchen page filter: hide Done orders where `order.date < lastKdsClearTime`
-
-### 8.7. WhatsApp Integration
-```
-Phone format: 08xx → 62xx (remove leading 0, prepend 62)
-URL: https://wa.me/{phone}?text={encodedMessage}
-```
-
-### 8.8. Sound Notifications (KDS)
-```
-Custom audio file: /public/sounds/kds-alarm.wav
-playNewOrderSound(): plays kds-alarm.wav at 70% volume when Waiting count increases
-playAlertSound(): plays kds-alarm.wav at 100% volume for overdue orders
-Uses HTMLAudioElement (not Web Audio API) for custom sound support
-File served from public/ folder (no bundling/hashing by Vite)
-```
-
-### 8.9. Toast System
-```
-toastStore.addToast(message, type, duration)
-Types: success | error | info | warning
-Auto-dismiss after 3 seconds (configurable)
-Rendered by ToastContainer (fixed top-right, z-200)
-```
-
----
-
-## 9. Future Roadmap
-
-Fitur berikut sudah disiapkan arsitekturnya untuk fase pengembangan selanjutnya:
-
-### Phase 1 — NEXT (Integrasi & Sekuritas Lanjutan)
-1. **Auto-Reconnect & Visibility State Listener**: Otomatis memulihkan koneksi realtime Supabase saat perangkat menyala kembali dari mode sleep.
-2. **Supabase Row Level Security (RLS) Policies**: Pengamanan ketat akses database dari eksploitasi pihak luar yang mengetahui `anon key`.
-
-### Phase 2 (Komunikasi & Notifikasi)
-3. **WhatsApp Receipt & Shift Summary**: Kirim struk PDF ke pelanggan dan ringkasan shift harian ke WA Manager.
-4. **Multi-outlet Support**: Satu akun Manager mengelola beberapa cabang dengan database inventaris terpisah.
-5. **QR Code Self-Order**: Pelanggan scan QR di meja → pilih menu → langsung masuk KDS.
-6. **Integrasi Payment Gateway**: QRIS otomatis (Midtrans/Xendit) dengan auto-confirm pembayaran.
-
-### Phase 3 (Analitik & Operasional)
-7. **Laporan Perbandingan Periode**: Analitik komparatif performa penjualan.
-8. **Restock/Purchase Order**: Pencatatan pembelian bahan baku dari supplier.
-9. **Multi-language**: Dukungan multibahasa (English/Indonesia).
-10. **AI Recommendation**: Rekomendasi menu cerdas berbasis histori dan cuaca.
-
-### ~~Completed (moved from roadmap)~~
-- ~~Printer Thermal Bluetooth~~ ✅ (Web Bluetooth API + Browser Print)
-- ~~Shift Management~~ ✅ (Open/Close Cashier)
-- ~~PWA~~ ✅ (Installable, offline-capable)
-- ~~Loyalty Program~~ ✅ (Tier system + auto-discount)
-- ~~Audit Log~~ ✅ (All user actions tracked)
-- ~~Cloud Sync 100%~~ ✅ (Real-time subscriptions di semua halaman, fullSync, delete propagation)
-- ~~Void Confirmation~~ ✅ (ConfirmDialog untuk Manager)
-- ~~Clear Cart~~ ✅ (1-klik kosongkan keranjang)
-- ~~KDS Today Filter~~ ✅ (Hanya transaksi hari ini)
-- ~~Custom Categories Sync~~ ✅ (Cloud sync via settings table)
-- ~~Dark Mode Overhaul & Login Contrast~~ ✅ (Dark mode premium & halaman login bebas kontras)
-- ~~Temperature/Sugar Level per Product~~ ✅ (Toggle show/hide per menu item)
-- ~~Order Type (Dine In / Take Away)~~ ✅ (Seleksi di POS, display di KDS, cetak di struk, analitik di Reports)
-- ~~Stock Opname~~ ✅ (Rekonsiliasi stok fisik vs sistem dengan PIN verification)
-- ~~Error Boundary~~ ✅ (Crash recovery UI di level root)
-- ~~Offline Queue Indicator~~ ✅ (Badge pending operations di sidebar)
-- ~~Settings Merge Conflict Notification~~ ✅ (Toast warning saat cloud menimpa lokal)
-- ~~Multi-device Session Restriction~~ ✅ (Pembatasan satu session aktif per user via Supabase Realtime)
-
----
-
-## 10. Seed Data (Default)
-
-### Users
-| Username | Password | Role |
-|----------|----------|------|
-| manager | manager123 | Manager |
-| kasir | kasir123 | Kasir |
-| acaraki | acaraki123 | Acaraki |
-
-### Menu Categories
-- Jamu Murni
-- Wedang
-- Signature
-- Segar
-
-### Sample Menu (8 items)
-- Kunyit Asam Signature (Rp 18.000) ⭐
-- Beras Kencur (Rp 16.000) ⭐
-- Wedang Jahe (Rp 15.000)
-- Temulawak Madu (Rp 20.000)
-- Wedang Uwuh (Rp 17.000)
-- Golden Milk (Rp 25.000) ⭐
-- Jeruk Nipis Peras (Rp 14.000)
-- Lemon Jahe (Rp 16.000)
-
-### Inventory (15 items)
-Kunyit, Jahe Emprit, Temulawak, Sereh, Kayu Manis, Gula Aren, Gula Pasir, Madu Murni, Lemon, Jeruk Nipis, Susu UHT, Cup 16oz, Cup 12oz, Sedotan, Air Galon
-
-### Default Settings
-- Store Name: "BerdikariPOS"
-- Manager PIN: "1234"
-- Printer: Disabled
-- Tax: 0%
-
----
-
-## 11. Running the Application
-
-### Production (Live)
-- **Hosting**: Vercel (auto-deploy on git push)
-- **Database**: Supabase (PostgreSQL + Real-time subscriptions)
-- **HTTPS**: Otomatis via Vercel
-- **CI/CD**: Push ke GitHub → Vercel auto-build & deploy
-
-### Development (Local)
-```bash
-# Install dependencies
-npm install
-
-# Development server (local)
-npm run dev
-# → http://localhost:5173
-
-# Public access via Ngrok tunnel (requires authtoken setup)
-# Terminal 1: npm run dev
-# Terminal 2: npm run tunnel
-# → https://xxxx.ngrok-free.app
-
-# Production build (local test)
-npm run build
-npm run preview --host
-```
-
-### Ngrok Setup (sekali saja, untuk dev)
-```bash
-npx ngrok config add-authtoken YOUR_TOKEN_HERE
-```
-
-### Deploy ke Production
-```bash
-git add .
-git commit -m "description of changes"
-git push origin main
-# Vercel auto-deploys within 1-2 minutes
-```
-
----
-
-## 12. Design Tokens & UI Guidelines
-
-### Colors
-- **Primary (Brand)**: `#b85f21` (warm brown/orange)
-- **Success**: `#22c55e`
-- **Danger**: `#ef4444`
-- **Warning**: `#f59e0b`
-- **Info**: `#3b82f6`
-
-### Components
-- **Cards**: `bg-white rounded-2xl shadow-sm border border-slate-100`
-- **Buttons**: `rounded-xl px-4 py-2.5 font-semibold` with active:scale-95
-- **Inputs**: `rounded-xl border border-slate-200` with focus ring
-- **Badges**: `rounded-full px-2.5 py-1 text-xs font-semibold`
-- **Modals**: Centered overlay with `rounded-2xl max-h-[90vh]`
-
-### Responsive Breakpoints
-- Mobile: < 1024px (sidebar hidden, hamburger menu)
-- Desktop: ≥ 1024px (sidebar visible, collapsible)
-
----
-
-*Document ini mencakup seluruh fitur yang sudah diimplementasi pada aplikasi BerdikariPOS v3.4. Gunakan sebagai referensi lengkap untuk pengembangan lebih lanjut.*
+*PRD BerdikariPOS v4.2.*

@@ -1,4 +1,4 @@
-# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS
+# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS v4.2
 
 ## Status: ✅ PRODUCTION LIVE
 - **Hosting**: Vercel (auto-deploy)
@@ -23,7 +23,8 @@
 - Cloud database (Supabase) aktif
 - Real-time sync antar device berfungsi (100% coverage — semua tabel)
 - PWA installable
-- Full cloud sync: delete propagation, fullSync mode, 13 data types
+- Full cloud sync: delete propagation, fullSync mode, 16 data types
+- Background Printer Connection Monitor dengan status banner & 1-click reconnect
 
 ### Arsitektur Production:
 ```
@@ -41,7 +42,7 @@
 Setiap kali ada perubahan kode, cukup push ke GitHub:
 
 ```bash
-cd "d:\Private File\Aba\VibeCoding\Aplikasi\Jamu POS\rempah-story-pos"
+cd "d:\Private File\Aba\VibeCoding\Aplikasi\rempah-story-pos"
 git add .
 git commit -m "deskripsi perubahan"
 git push origin main
@@ -81,53 +82,40 @@ Setiap klien (toko) yang beli aplikasi Anda perlu:
 
 ### Setup Cepat untuk 1 Klien Baru:
 1. Buat Supabase project baru (gratis)
-2. Jalankan `schema.sql` di SQL Editor.
+2. Jalankan `supabase/schema.sql` di SQL Editor.
    > [!NOTE]
-   > Jika meng-upgrade database klien lama ke versi 3.4, jalankan perintah berikut di SQL Editor Supabase untuk mendukung fitur pembatasan login device, split printing dapur, tema warna dinamis, fleksibilitas opsi level gula & suhu, tipe pesanan (Dine In / Take Away), dan modul Stock Opname:
+   > Jika meng-upgrade database klien lama ke versi 4.2, jalankan perintah berikut di SQL Editor Supabase untuk mendukung fitur Pengaturan Pajak (PB1/PPN), Rekap Kas (Kas Masuk/Keluar), Fitur Meja, dan Bluetooth Printer Monitor:
    > ```sql
-   > ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_id TEXT;
-   > ALTER TABLE menus ADD COLUMN IF NOT EXISTS kitchen_target TEXT DEFAULT NULL;
-   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS kitchen_printers JSONB DEFAULT '[]';
-   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_color TEXT;
-   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_shades JSONB;
-   > ALTER TABLE menus ADD COLUMN IF NOT EXISTS show_sugar_level BOOLEAN DEFAULT TRUE;
-   > ALTER TABLE menus ADD COLUMN IF NOT EXISTS show_temperature BOOLEAN DEFAULT TRUE;
-   > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tax FLOAT DEFAULT 0;
-   > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS order_type TEXT;
+   > -- 1. Pengaturan Pajak & Fitur Meja
+   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;
+   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}';
    > 
-   > CREATE TABLE IF NOT EXISTS stock_opnames (
+   > -- 2. Detail Transaksi (Tipe Pesanan, Meja, Pajak)
+   > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'Dine In';
+   > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_number TEXT;
+   > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tax INT DEFAULT 0;
+   > 
+   > -- 3. Tabel Rekap Kas (Kas Masuk & Kas Keluar)
+   > CREATE TABLE IF NOT EXISTS cash_movements (
    >   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   >   shift_id TEXT,
+   >   type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+   >   amount FLOAT NOT NULL DEFAULT 0,
+   >   category TEXT NOT NULL,
+   >   notes TEXT,
+   >   cashier_id TEXT,
+   >   cashier_name TEXT NOT NULL,
    >   date TIMESTAMPTZ DEFAULT now(),
-   >   staff_id TEXT NOT NULL,
-   >   staff_name TEXT NOT NULL,
-   >   items JSONB NOT NULL DEFAULT '[]',
-   >   total_loss_value FLOAT DEFAULT 0,
-   >   total_items INT DEFAULT 0,
-   >   items_with_difference INT DEFAULT 0,
-   >   pin_verified BOOLEAN DEFAULT false,
-   >   notes TEXT
+   >   created_at TIMESTAMPTZ DEFAULT now()
    > );
    > 
+   > -- 4. Blok Aman untuk Realtime Publication
    > DO $$
    > BEGIN
-   >   ALTER PUBLICATION supabase_realtime ADD TABLE stock_opnames;
+   >   ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
    > EXCEPTION WHEN duplicate_object THEN NULL;
    > END $$;
    > ```
-3. Deploy frontend ke Vercel dengan env variables klien tersebut
-
-### Upgrade ke v3.5 (Roadmap Iteration 1 — Shift & Staf Gudang):
-Jika meng-upgrade database klien lama ke versi 3.5, jalankan perintah berikut di SQL Editor Supabase untuk memperbarui check constraint role:
-```sql
--- Memperbarui Check Constraint Role di tabel users untuk mendukung Staf Gudang
-ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('Manager', 'Kasir', 'Acaraki', 'Staf Gudang'));
-```
-
-### Upgrade ke v4.0 (Bluetooth Printer Device Registry & Split Printing Refactor):
-Metadata perangkat Bluetooth (`bluetoothDeviceId`, `bluetoothDeviceName`, `cashierBluetoothDeviceId`, `cashierBluetoothDeviceName`) disimpan di dalam kolom JSONB `kitchen_printers` dan `settings` yang sudah ada. **Tidak ada migrasi SQL database yang diperlukan** untuk upgrade ke v4.0.
-4. Berikan URL + akun login ke klien
-5. Klien bisa langsung pakai
 
 ---
 
@@ -149,17 +137,6 @@ Metadata perangkat Bluetooth (`bluetoothDeviceId`, `bluetoothDeviceName`, `cashi
 | **Premium** | Rp 3.000.000 | + training + 6 bulan support + custom menu |
 | **Enterprise** | Rp 5.000.000+ | + custom fitur + unlimited support |
 
-### Biaya Operasional Anda:
-- Vercel hosting: **Gratis** (tier hobby)
-- Supabase per klien: **Gratis** (tier free, 500MB database)
-- Domain: **Rp 100-150rb/tahun** per klien (opsional)
-- **Total biaya per klien: Rp 0 - 15rb/bulan**
-
-### Revenue Projection:
-- 10 klien × Rp 199.000/bulan = **Rp 1.990.000/bulan**
-- 50 klien × Rp 199.000/bulan = **Rp 9.950.000/bulan**
-- Biaya Anda: hampir Rp 0 (semua tier gratis)
-
 ---
 
 ## 5. Panduan Pemakaian untuk Klien
@@ -175,39 +152,15 @@ PANDUAN CEPAT — [Nama Toko] POS
    - Manager: [username] / [password]
    - Kasir: [username] / [password]  
    - Acaraki: [username] / [password]
+   - Staf Gudang: [username] / [password]
 
 3. Kasir: Buka shift → Buat pesanan → Bayar → Tutup shift
 4. Acaraki: Lihat pesanan → Proses → Selesai
-5. Manager: Lihat laporan, kelola menu, atur promo
+5. Manager: Lihat laporan, kelola menu, atur promo, atur pajak
+6. Gudang: Stock opname mode blind
 
 Butuh bantuan? Hubungi: [WA Anda]
 ```
-
-#### B. User Manual (per role)
-
-**Untuk Kasir:**
-- Cara buka/tutup shift
-- Cara buat pesanan (pilih menu, kustomisasi, bayar)
-- Cara pakai voucher/promo
-- Cara pilih pelanggan
-
-**Untuk Acaraki:**
-- Cara baca KDS
-- Cara proses pesanan (Waiting → Processing → Done)
-- Arti alert merah (> 5 menit)
-
-**Untuk Manager:**
-- Cara baca dashboard
-- Cara kelola menu & harga
-- Cara buat promo/voucher
-- Cara export laporan (PDF/CSV)
-- Cara tambah user baru
-
-#### C. Kontrak/Agreement
-- Scope layanan
-- SLA (uptime guarantee)
-- Harga & pembayaran
-- Support terms
 
 ---
 
@@ -217,70 +170,16 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] Deploy ke Vercel (production URL aktif)
 - [x] HTTPS aktif (otomatis di Vercel)
 - [x] Cloud sync berfungsi (Supabase real-time — 100% coverage)
-- [x] Real-time subscriptions di semua halaman (POS, KDS, Transaksi, Katalog, dll)
-- [x] Delete propagation antar device (fullSync pattern)
+- [x] Background service Printer Connection Monitor + UI Status Banner
+- [x] Revert stok & data customer otomatis saat transaksi dihapus
+- [x] Modul Rekap Kas (Kas Masuk & Kas Keluar) + Shift breakdown
+- [x] Pengaturan Pajak (PB1/PPN) toggle on/off + preset %
 - [x] PWA installable
 - [x] Password hashing (bcrypt)
 - [x] Error boundary (crash handling)
 - [x] Code-splitting (fast load)
-- [x] Custom categories cloud sync
-- [x] Konfirmasi void/cancel transaksi (Manager)
-- [x] Clear cart button (2+ items)
 - [x] Restriksi Multi-login Device (satu session aktif per user)
 
-### ✅ Bisnis
-- [ ] Tentukan pricing model
-- [ ] Buat kontrak/agreement template
-- [ ] Buat invoice template
-- [ ] Siapkan WA Business untuk support
-- [ ] Buat landing page/portfolio (opsional)
-
-### ✅ Onboarding Klien Baru
-- [ ] Buat Supabase project baru untuk klien
-- [ ] Jalankan schema.sql di SQL Editor
-- [ ] Deploy frontend baru di Vercel dengan env variables klien
-- [ ] Input menu & harga klien
-- [ ] Input bahan baku & stok awal
-- [ ] Buat akun user (manager, kasir, acaraki)
-- [ ] Training 1-2 jam (bisa via video call)
-- [ ] Berikan Quick Start Guide
-
-### ✅ Branding per Klien
-- [ ] Ganti nama toko di Settings
-- [ ] Upload logo toko
-- [ ] Input alamat
-- [ ] Sesuaikan kategori menu
-
 ---
 
-## Langkah Pertama Anda Sekarang
-
-1. ~~Buat akun GitHub → push kode~~ ✅ DONE
-2. ~~Buat akun Vercel → deploy~~ ✅ DONE
-3. ~~Test production URL~~ ✅ DONE
-4. **Siapkan 1 klien pertama** (bisa toko Anda sendiri sebagai showcase)
-5. **Buat WA Business** untuk support
-6. **Mulai tawarkan** ke toko F&B di sekitar Anda
-7. **Pasang custom domain** (opsional, Rp 100-150rb/tahun)
-
----
-
-## FAQ
-
-**Q: Apakah data klien aman?**
-A: Ya. Setiap klien punya database terpisah di Supabase. Password di-hash dengan bcrypt. Koneksi HTTPS. Namun, pastikan mengaktifkan Row Level Security (RLS) di Supabase production untuk pengamanan optimal.
-
-**Q: Bagaimana jika koneksi real-time terputus saat perangkat sleep?**
-A: Sistem POS dilengkapi dengan auto-reconnect. Namun jika koneksi tersendat, kasir cukup melakukan swipe-refresh/reload halaman, dan offline queue akan otomatis mengunggah perubahan tertunda saat online.
-
-**Q: Bagaimana jika klien mau fitur tambahan?**
-A: Charge sebagai custom development (Rp 500rb-2jt per fitur tergantung kompleksitas).
-
-**Q: Bagaimana jika Supabase free tier habis?**
-A: Upgrade ke Pro ($25/bulan) per klien, atau masukkan ke biaya langganan klien.
-
-**Q: Bisa offline?**
-A: Ya, PWA + localStorage. Data tetap tersimpan lokal. Sync ke cloud saat online kembali.
-
-**Q: Support apa yang harus saya berikan?**
-A: Bug fix, bantuan setup, training. Bukan custom development (itu charge terpisah).
+*Dokumen ini diperbarui untuk BerdikariPOS v4.2.*

@@ -63,8 +63,12 @@ export default function Dashboard() {
     (t) => isSameDay(new Date(t.date), today) && t.txStatus === 'Selesai'
   );
 
-  const todayRevenue = todayTx.reduce((a, t) => a + t.totalAmount, 0);
+  const todayGrossRevenue = todayTx.reduce((a, t) => a + t.subtotal, 0);
+  const todayDiscount = todayTx.reduce((a, t) => a + t.discount, 0);
+  const todayNetRevenue = todayGrossRevenue - todayDiscount;
+  const todayRevenue = todayTx.reduce((a, t) => a + t.totalAmount, 0); // Omset fisik (termasuk pajak) untuk display omset
   const todayHPP = todayTx.reduce((a, t) => a + t.hpp, 0);
+  const todayProfit = todayNetRevenue - todayHPP; // Laba kotor murni (bersih dari diskon & pajak)
   const todayCount = todayTx.length;
 
   // Best seller
@@ -178,11 +182,13 @@ export default function Dashboard() {
       const dailyTxs = transactions.filter(
         (t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai'
       );
-      const rev = dailyTxs.reduce((a, t) => a + t.totalAmount, 0);
+      const grossRev = dailyTxs.reduce((a, t) => a + t.subtotal, 0);
+      const disc = dailyTxs.reduce((a, t) => a + t.discount, 0);
+      const netRev = grossRev - disc;
       const hpp = dailyTxs.reduce((a, t) => a + t.hpp, 0);
 
-      revenueData.push(rev);
-      profitData.push(rev - hpp);
+      revenueData.push(dailyTxs.reduce((a, t) => a + t.totalAmount, 0));
+      profitData.push(netRev - hpp);
     }
 
     return {
@@ -411,7 +417,7 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <p className="text-xs text-slate-500 dark:text-slate-400">Laba Kotor Hari Ini</p>
-                  <p className="text-xl font-bold text-purple-700 dark:text-purple-400">{formatRupiah(todayRevenue - todayHPP)}</p>
+                  <p className="text-xl font-bold text-purple-700 dark:text-purple-400">{formatRupiah(todayProfit)}</p>
                 </div>
               </div>
             </div>
@@ -525,7 +531,7 @@ export default function Dashboard() {
               </div>
               <div className="p-4 bg-purple-50 dark:bg-purple-950/20 border border-purple-100/50 dark:border-purple-900/10 rounded-xl">
                 <p className="text-xs text-slate-500 dark:text-slate-400">Laba Kotor</p>
-                <p className="text-xl font-bold text-purple-700 dark:text-purple-400">{formatRupiah(todayRevenue - todayHPP)}</p>
+                <p className="text-xl font-bold text-purple-700 dark:text-purple-400">{formatRupiah(todayProfit)}</p>
               </div>
             </div>
             <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-950/20 border border-blue-100/50 dark:border-blue-900/10 rounded-xl">

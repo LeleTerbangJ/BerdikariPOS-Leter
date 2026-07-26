@@ -695,9 +695,9 @@ export default function Reports() {
                 <span className="text-slate-600 dark:text-slate-400 font-semibold">Pendapatan Bersih (Net Sales)</span>
                 <span className="font-bold text-green-700 dark:text-green-400">{formatRupiah(netRevenue)}</span>
               </div>
-              <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-700 pl-4">
-                <span className="text-slate-500 dark:text-slate-400">+ Pajak Terkumpul (Tax)</span>
-                <span className="text-green-600">+{formatRupiah(totalTax)}</span>
+              <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-700 pl-4 bg-slate-50/50 dark:bg-slate-800/50 rounded-lg px-2 text-xs">
+                <span className="text-slate-500 dark:text-slate-400">ℹ️ PPN / Pajak Terkumpul (Kewajiban Setor)</span>
+                <span className="font-medium text-slate-600 dark:text-slate-400">{formatRupiah(totalTax)}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-700 pl-4">
                 <span className="text-slate-500 dark:text-slate-400">- Harga Pokok Penjualan (HPP)</span>

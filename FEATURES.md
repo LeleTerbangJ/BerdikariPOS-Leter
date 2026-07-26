@@ -1,4 +1,4 @@
-# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan
+# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan (v4.2)
 
 ## Aplikasi Point of Sale Modern untuk Berbagai Jenis Usaha
 
@@ -6,7 +6,7 @@
 
 ## 🎯 Ringkasan
 
-BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Menghubungkan kasir, bagian dapur/pemenuhan, dan manajemen dalam satu platform terintegrasi dengan cloud sync real-time.
+BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Menghubungkan kasir, bagian dapur/pemenuhan, manajemen gudang, dan manajemen eksekutif dalam satu platform terintegrasi dengan cloud sync real-time.
 
 ---
 
@@ -30,11 +30,13 @@ BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk
 - Keyboard shortcut: F1 = Bayar, Esc = Batal
 - Mobile: keranjang minimize/maximize (floating bar)
 - **Tipe pesanan**: Dine In / Take Away (pilihan di checkout)
-- **Real-time sync**: perubahan menu/inventory/customer/settings dari device lain langsung ter-reflect
+- **Fitur Nomor Meja**: Input nomor meja untuk pesanan Dine In
+- **Floating Action Button (FAB)**: Akses cepat aksi utama
+- **Perhitungan Pajak Terintegrasi (PB1 / PPN)**: Menghitung pajak secara otomatis jika fitur pajak diaktifkan di Settings
 
 ### 2. 🍳 Kitchen Display System (KDS)
 - Kanban board 3 kolom: Menunggu → Proses → Selesai
-- Detail pesanan: nomor antrean, item, suhu, gula, add-ons, quantity, **tipe pesanan (Dine In/Take Away)**
+- Detail pesanan: nomor antrean, item, suhu, gula, add-ons, quantity, **tipe pesanan (Dine In/Take Away)**, dan **Nomor Meja**
 - Info waktu masuk + nama kasir per pesanan
 - Alert visual + suara jika pesanan menunggu > 5 menit
 - Tombol 1-klik untuk pindah status
@@ -43,224 +45,85 @@ BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk
 - **Hanya menampilkan transaksi hari ini** (transaksi lama tidak tampil)
 - Reset tampilan saat Acaraki logout + print ringkasan
 
-### 3. 💰 Manajemen Shift & Kas
-- Buka shift wajib: input modal kas awal sebelum mulai kerja (untuk Manager, ditunda dan hanya ditanyakan saat mengakses halaman POS)
-- Tutup shift wajib: input kas aktual di laci (tidak bisa skip)
-- Kalkulasi otomatis: expected cash vs aktual → selisih
-- Print ringkasan transaksi saat tutup shift
-- Riwayat shift lengkap untuk laporan Manager
-- Indikator "Shift Aktif" di sidebar
+### 3. 💰 Manajemen Shift, Rekap Kas & Arus Kas
+- **Buka Shift wajib**: input modal kas awal sebelum mulai kerja
+- **Kas Masuk & Kas Keluar (Cash Movements)**:
+  - Menu khusus `Rekap Kas` untuk mencatat pemasukan & pengeluaran kas operasional secara real-time
+  - Bebas input nominal tanpa batasan
+  - Pembatalan/penghapusan riwayat kas memerlukan izin & PIN Manager + tercatat di Audit Log
+- **Tutup Shift wajib**:
+  - Input kas aktual di laci (tidak bisa skip)
+  - Formula akuntabel: $\text{Expected Cash} = \text{Modal Awal} + \text{Penjualan Tunai} + \text{Kas Masuk} - \text{Kas Keluar}$
+  - Kalkulasi selisih otomatis (warna hijau/merah)
+  - Print ringkasan transaksi & breakdown arus kas saat tutup shift
+  - Indikator "Shift Aktif" di sidebar
 
 ### 4. 📊 Dashboard & Analitik (Manager)
 - Pendapatan hari ini, jumlah transaksi, menu terlaris, laba kotor
-- Grafik omset (harian/mingguan/bulanan/tahunan)
-- Distribusi metode pembayaran (pie chart)
-- Top 10 menu terlaris (scrollable)
-- Alert stok rendah (scrollable)
-- P&L sederhana: Revenue - HPP = Laba Kotor
+- Grafik omset & trend profitabilitas berbasis Net Sales ($\text{subtotal} - \text{diskon}$) dikurang HPP
+- Distribusi metode pembayaran & tipe pesanan (doughnut chart)
+- Top 10 menu terlaris & profitabilitas menu 30 hari terakhir
+- Alert stok rendah
+- Laba kotor murni murni tanpa terpengaruh pajak (pajak dipisahkan sebagai liability)
 
 ### 5. 📋 Laporan Komprehensif
 - **5 tab laporan**: Laba Rugi, Transaksi, Kas Kasir, Stok Bahan, Shift Karyawan
-- Filter periode: Hari Ini, 7 Hari, Bulan, Custom (date range)
-- **Distribusi Tipe Pesanan**: Doughnut chart Dine In vs Take Away
-- Export ke **CSV** (Excel-compatible)
-- Export ke **PDF** (profesional, siap share ke investor)
-- Tabel scrollable dengan sticky header
+- **Filter Periode Presisi**: Hari Ini, 7 Hari, Bulan, Custom (date range) menyaring transaksi, shift, dan arus kas secara akurat
+- **Export ke CSV & PDF**: Format profesional siap share ke owner/investor
+- Tabel scrollable (`max-h-80`) dengan sticky header untuk efisiensi ruang
 
 ### 6. 📦 Manajemen Katalog & Harga
-- CRUD menu lengkap dengan foto produk
+- CRUD menu lengkap dengan foto produk & Floating Action Button (FAB)
 - Kategori dropdown (bisa tambah/hapus kategori)
-- Kalkulasi HPP otomatis berdasarkan komposisi bahan ATAU input HPP Manual jika produk tidak menggunakan bahan baku (produk jadi)
+- Kalkulasi HPP otomatis berdasarkan komposisi bahan ATAU input HPP Manual jika produk tidak menggunakan bahan baku
 - Add-ons per menu (nama + harga)
 - Toggle ketersediaan menu (aktif/nonaktif tanpa hapus)
 - Import/Export CSV untuk update massal
-- Pagination + search + filter
 
-### 7. 🏪 Inventaris Bahan Baku
+### 7. 🏪 Inventaris Bahan Baku & Stock Opname
 - CRUD bahan baku (nama, stok, unit, harga/unit, min. stok)
 - Auto-deduct stok saat transaksi (berdasarkan komposisi menu)
-- Alert stok rendah (threshold bisa diatur per item atau global)
-- Riwayat perubahan stok (stock log) — siapa, kapan, berapa
-- Import/Export CSV
-- Pagination (10/25/50/100 per halaman)
-- Summary cards: total item, stok rendah, nilai inventaris
-
-### 7a. 📋 Stock Opname
-- Rekonsiliasi stok fisik vs stok sistem secara berkala
-- Input stok aktual per item, otomatis hitung selisih & kerugian
-- Pencatatan alasan penyesuaian per item (Basi, Rusak, Salah Input)
-- Verifikasi PIN Manager untuk selisih signifikan
-- Riwayat opname tersimpan dan tercatat di stock log
+- Revert stok otomatis saat transaksi `Selesai` dibatalkan atau dihapus
+- **Stock Opname (Rekonsiliasi Fisik)**:
+  - Input stok fisik aktual, otomatis hitung selisih & kerugian
+  - **Mode Blind Opname (Staf Gudang)**: Sembunyikan stok sistem & selisih dari Staf Gudang agar hasil opname fisik murni akurat tanpa kecurangan
+  - Verifikasi PIN Manager untuk selisih besar ($\ge 10\%$)
+  - Riwayat opname tersimpan & tercatat di stock log
 
 ### 8. 🎁 Promo, Voucher & Loyalty
 - CRUD promo/voucher dengan masa berlaku
-- Tipe diskon: persentase (%) atau nominal tetap (Rp)
-- Scope: semua menu, kategori tertentu, atau pelanggan loyal
-- Kode voucher (input manual di POS)
-- Dropdown promo aktif di POS
-- Batas penggunaan + tracking usage
-- **Loyalty Member System**:
-  - 3 tier: Bronze, Silver, Gold
-  - Diskon otomatis berdasarkan jumlah kunjungan
-  - Pengaturan min. kunjungan & persentase diskon per tier
+- Diskon persentase (%) atau nominal tetap (Rp)
+- Loyalty Member System (Bronze, Silver, Gold)
 
 ### 9. 👥 CRM Pelanggan
-- CRUD pelanggan (nama, HP, email, catatan)
-- Tracking otomatis: total belanja, jumlah kunjungan
-- Integrasi POS: pilih pelanggan saat transaksi
-- **WhatsApp Marketing**: kirim pesan promosi langsung ke pelanggan
-- Template pesan editable
-- Format nomor otomatis (08xx → 62xx)
+- CRUD pelanggan + Floating Action Button (FAB)
+- Tracking otomatis total belanja & jumlah kunjungan (otomatis dikurangi jika transaksi dihapus/cancel)
+- WhatsApp Marketing langsung ke pelanggan
 
-### 10. 🖨️ Printer Thermal
-- **Browser Print**: window.print() dengan format thermal paper
-- **Bluetooth ESC/POS**: Web Bluetooth API untuk cetak langsung ke printer thermal
+### 10. 🖨️ Printer Thermal & Background Connection Monitor
+- **Browser Print & Bluetooth ESC/POS**: Web Bluetooth API untuk cetak langsung
 - **Lebar kertas**: 58mm atau 80mm
-- **Auto-print saat checkout**: (toggle on/off)
-- **Format struk**: nama toko, alamat, item, total, kembalian, header & footer custom
-- **Split Printing (Printer Dapur & Bar)**: Otomatis mencetak pesanan makanan dan minuman ke printer dapur masing-masing secara terpisah berdasarkan kategori dapur yang di-set pada menu, sementara kasir mencetak struk utuh untuk pelanggan.
-- **Printer Device Registry (v4.0)**: Setiap logical printer (Kasir, Kitchen Makanan, Kitchen Minuman) memiliki koneksi Bluetooth & device binding independen via `Map<string, BluetoothConnection>`.
-- **Error Isolation (`Promise.allSettled`)**: Kegagalan satu printer (misal printer dapur mati/habis kertas) tidak membatalkan transaksi atau menghambat printer lainnya yang aktif.
-- **UI Settings Card & Live Status Indicator**: Pengaturan printer dapur dalam bentuk kartu interaktif di Settings, menampilkan nama perangkat Bluetooth dan status terhubung/terputus secara real-time.
-- **Independent Test Print per Device**: Tombol Test Print pada masing-masing konfigurasi printer untuk memverifikasi physical device secara independen.
-- **Duplicate Device Warning**: Dialog konfirmasi peringatan jika satu perangkat Bluetooth fisik digunakan oleh lebih dari satu konfigurasi printer.
+- **Struk Terbaca Jelas**: Teks `DINE IN MEJA X` dan `TAKE AWAY` dicetak ekstra besar dan bold
+- **Split Printing (Printer Dapur & Bar)**: Otomatis mencetak pesanan makanan & minuman ke printer terpisah
+- **Background Printer Connection Monitor (v4.2)**:
+  - Background service (`usePrinterMonitor.ts`) secara berkala (3 detik) memeriksa status koneksi Bluetooth seluruh printer
+  - **UI Status Banner**: Banner top-bar aplikasi (Hijau = Terhubung, Kuning = 1 Offline, Merah = Multiple Offline) dilengkapi tombol **[Reconnect]** 1-klik untuk mengatasi disconnections pasca-refresh browser.
 
-### 11. 🛡️ Keamanan & Audit
-- Password hashing (bcrypt, 10 salt rounds)
-- PIN Manager untuk otorisasi void/hapus transaksi
+### 11. 🏷️ Pengaturan Pajak (PB1 / PPN)
+- **Modul Pengaturan Pajak di Settings**:
+  - Toggle sakelar Aktif/Nonaktif fitur pajak
+  - Input persentase pajak (%) + preset cepat (0%, 5%, 10%, 11%, 12%)
+  - Simulasi kalkulasi tagihan live preview
+- Terintegrasi penuh dengan POS Kasir, Struk Thermal, & Cloud Sync Supabase
+
+### 12. 🛡️ Keamanan & Audit
+- Password hashing (bcrypt)
+- PIN Manager untuk otorisasi void & hapus transaksi
 - Super Admin PIN untuk akses Manajemen Data
-- Role-Based Access Control (4 role: Manager, Kasir, Acaraki, Staf Gudang)
-- Konfirmasi dialog untuk semua aksi destruktif
-- Validasi username unik
-- **Audit Log**: semua aksi user tercatat (login, CRUD, transaksi, shift)
-- **Konfirmasi void/cancel**: Manager mendapat dialog konfirmasi sebelum void/cancel transaksi
-- **Restriksi Multi-login Device**: membatasi masing-masing user agar hanya bisa login aktif di satu perangkat saja (login di perangkat baru otomatis mengeluarkan perangkat lama)
-- Export audit log ke CSV
-- **Customer visit revert**: visitCount & totalSpent otomatis dikurangi saat transaksi di-cancel
-
-### 12. ⚙️ Settings & Konfigurasi
-- **Tabbed Layout**: Halaman pengaturan diorganisasikan ke dalam 3 tab utama (*Umum & Tampilan*, *Printer & KDS*, *Pengguna & Sistem*) untuk tampilan yang rapi dan menghemat space di desktop maupun mobile.
-- **Pengaturan Toko**: Nama, logo (base64), dan alamat toko.
-- **Pengaturan Tema Warna UI**: Mengatur skema warna aplikasi secara dinamis dengan live preview instan. Bisa memilih preset (Jamu Original, Matcha Green, Telang Blue, Rosella Red, Charcoal Slate), generate gradasi otomatis dari warna dasar, atau mengubah per shade warna secara manual. Skema warna ini ter-sync di Supabase.
-- **PIN Manager**: PIN 4-6 digit terenkripsi untuk otorisasi void/pembatalan transaksi oleh manager.
-- **Integrasi Printer Thermal & Kitchen Printers (Split Print)**.
-- **Manajemen User**: Tambah, ubah, dan hapus user beserta rolenya.
-- **Manajemen Data** (dilindungi Super Admin PIN):
-  - Mode Demo on/off
-  - Bersihkan data transaksi (fresh start)
-  - Reset ke default (demo)
-  - Factory reset (hapus semua + cloud)
+- **Audit Revert Transaksi**: Menghapus transaksi `Selesai` mengembalikan stok bahan baku & poin pelanggan
+- **Restriksi Multi-login Device**: Membatasi user agar hanya login di 1 perangkat aktif saja
+- Audit Log lengkap & dapat di-export ke CSV
 
 ---
 
-## 🏆 Keunggulan Kompetitif
-
-### vs Aplikasi POS Lain
-
-| Keunggulan | Detail |
-|-----------|--------|
-| **Gratis hosting** | Vercel (frontend) + Supabase (database) = Rp 0/bulan |
-| **Multi-device real-time** | Kasir di tablet, KDS di TV, Manager di laptop — semua sync |
-| **Offline-capable** | Tetap berfungsi 100% tanpa internet, auto-sync saat online |
-| **PWA installable** | Install di homescreen seperti native app, tanpa app store |
-| **Open Kitchen ready** | KDS dengan alert 5 menit + sound notification |
-| **HPP otomatis** | Hitung cost of goods sold per menu berdasarkan komposisi |
-| **Shift management** | Serah terima kas akuntabel, tidak bisa di-skip |
-| **WhatsApp CRM** | Kirim promo langsung ke pelanggan |
-| **Loyalty system** | Tier Bronze/Silver/Gold dengan auto-discount |
-| **PDF reports** | Laporan profesional siap share ke investor |
-| **Audit trail** | Semua aksi tercatat untuk akuntabilitas |
-| **No vendor lock-in** | Open source, self-hosted, data milik Anda |
-
-### Arsitektur Teknis
-
-| Aspek | Implementasi |
-|-------|-------------|
-| **Local-first** | Data di localStorage, instant response, no loading |
-| **Cloud sync** | Background sync ke Supabase (PostgreSQL) — 100% coverage |
-| **Offline queue** | Operasi gagal di-queue, auto-retry saat online |
-| **Real-time** | Supabase subscriptions di SEMUA halaman (POS, KDS, Transaksi, Katalog, Inventaris, Promo, CRM, Settings) |
-| **fullSync** | Delete propagation antar device — cloud = sumber kebenaran |
-| **Code-splitting** | React.lazy() per halaman, fast initial load |
-| **Error boundary** | Crash tidak white-screen, ada recovery UI |
-| **Offline queue indicator** | Badge real-time di sidebar menampilkan jumlah operasi pending sync |
-| **Settings conflict notification** | Toast warning saat perubahan lokal ditimpa oleh cloud |
-| **Type-safe** | Full TypeScript, 0 compile errors |
-| **Modern UI** | TailwindCSS, responsive, dark-friendly colors |
-
----
-
-## 📱 Kompatibilitas
-
-| Platform | Status |
-|----------|--------|
-| Chrome (Desktop) | ✅ Full support |
-| Chrome (Android) | ✅ Full support + PWA install |
-| Safari (iOS) | ✅ Support (PWA limited) |
-| Edge | ✅ Full support |
-| Firefox | ✅ Support (no Bluetooth print) |
-| Tablet Android | ✅ Optimal untuk kasir & KDS |
-| Smart TV (browser) | ✅ Bisa untuk KDS display |
-
----
-
-## 🔐 Role & Akses
-
-| Menu | Manager | Kasir | Acaraki |
-|------|---------|-------|---------|
-| Dashboard | ✅ | ❌ | ❌ |
-| POS | ✅ | ✅ | ❌ |
-| Kitchen (KDS) | ✅ | ❌ | ✅ |
-| Transaksi | ✅ | ✅ | ❌ |
-| Katalog | ✅ | ❌ | ❌ |
-| Inventaris | ✅ | ❌ | ❌ |
-| Promo & Loyalty | ✅ | ❌ | ❌ |
-| Laporan | ✅ | ❌ | ❌ |
-| Pelanggan | ✅ | ✅ | ❌ |
-| Audit Log | ✅ | ❌ | ❌ |
-| Settings | ✅ | ❌ | ❌ |
-| Stock Opname | ✅ | ❌ | ❌ |
-
----
-
-## 💡 Use Case
-
-Cocok untuk:
-- ☕ Kafe & coffee shop
-- 🍵 Kedai jamu modern
-- 🧋 Bubble tea / minuman kekinian
-- 🍜 Restoran kecil / warung makan
-- 🍰 Bakery & pastry shop
-- 🥤 Juice bar & smoothie bar
-- 🍕 Fast food / quick service restaurant
-
----
-
-## 📈 Roadmap (Coming Soon)
-
-- [ ] Auto-Reconnect & Visibility State listener (Koneksi realtime anti-sleep)
-- [ ] Supabase Row Level Security (RLS) policies (Keamanan basis data ketat)
-- [ ] WhatsApp PDF receipt & daily shift summaries
-- [ ] Multi-outlet support
-- [ ] QR Code self-order (scan dari meja)
-- [ ] Integrasi payment gateway (QRIS otomatis)
-- [ ] Push notification (stok rendah, pesanan lama)
-- [ ] Multi-language (English)
-- [ ] AI menu recommendation
-
-### ✅ Recently Completed (v3.2–v4.0)
-- [x] Refactor Bluetooth Thermal Printer Device Registry & Split Printing (v4.0) — Independent device binding per printer, error isolation via `Promise.allSettled`, Test Print per device, & duplicate physical device warning
-- [x] Pengaturan suhu & gula per produk (sembunyikan untuk makanan)
-- [x] Tipe pesanan Dine In / Take Away
-- [x] Stock Opname module (rekonsiliasi stok fisik)
-- [x] Error Boundary (crash recovery UI)
-- [x] Offline queue indicator di sidebar
-- [x] Order type analytics di laporan (Doughnut chart)
-- [x] Settings merge conflict notification
-- [x] Customer visit revert saat transaksi cancel
-- [x] Discount preview capping (konsisten dengan checkout)
-- [x] Offline queue dependency-ordered flush
-
----
-
-*Dokumen ini menggambarkan fitur aplikasi BerdikariPOS v4.0 yang sudah live di production.*
+*Fitur lengkap BerdikariPOS v4.2.*

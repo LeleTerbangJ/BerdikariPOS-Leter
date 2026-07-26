@@ -200,6 +200,15 @@ export default function Transactions() {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'void_transaction', `Ubah status transaksi #${confirmAction.queueNumber || '?'} menjadi ${confirmAction.status}`, { transactionId: confirmAction.id, newStatus: confirmAction.status });
       }
     } else if (confirmAction.type === 'delete') {
+      // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
+      const tx = transactions.find((t) => t.id === confirmAction.id);
+      if (tx && tx.txStatus === 'Selesai') {
+        const deductions = calculateDeductions(tx);
+        revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
+        if (tx.customerId) {
+          revertVisit(tx.customerId, tx.totalAmount);
+        }
+      }
       deleteTransaction(confirmAction.id);
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_transaction', `Hapus transaksi #${confirmAction.queueNumber || '?'}`, { transactionId: confirmAction.id });
@@ -232,6 +241,15 @@ export default function Transactions() {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'void_transaction', `Ubah status transaksi ${pinAction.id} menjadi ${pinAction.status}`, { transactionId: pinAction.id, newStatus: pinAction.status });
       }
     } else if (pinAction.type === 'delete') {
+      // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
+      const tx = transactions.find((t) => t.id === pinAction.id);
+      if (tx && tx.txStatus === 'Selesai') {
+        const deductions = calculateDeductions(tx);
+        revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
+        if (tx.customerId) {
+          revertVisit(tx.customerId, tx.totalAmount);
+        }
+      }
       deleteTransaction(pinAction.id);
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_transaction', `Hapus transaksi ${pinAction.id}`, { transactionId: pinAction.id });
