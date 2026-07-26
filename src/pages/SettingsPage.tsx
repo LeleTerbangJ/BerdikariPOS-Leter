@@ -11,6 +11,7 @@ import { resetToDefault, clearOperationalData, factoryReset } from '../utils/dat
 import type { User, Role } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { formatRupiah } from '../utils/format';
 import {
   Users,
   Plus,
@@ -27,6 +28,7 @@ import {
   AlertTriangle,
   Palette,
   FileText,
+  Upload,
 } from 'lucide-react';
 import { generateShades, THEME_PRESETS, hexToRgbValues } from '../utils/theme';
 
@@ -948,34 +950,200 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Pengaturan Format & Teks Struk (Item 6) */}
+      {/* Pengaturan Format & Teks Struk */}
       <div className="card p-5">
         <h2 className="font-bold text-lg flex items-center gap-2 mb-4">
-          <FileText size={18} className="text-brand-600" /> Pengaturan Format Struk
+          <FileText size={18} className="text-brand-600" /> Pengaturan Format & Preview Struk
         </h2>
-        <div className="space-y-4">
-          <div>
-            <label className="label">Teks Header Tambahan (Slogan / Pesan atas)</label>
-            <input
-              type="text"
-              value={settings.receiptHeader || ''}
-              onChange={(e) => updateSettings({ receiptHeader: e.target.value })}
-              className="input"
-              placeholder="Contoh: Selamat Datang di BerdikariPOS!"
-            />
-            <p className="text-xs text-slate-400 mt-1">Dicetak di bagian paling atas struk (bawah nama toko).</p>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Form Settings */}
+          <div className="lg:col-span-7 space-y-4">
+            {/* Logo Settings */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-sm">Tampilkan Logo Toko pada Struk</p>
+                  <p className="text-xs text-slate-500">Cetak logo toko di bagian atas struk belanja</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.showLogoOnReceipt !== false}
+                    onChange={(e) => updateSettings({ showLogoOnReceipt: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-brand-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-600"></div>
+                </label>
+              </div>
+
+              {settings.showLogoOnReceipt !== false && (
+                <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center gap-4">
+                  {settings.storeLogo ? (
+                    <div className="relative group flex-shrink-0">
+                      <img src={settings.storeLogo} alt="Logo Toko" className="w-16 h-16 object-contain p-1 bg-white dark:bg-slate-900 border rounded-lg" />
+                      <button
+                        onClick={() => updateSettings({ storeLogo: '' })}
+                        className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow hover:bg-red-600"
+                        title="Hapus Logo"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="w-16 h-16 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-700 flex flex-col items-center justify-center text-slate-400 text-[10px]">
+                      <Upload size={16} />
+                      <span>Belum ada</span>
+                    </div>
+                  )}
+
+                  <div className="flex-1">
+                    <label className="btn-secondary text-xs inline-flex items-center gap-1.5 cursor-pointer">
+                      <Upload size={14} />
+                      <span>{settings.storeLogo ? 'Ganti Logo Toko' : 'Upload Logo Toko'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <p className="text-[11px] text-slate-400 mt-1">Format PNG, JPG, atau WebP (rekomendasi maks 200KB)</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Header Text */}
+            <div>
+              <label className="label">Teks Header Tambahan (Slogan / Pesan atas)</label>
+              <input
+                type="text"
+                value={settings.receiptHeader || ''}
+                onChange={(e) => updateSettings({ receiptHeader: e.target.value })}
+                className="input"
+                placeholder="Contoh: Selamat Datang di BerdikariPOS!"
+              />
+              <p className="text-xs text-slate-400 mt-1">Dicetak di bagian paling atas struk (bawah nama toko).</p>
+            </div>
+
+            {/* Footer Text */}
+            <div>
+              <label className="label">Teks Footer Tambahan (Catatan Kaki Struk)</label>
+              <input
+                type="text"
+                value={settings.receiptFooter || ''}
+                onChange={(e) => updateSettings({ receiptFooter: e.target.value })}
+                className="input"
+                placeholder="Contoh: Terima kasih atas kunjungan Anda! IG: @berdikaripos"
+              />
+              <p className="text-xs text-slate-400 mt-1">Dicetak di bagian paling bawah struk.</p>
+            </div>
           </div>
 
-          <div>
-            <label className="label">Teks Footer Tambahan (Catatan Kaki Struk)</label>
-            <input
-              type="text"
-              value={settings.receiptFooter || ''}
-              onChange={(e) => updateSettings({ receiptFooter: e.target.value })}
-              className="input"
-              placeholder="Contoh: Terima kasih atas kunjungan Anda! IG: @berdikaripos"
-            />
-            <p className="text-xs text-slate-400 mt-1">Dicetak di bagian paling bawah struk.</p>
+          {/* Live Receipt Preview */}
+          <div className="lg:col-span-5 flex flex-col items-center justify-start">
+            <div className="w-full max-w-xs bg-amber-50/60 dark:bg-slate-900/80 p-4 rounded-xl border border-amber-200 dark:border-slate-700 shadow-sm">
+              <div className="flex items-center justify-between pb-3 border-b border-amber-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-400">
+                <span className="flex items-center gap-1"><Printer size={14} /> Live Preview Struk</span>
+                <span className="badge bg-amber-200 dark:bg-slate-700 text-amber-800 dark:text-slate-200">{settings.printerWidth || '58mm'}</span>
+              </div>
+
+              {/* Thermal Paper Roll Mockup */}
+              <div className="mt-3 p-4 bg-white text-slate-900 font-mono text-[11px] leading-snug rounded shadow-md border border-slate-200 select-none">
+                {/* Logo */}
+                {settings.showLogoOnReceipt !== false && settings.storeLogo && (
+                  <div className="flex justify-center mb-2">
+                    <img src={settings.storeLogo} alt="Logo" className="max-h-12 object-contain" />
+                  </div>
+                )}
+
+                {/* Header */}
+                <div className="text-center font-bold text-sm uppercase tracking-wide">
+                  {settings.storeName || 'NAMA TOKO'}
+                </div>
+                {settings.address && (
+                  <div className="text-center text-[10px] text-slate-600">
+                    {settings.address}
+                  </div>
+                )}
+                {settings.receiptHeader && (
+                  <div className="text-center text-[10px] text-slate-600 mt-1">
+                    {settings.receiptHeader}
+                  </div>
+                )}
+                
+                <div className="my-2 border-b border-dashed border-slate-300"></div>
+
+                {/* Tx Info */}
+                <div className="text-[10px] flex justify-between items-start">
+                  <div className="space-y-0.5">
+                    <div>No: #101</div>
+                    <div>Tgl: {new Date().toLocaleDateString('id-ID')} 14:30</div>
+                    <div>Kasir: Budi</div>
+                  </div>
+                  <div className="text-right font-black uppercase text-xs tracking-wider text-slate-900 dark:text-slate-100 leading-tight">
+                    <div>DINE IN</div>
+                    <div>MEJA 3</div>
+                  </div>
+                </div>
+
+                <div className="my-2 border-b border-dashed border-slate-300"></div>
+
+                {/* Sample Items */}
+                <div className="space-y-1 text-[10px]">
+                  <div>
+                    <div className="font-semibold">Nasi Goreng Spesial</div>
+                    <div className="flex justify-between pl-2 text-slate-600">
+                      <span>1x 25.000</span>
+                      <span>25.000</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-semibold">Wedang Uwuh</div>
+                    <div className="flex justify-between pl-2 text-slate-600">
+                      <span>2x 12.000</span>
+                      <span>24.000</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="my-2 border-b border-dashed border-slate-300"></div>
+
+                {/* Totals */}
+                <div className="space-y-0.5 text-[10px]">
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span>49.000</span>
+                  </div>
+                  {settings.taxPercent && settings.taxPercent > 0 ? (
+                    <div className="flex justify-between">
+                      <span>Pajak ({settings.taxPercent}%)</span>
+                      <span>4.900</span>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between font-bold text-xs pt-1 border-t border-slate-200">
+                    <span>TOTAL</span>
+                    <span>{formatRupiah(settings.taxPercent && settings.taxPercent > 0 ? 53900 : 49000)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1">
+                    <span>Bayar (Cash)</span>
+                    <span>50.000</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Kembali</span>
+                    <span>1.000</span>
+                  </div>
+                </div>
+
+                <div className="my-2 border-b border-dashed border-slate-300"></div>
+
+                {/* Footer */}
+                <div className="text-center text-[10px] text-slate-600 mt-2">
+                  {settings.receiptFooter || 'Terima kasih atas kunjungan Anda!\nSemoga sehat selalu'}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

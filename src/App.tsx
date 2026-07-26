@@ -11,6 +11,7 @@ import { useMenuStore } from './store/menuStore';
 import { useInventoryStore } from './store/inventoryStore';
 import { usePromoStore } from './store/promoStore';
 import { useStockOpnameStore } from './store/stockOpnameStore';
+import { useCashMovementStore } from './store/cashMovementStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
@@ -32,6 +33,7 @@ const Customers = lazy(() => import('./pages/Customers'));
 const Promos = lazy(() => import('./pages/Promos'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const CashMovements = lazy(() => import('./pages/CashMovements'));
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) {
   const { currentUser } = useAuthStore();
@@ -119,8 +121,8 @@ export default function App() {
     usePromoStore.getState().loadFromCloud(true);
     // BUG-C3 fix: Load shifts from cloud
     useShiftStore.getState().loadFromCloud();
-    // BUG-01 fix: Load stock opnames from cloud on app startup
     useStockOpnameStore.getState().loadFromCloud();
+    useCashMovementStore.getState().loadFromCloud();
     fetchTransactionsFromCloud().then((txs) => {
       if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
     });
@@ -202,6 +204,7 @@ export default function App() {
           <Route path="/reports" element={<ProtectedRoute allowedRoles={['Manager']}><Reports /></ProtectedRoute>} />
           <Route path="/customers" element={<ProtectedRoute allowedRoles={['Manager', 'Kasir']}><Customers /></ProtectedRoute>} />
           <Route path="/promos" element={<ProtectedRoute allowedRoles={['Manager']}><Promos /></ProtectedRoute>} />
+          <Route path="/cash-movements" element={<ProtectedRoute allowedRoles={['Manager', 'Kasir']}><CashMovements /></ProtectedRoute>} />
           <Route path="/audit-log" element={<ProtectedRoute allowedRoles={['Manager']}><AuditLog /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute allowedRoles={['Manager']}><SettingsPage /></ProtectedRoute>} />
         </Route>

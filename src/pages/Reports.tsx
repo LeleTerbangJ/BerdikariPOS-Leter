@@ -7,6 +7,7 @@ import { useShiftStore } from '../store/shiftStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { formatRupiah, formatDate } from '../utils/format';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
+import { useCashMovementStore } from '../store/cashMovementStore';
 import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF } from '../utils/pdfExport';
 import {
   Chart as ChartJS,
@@ -184,20 +185,125 @@ export default function Reports() {
     return Object.entries(map).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [filteredTx, menus]);
 
-  // Shift/employee report
-  const shiftReport = useMemo(() => {
-    const map: Record<string, { name: string; txCount: number; revenue: number; firstTx: string; lastTx: string }> = {};
+  const { movements } = useCashMovementStore();
+
+  // Filter cash movements by date range
+  const filteredMovements = useMemo(() => {
+    return movements.filter((m) => {
+      const d = new Date(m.date);
+      return d >= dateFrom && d <= dateTo;
+    });
+  }, [movements, dateFrom, dateTo]);
+
+  // Filter shifts by date range
+  const filteredShifts = useMemo(() => {
+    return shifts.filter((s) => {
+      const d = new Date(s.openedAt);
+      return d >= dateFrom && d <= dateTo;
+    });
+  }, [shifts, dateFrom, dateTo]);
+
+  // Detailed Shift & Employee Report
+  const detailedShiftReport = useMemo(() => {
+    if (filteredShifts.length > 0) {
+      return filteredShifts.map((sh) => {
+        const openedAt = new Date(sh.openedAt);
+        const closedAt = sh.closedAt ? new Date(sh.closedAt) : new Date();
+
+        const shiftTxs = filteredTx.filter((t) => {
+          const td = new Date(t.date);
+          return (
+            t.cashierId === sh.userId &&
+            td >= openedAt &&
+            td <= closedAt
+          );
+        });
+
+        const txCount = shiftTxs.length;
+        const revenue = shiftTxs.reduce((a, t) => a + t.totalAmount, 0);
+        const cashSales = shiftTxs.filter((t) => t.paymentMethod === 'Cash').reduce((a, t) => a + t.totalAmount, 0);
+        const qrisSales = shiftTxs.filter((t) => t.paymentMethod === 'QRIS').reduce((a, t) => a + t.totalAmount, 0);
+        const transferSales = shiftTxs.filter((t) => t.paymentMethod === 'Transfer').reduce((a, t) => a + t.totalAmount, 0);
+        const totalDiscount = shiftTxs.reduce((a, t) => a + t.discount, 0);
+        const totalTax = shiftTxs.reduce((a, t) => a + (t.tax || 0), 0);
+
+        const shiftMovements = movements.filter((m) => {
+          const md = new Date(m.date);
+          return (
+            (m.shiftId ? m.shiftId === sh.id : m.cashierId === sh.userId) &&
+            md >= openedAt &&
+            md <= closedAt
+          );
+        });
+
+        const cashIn = shiftMovements.filter((m) => m.type === 'in').reduce((a, m) => a + m.amount, 0);
+        const cashOut = shiftMovements.filter((m) => m.type === 'out').reduce((a, m) => a + m.amount, 0);
+
+        const expectedCash = sh.expectedCash || (sh.openingCash + cashSales + cashIn - cashOut);
+        const closingCash = sh.closingCash;
+        const cashDiff = sh.cashDifference !== undefined ? sh.cashDifference : (closingCash !== undefined ? closingCash - expectedCash : undefined);
+
+        return {
+          id: sh.id,
+          name: sh.userName,
+          status: sh.status,
+          firstTx: sh.openedAt,
+          lastTx: sh.closedAt || sh.openedAt,
+          txCount,
+          revenue,
+          cashSales,
+          qrisSales,
+          transferSales,
+          totalDiscount,
+          totalTax,
+          openingCash: sh.openingCash,
+          cashIn,
+          cashOut,
+          expectedCash,
+          closingCash,
+          cashDiff,
+        };
+      });
+    }
+
+    // Fallback: per cashier from filtered transactions
+    const map: Record<string, any> = {};
     filteredTx.forEach((t) => {
       if (!map[t.cashierId]) {
-        map[t.cashierId] = { name: t.cashierName, txCount: 0, revenue: 0, firstTx: t.date, lastTx: t.date };
+        map[t.cashierId] = {
+          id: t.cashierId,
+          name: t.cashierName,
+          status: 'closed',
+          txCount: 0,
+          revenue: 0,
+          cashSales: 0,
+          qrisSales: 0,
+          transferSales: 0,
+          totalDiscount: 0,
+          totalTax: 0,
+          firstTx: t.date,
+          lastTx: t.date,
+          openingCash: 0,
+          cashIn: 0,
+          cashOut: 0,
+          expectedCash: 0,
+          closingCash: 0,
+          cashDiff: 0,
+        };
       }
       map[t.cashierId].txCount++;
       map[t.cashierId].revenue += t.totalAmount;
+      map[t.cashierId].totalDiscount += t.discount;
+      map[t.cashierId].totalTax += (t.tax || 0);
+      if (t.paymentMethod === 'Cash') map[t.cashierId].cashSales += t.totalAmount;
+      if (t.paymentMethod === 'QRIS') map[t.cashierId].qrisSales += t.totalAmount;
+      if (t.paymentMethod === 'Transfer') map[t.cashierId].transferSales += t.totalAmount;
       if (t.date < map[t.cashierId].firstTx) map[t.cashierId].firstTx = t.date;
       if (t.date > map[t.cashierId].lastTx) map[t.cashierId].lastTx = t.date;
     });
-    return Object.values(map).sort((a, b) => b.revenue - a.revenue);
-  }, [filteredTx]);
+
+    return Object.values(map).sort((a: any, b: any) => b.revenue - a.revenue);
+  }, [filteredShifts, filteredTx, movements]);
 
   // Inventory
   const totalInventoryValue = inventory.reduce((a, i) => a + i.stock * i.costPerUnit, 0);
@@ -267,12 +373,23 @@ export default function Reports() {
       ['LAPORAN SHIFT KARYAWAN'],
       ['Periode', getDateLabel()],
       [''],
-      ['Nama', 'Jumlah Transaksi', 'Total Revenue', 'Rata-rata/Transaksi', 'Shift Mulai', 'Shift Akhir'],
-      ...shiftReport.map((emp) => [
+      ['Nama Kasir', 'Jumlah Tx', 'Total Omset', 'Rata-rata/Tx', 'Tunai (Cash)', 'QRIS', 'Transfer', 'Modal Awal', 'Kas Masuk', 'Kas Keluar', 'Expected Cash', 'Kas Aktual', 'Selisih Kas', 'Total Diskon', 'Total Pajak', 'Mulai', 'Akhir'],
+      ...detailedShiftReport.map((emp) => [
         emp.name,
         emp.txCount,
         emp.revenue,
         emp.txCount > 0 ? Math.round(emp.revenue / emp.txCount) : 0,
+        emp.cashSales,
+        emp.qrisSales,
+        emp.transferSales,
+        emp.openingCash,
+        emp.cashIn,
+        emp.cashOut,
+        emp.expectedCash,
+        emp.closingCash ?? '-',
+        emp.cashDiff ?? 'Pas',
+        emp.totalDiscount,
+        emp.totalTax,
         formatDate(emp.firstTx),
         formatDate(emp.lastTx),
       ]),
@@ -282,10 +399,12 @@ export default function Reports() {
 
   const exportCashExcel = () => {
     const rows = [
-      ['LAPORAN KAS KASIR'],
+      ['LAPORAN KAS KASIR & ARUS KAS'],
+      ['Periode', getDateLabel()],
       [''],
+      ['1. RIWAYAT SHIFT KASIR'],
       ['Kasir', 'Tanggal Buka', 'Tanggal Tutup', 'Modal Awal', 'Expected Cash', 'Kas Aktual', 'Selisih', 'Total Penjualan', 'Jml Transaksi'],
-      ...shifts.map((s) => [
+      ...filteredShifts.map((s) => [
         s.userName,
         formatDate(s.openedAt),
         s.closedAt ? formatDate(s.closedAt) : '-',
@@ -295,6 +414,17 @@ export default function Reports() {
         s.cashDifference ?? 0,
         s.totalSales,
         s.totalTransactions,
+      ]),
+      [''],
+      ['2. RIWAYAT ARUS KAS (KAS MASUK & KAS KELUAR)'],
+      ['Tanggal', 'Kasir', 'Tipe', 'Kategori', 'Nominal', 'Catatan'],
+      ...filteredMovements.map((m) => [
+        formatDate(m.date),
+        m.cashierName,
+        m.type === 'in' ? 'Kas Masuk' : 'Kas Keluar',
+        m.category,
+        m.amount,
+        m.notes || '-',
       ]),
     ];
     downloadCSV(rows, 'laporan-kas-kasir.csv');
@@ -391,7 +521,7 @@ export default function Reports() {
             </button>
           )}
           {activeTab === 'shift' && (
-            <button onClick={() => exportShiftPDF({ storeName: settings.storeName, period: getDateLabel(), shifts: shiftReport.map((e) => ({ name: e.name, txCount: String(e.txCount), revenue: formatRupiah(e.revenue), avg: formatRupiah(e.txCount > 0 ? e.revenue / e.txCount : 0), from: formatDate(e.firstTx), to: formatDate(e.lastTx) })) })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+            <button onClick={() => exportShiftPDF({ storeName: settings.storeName, period: getDateLabel(), shifts: detailedShiftReport.map((e) => ({ name: e.name, txCount: String(e.txCount), revenue: formatRupiah(e.revenue), avg: formatRupiah(e.txCount > 0 ? e.revenue / e.txCount : 0), from: formatDate(e.firstTx), to: formatDate(e.lastTx), cashSales: formatRupiah(e.cashSales), qrisSales: formatRupiah(e.qrisSales), transferSales: formatRupiah(e.transferSales), cashIn: formatRupiah(e.cashIn), cashOut: formatRupiah(e.cashOut), diff: e.cashDiff !== undefined ? (e.cashDiff === 0 ? 'Pas' : formatRupiah(e.cashDiff)) : '-' })) })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
               <FileText size={14} /> PDF
             </button>
           )}
@@ -401,7 +531,7 @@ export default function Reports() {
             </button>
           )}
           {activeTab === 'cash' && (
-            <button onClick={() => exportCashPDF({ storeName: settings.storeName, shifts: shifts.map((s) => ({ cashier: s.userName, open: formatDate(s.openedAt), close: s.closedAt ? formatDate(s.closedAt) : '-', opening: formatRupiah(s.openingCash), expected: formatRupiah(s.expectedCash || 0), actual: formatRupiah(s.closingCash || 0), diff: formatRupiah(s.cashDifference || 0), sales: formatRupiah(s.totalSales), tx: String(s.totalTransactions) })) })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+            <button onClick={() => exportCashPDF({ storeName: settings.storeName, shifts: filteredShifts.map((s) => ({ cashier: s.userName, open: formatDate(s.openedAt), close: s.closedAt ? formatDate(s.closedAt) : '-', opening: formatRupiah(s.openingCash), expected: formatRupiah(s.expectedCash || 0), actual: formatRupiah(s.closingCash || 0), diff: formatRupiah(s.cashDifference || 0), sales: formatRupiah(s.totalSales), tx: String(s.totalTransactions) })), cashMovements: filteredMovements.map((m) => ({ date: formatDate(m.date), cashier: m.cashierName, type: m.type === 'in' ? 'Kas Masuk' : 'Kas Keluar', category: m.category, amount: formatRupiah(m.amount), notes: m.notes || '-' })) })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
               <FileText size={14} /> PDF
             </button>
           )}
@@ -845,40 +975,128 @@ export default function Reports() {
       {activeTab === 'shift' && (
         <div className="space-y-6">
           <div className="card p-5">
-            <h3 className="font-bold text-lg mb-4">Laporan Shift Karyawan</h3>
-            {shiftReport.length === 0 ? (
-              <p className="text-sm text-slate-400 text-center py-8">Belum ada data transaksi pada periode ini</p>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-lg">Laporan Shift Karyawan</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Detail rincian omset, metode pembayaran, arus kas, dan penyesuaian laci kas per shift</p>
+              </div>
+            </div>
+
+            {detailedShiftReport.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-8">Belum ada data shift / transaksi pada periode ini</p>
             ) : (
               <div className="space-y-4">
-                {shiftReport.map((emp) => (
-                  <div key={emp.name} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl">
-                    <div className="flex items-center justify-between mb-3">
+                {detailedShiftReport.map((emp, idx) => (
+                  <div key={emp.id || idx} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/60 space-y-3">
+                    {/* Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-700 pb-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-brand-200 flex items-center justify-center text-brand-700 font-bold">
+                        <div className="w-10 h-10 rounded-full bg-brand-200 dark:bg-brand-900/50 flex items-center justify-center text-brand-700 dark:text-brand-300 font-bold">
                           {emp.name.charAt(0)}
                         </div>
                         <div>
-                          <p className="font-semibold">{emp.name}</p>
-                          <p className="text-xs text-slate-500">
-                            {formatDate(emp.firstTx)} — {formatDate(emp.lastTx)}
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-sm">{emp.name}</p>
+                            <span className={`badge text-[10px] ${emp.status === 'open' ? 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300' : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'}`}>
+                              {emp.status === 'open' ? '🟢 Shift Aktif' : '🔒 Tutup Shift'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {formatDate(emp.firstTx)} — {emp.status === 'open' ? 'Sekarang' : formatDate(emp.lastTx)}
                           </p>
                         </div>
                       </div>
                     </div>
+
+                    {/* Primary Metrics */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      <div className="p-3 bg-white rounded-lg">
-                        <p className="text-xs text-slate-500">Transaksi</p>
-                        <p className="text-lg font-bold">{emp.txCount}</p>
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <p className="text-xs text-slate-500">Jumlah Transaksi</p>
+                        <p className="text-lg font-bold">{emp.txCount} tx</p>
                       </div>
-                      <div className="p-3 bg-white rounded-lg">
-                        <p className="text-xs text-slate-500">Total Revenue</p>
-                        <p className="text-lg font-bold text-green-700">{formatRupiah(emp.revenue)}</p>
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <p className="text-xs text-slate-500">Total Omset (Revenue)</p>
+                        <p className="text-lg font-bold text-green-600 dark:text-green-400">{formatRupiah(emp.revenue)}</p>
                       </div>
-                      <div className="p-3 bg-white rounded-lg">
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50 col-span-2 sm:col-span-1">
                         <p className="text-xs text-slate-500">Rata-rata/Transaksi</p>
-                        <p className="text-lg font-bold text-brand-700">
+                        <p className="text-lg font-bold text-brand-600 dark:text-brand-400">
                           {formatRupiah(emp.txCount > 0 ? emp.revenue / emp.txCount : 0)}
                         </p>
+                      </div>
+                    </div>
+
+                    {/* Detailed Breakdown Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                      {/* Payment Methods */}
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50 space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between border-b pb-1 border-slate-100 dark:border-slate-700">
+                          <span>💳 Rincian Pembayaran</span>
+                        </p>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">💵 Tunai (Cash)</span>
+                          <span className="font-semibold">{formatRupiah(emp.cashSales)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">📱 QRIS</span>
+                          <span className="font-semibold text-blue-600 dark:text-blue-400">{formatRupiah(emp.qrisSales)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">🏦 Transfer Bank</span>
+                          <span className="font-semibold text-purple-600 dark:text-purple-400">{formatRupiah(emp.transferSales)}</span>
+                        </div>
+                      </div>
+
+                      {/* Cash Movements & Drawer */}
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50 space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between border-b pb-1 border-slate-100 dark:border-slate-700">
+                          <span>💼 Rekap Laci Kas</span>
+                        </p>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">Modal Awal</span>
+                          <span className="font-medium">{formatRupiah(emp.openingCash)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">📥 Kas Masuk</span>
+                          <span className="font-semibold text-green-600">+{formatRupiah(emp.cashIn)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">📤 Kas Keluar</span>
+                          <span className="font-semibold text-red-600">-{formatRupiah(emp.cashOut)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs pt-1 border-t border-slate-100 dark:border-slate-700">
+                          <span className="text-slate-500">Kas Ekspektasi</span>
+                          <span className="font-bold">{formatRupiah(emp.expectedCash)}</span>
+                        </div>
+                        {emp.closingCash !== undefined && (
+                          <div className="flex justify-between text-xs">
+                            <span className="text-slate-500">Kas Aktual (Fisik)</span>
+                            <span className="font-bold">{formatRupiah(emp.closingCash)}</span>
+                          </div>
+                        )}
+                        {emp.cashDiff !== undefined && (
+                          <div className="flex justify-between text-xs font-bold pt-1">
+                            <span>Selisih Kas</span>
+                            <span className={emp.cashDiff === 0 ? 'text-green-600' : emp.cashDiff > 0 ? 'text-blue-600' : 'text-red-600'}>
+                              {emp.cashDiff === 0 ? 'Pas' : formatRupiah(emp.cashDiff)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Discounts & Taxes */}
+                      <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700/50 space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center justify-between border-b pb-1 border-slate-100 dark:border-slate-700">
+                          <span>🏷️ Diskon & Pajak</span>
+                        </p>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">Total Diskon Diberikan</span>
+                          <span className="font-semibold text-amber-600">-{formatRupiah(emp.totalDiscount)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-500">Total Pajak Terkumpul</span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">+{formatRupiah(emp.totalTax)}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -890,88 +1108,165 @@ export default function Reports() {
       )}
 
       {/* Cash Tab */}
-      {activeTab === 'cash' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="card p-5">
-              <p className="text-xs text-slate-500">Total Shift Tercatat</p>
-              <p className="text-2xl font-bold">{shifts.length}</p>
-            </div>
-            <div className="card p-5">
-              <p className="text-xs text-slate-500">Total Selisih Kas</p>
-              <p className={`text-2xl font-bold ${
-                shifts.reduce((a, s) => a + (s.cashDifference || 0), 0) >= 0
-                  ? 'text-green-700' : 'text-red-700'
-              }`}>
-                {formatRupiah(shifts.reduce((a, s) => a + (s.cashDifference || 0), 0))}
-              </p>
-            </div>
-            <div className="card p-5">
-              <p className="text-xs text-slate-500">Shift Bermasalah</p>
-              <p className="text-2xl font-bold text-amber-600">
-                {shifts.filter((s) => s.cashDifference && s.cashDifference !== 0).length}
-              </p>
-            </div>
-          </div>
+      {activeTab === 'cash' && (() => {
+        const totalCashInPeriod = filteredMovements
+          .filter((m) => m.type === 'in')
+          .reduce((a, m) => a + m.amount, 0);
+        const totalCashOutPeriod = filteredMovements
+          .filter((m) => m.type === 'out')
+          .reduce((a, m) => a + m.amount, 0);
+        const netCashPeriod = totalCashInPeriod - totalCashOutPeriod;
 
-          <div className="card overflow-hidden">
-            <div className="p-4 border-b border-slate-100">
-              <h3 className="font-bold">Riwayat Kas Kasir</h3>
+        return (
+          <div className="space-y-6">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="card p-4">
+                <p className="text-xs text-slate-500">Total Shift</p>
+                <p className="text-xl font-bold">{filteredShifts.length}</p>
+              </div>
+              <div className="card p-4">
+                <p className="text-xs text-slate-500">Selisih Kas</p>
+                <p className={`text-xl font-bold ${
+                  filteredShifts.reduce((a, s) => a + (s.cashDifference || 0), 0) >= 0
+                    ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                }`}>
+                  {formatRupiah(filteredShifts.reduce((a, s) => a + (s.cashDifference || 0), 0))}
+                </p>
+              </div>
+              <div className="card p-4">
+                <p className="text-xs text-slate-500">Total Kas Masuk</p>
+                <p className="text-xl font-bold text-green-600 dark:text-green-400">
+                  +{formatRupiah(totalCashInPeriod)}
+                </p>
+              </div>
+              <div className="card p-4">
+                <p className="text-xs text-slate-500">Total Kas Keluar</p>
+                <p className="text-xl font-bold text-red-600 dark:text-red-400">
+                  -{formatRupiah(totalCashOutPeriod)}
+                </p>
+              </div>
+              <div className="card p-4">
+                <p className="text-xs text-slate-500">Arus Kas Bersih (Net)</p>
+                <p className={`text-xl font-bold ${netCashPeriod >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-orange-600'}`}>
+                  {netCashPeriod >= 0 ? '+' : ''}{formatRupiah(netCashPeriod)}
+                </p>
+              </div>
             </div>
-            {shifts.length === 0 ? (
-              <div className="p-8 text-center text-slate-400">
-                <Wallet size={40} className="mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Belum ada data shift</p>
+
+            {/* Shift History Table */}
+            <div className="card overflow-hidden">
+              <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                <h3 className="font-bold text-sm">Riwayat Kasir & Shift</h3>
+                <span className="text-xs text-slate-400">{filteredShifts.length} shift</span>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700">
-                    <tr>
-                      <th className="text-left p-3 font-semibold">Kasir</th>
-                      <th className="text-left p-3 font-semibold">Waktu Buka</th>
-                      <th className="text-left p-3 font-semibold">Waktu Tutup</th>
-                      <th className="text-right p-3 font-semibold">Modal Awal</th>
-                      <th className="text-right p-3 font-semibold">Expected</th>
-                      <th className="text-right p-3 font-semibold">Aktual</th>
-                      <th className="text-right p-3 font-semibold">Selisih</th>
-                      <th className="text-right p-3 font-semibold">Penjualan</th>
-                      <th className="text-center p-3 font-semibold">Tx</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shifts.map((s) => (
-                      <tr key={s.id} className={`border-b border-slate-50 ${
-                        s.cashDifference && s.cashDifference < 0 ? 'bg-red-50/50' : ''
-                      }`}>
-                        <td className="p-3 font-medium">{s.userName}</td>
-                        <td className="p-3 text-slate-500 text-xs">{formatDate(s.openedAt)}</td>
-                        <td className="p-3 text-slate-500 text-xs">{s.closedAt ? formatDate(s.closedAt) : '-'}</td>
-                        <td className="p-3 text-right">{formatRupiah(s.openingCash)}</td>
-                        <td className="p-3 text-right">{formatRupiah(s.expectedCash || 0)}</td>
-                        <td className="p-3 text-right font-medium">{formatRupiah(s.closingCash || 0)}</td>
-                        <td className="p-3 text-right">
-                          <span className={`font-bold ${
-                            (s.cashDifference || 0) === 0
-                              ? 'text-green-600'
-                              : (s.cashDifference || 0) > 0
-                              ? 'text-blue-600'
-                              : 'text-red-600'
-                          }`}>
-                            {(s.cashDifference || 0) === 0 ? 'Pas' : formatRupiah(s.cashDifference || 0)}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right font-medium text-green-700">{formatRupiah(s.totalSales)}</td>
-                        <td className="p-3 text-center">{s.totalTransactions}</td>
+              {filteredShifts.length === 0 ? (
+                <div className="p-8 text-center text-slate-400">
+                  <Wallet size={40} className="mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">Belum ada data shift pada periode ini</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0 z-10 shadow-sm">
+                      <tr>
+                        <th className="text-left p-3 font-semibold">Kasir</th>
+                        <th className="text-left p-3 font-semibold">Waktu Buka</th>
+                        <th className="text-left p-3 font-semibold">Waktu Tutup</th>
+                        <th className="text-right p-3 font-semibold">Modal Awal</th>
+                        <th className="text-right p-3 font-semibold">Expected</th>
+                        <th className="text-right p-3 font-semibold">Aktual</th>
+                        <th className="text-right p-3 font-semibold">Selisih</th>
+                        <th className="text-right p-3 font-semibold">Penjualan</th>
+                        <th className="text-center p-3 font-semibold">Tx</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredShifts.map((s) => (
+                        <tr key={s.id} className={`border-b border-slate-50 dark:border-slate-700/40 ${
+                          s.cashDifference && s.cashDifference < 0 ? 'bg-red-50/50 dark:bg-red-950/20' : ''
+                        }`}>
+                          <td className="p-3 font-medium">{s.userName}</td>
+                          <td className="p-3 text-slate-500 text-xs">{formatDate(s.openedAt)}</td>
+                          <td className="p-3 text-slate-500 text-xs">{s.closedAt ? formatDate(s.closedAt) : '-'}</td>
+                          <td className="p-3 text-right">{formatRupiah(s.openingCash)}</td>
+                          <td className="p-3 text-right">{formatRupiah(s.expectedCash || 0)}</td>
+                          <td className="p-3 text-right font-medium">{formatRupiah(s.closingCash || 0)}</td>
+                          <td className="p-3 text-right">
+                            <span className={`font-bold ${
+                              (s.cashDifference || 0) === 0
+                                ? 'text-green-600'
+                                : (s.cashDifference || 0) > 0
+                                ? 'text-blue-600'
+                                : 'text-red-600'
+                            }`}>
+                              {(s.cashDifference || 0) === 0 ? 'Pas' : formatRupiah(s.cashDifference || 0)}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right font-medium text-green-600">{formatRupiah(s.totalSales)}</td>
+                          <td className="p-3 text-center">{s.totalTransactions}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Cash Movements Table */}
+            <div className="card overflow-hidden">
+              <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                <h3 className="font-bold text-sm">Riwayat Arus Kas (Kas Masuk & Kas Keluar)</h3>
+                <span className="text-xs text-slate-400">{filteredMovements.length} entri</span>
               </div>
-            )}
+              {filteredMovements.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-sm">
+                  Belum ada arus kas tercatat pada periode ini.
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0 z-10 shadow-sm">
+                      <tr>
+                        <th className="text-left p-3 font-semibold">Tanggal</th>
+                        <th className="text-left p-3 font-semibold">Kasir</th>
+                        <th className="text-left p-3 font-semibold">Tipe</th>
+                        <th className="text-left p-3 font-semibold">Kategori</th>
+                        <th className="text-left p-3 font-semibold">Catatan</th>
+                        <th className="text-right p-3 font-semibold">Nominal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredMovements.map((m) => (
+                        <tr key={m.id} className="border-b border-slate-50 dark:border-slate-700/40">
+                          <td className="p-3 text-xs text-slate-500">{formatDate(m.date)}</td>
+                          <td className="p-3 font-medium">{m.cashierName}</td>
+                          <td className="p-3">
+                            {m.type === 'in' ? (
+                              <span className="badge bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300 font-semibold">
+                                + Kas Masuk
+                              </span>
+                            ) : (
+                              <span className="badge bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300 font-semibold">
+                                - Kas Keluar
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-xs font-semibold">{m.category}</td>
+                          <td className="p-3 text-xs text-slate-500 max-w-xs truncate">{m.notes || '-'}</td>
+                          <td className={`p-3 text-right font-bold ${m.type === 'in' ? 'text-green-600' : 'text-red-600'}`}>
+                            {m.type === 'in' ? '+' : '-'}{formatRupiah(m.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Stock Opname Tab */}
       {activeTab === 'opname' && (() => {

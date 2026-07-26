@@ -13,7 +13,7 @@ import { smartUpsert, smartUpdate, smartDelete, smartInsert } from './offlineQue
 import type { 
   User, InventoryItem, Menu, Transaction, Customer, 
   CashierShift, Promo, AuditLogEntry, AppSettings, LoyaltySettings,
-  StockOpname 
+  StockOpname, CashMovement
 } from '../types';
 import type { StockLogEntry } from '../store/stockLogStore';
 
@@ -877,4 +877,51 @@ export async function fetchStockOpnamesFromCloud(): Promise<StockOpname[] | null
   } catch {
     return null;
   }
+}
+
+// ============================================================
+// CASH MOVEMENTS (Rekap Kas: Kas Masuk & Kas Keluar)
+// ============================================================
+
+export async function syncCashMovement(movement: CashMovement) {
+  if (!isSupabaseConfigured) return;
+  await smartUpsert('cash_movements', {
+    id: movement.id,
+    shift_id: movement.shiftId || null,
+    type: movement.type,
+    amount: movement.amount,
+    category: movement.category,
+    notes: movement.notes || null,
+    cashier_id: movement.cashierId,
+    cashier_name: movement.cashierName,
+    date: movement.date,
+    created_at: movement.createdAt,
+  });
+}
+
+export async function fetchCashMovementsFromCloud(): Promise<CashMovement[] | null> {
+  if (!isSupabaseConfigured) return null;
+  try {
+    const { data, error } = await supabase.from('cash_movements').select('*').order('date', { ascending: false }).limit(500);
+    if (error) return null;
+    return data?.map((row) => ({
+      id: row.id,
+      shiftId: row.shift_id || undefined,
+      type: row.type as 'in' | 'out',
+      amount: row.amount,
+      category: row.category,
+      notes: row.notes || undefined,
+      cashierId: row.cashier_id,
+      cashierName: row.cashier_name,
+      date: row.date,
+      createdAt: row.created_at || row.date,
+    })) || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteCashMovementCloud(id: string) {
+  if (!isSupabaseConfigured) return;
+  await smartDelete('cash_movements', 'id', id);
 }

@@ -118,9 +118,6 @@ export default function Customers() {
     <div>
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">👥 Pelanggan (CRM)</h1>
-        <button onClick={openAdd} className="btn-primary text-sm w-full sm:w-auto flex items-center justify-center gap-1.5 py-2.5 px-4">
-          <Plus size={16} /> Tambah Pelanggan
-        </button>
       </div>
 
       <div className="relative mb-4">
@@ -295,6 +292,15 @@ export default function Customers() {
         }}
         title="Verifikasi PIN Manager"
       />
+
+      {/* Floating Action Button (FAB) for Tambah Pelanggan */}
+      <button
+        onClick={openAdd}
+        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-brand-600 hover:bg-brand-700 active:scale-95 shadow-2xl flex items-center justify-center text-white transition-all duration-300 hover:scale-105 border border-white/20 ring-4 ring-brand-500/20"
+        title="Tambah Pelanggan"
+      >
+        <Plus size={28} />
+      </button>
     </div>
   );
 }

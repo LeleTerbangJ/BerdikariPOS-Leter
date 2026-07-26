@@ -4,12 +4,14 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useTransactionStore } from '../store/transactionStore';
 import { useAuditLogStore } from '../store/auditLogStore';
+import { useCashMovementStore } from '../store/cashMovementStore';
 import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
 import { useState, useMemo, useEffect } from 'react';
 import { getQueueLength, setQueueChangeListener } from '../lib/offlineQueue';
 import Modal from './Modal';
+import PrinterStatusBanner from './PrinterStatusBanner';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -43,6 +45,7 @@ const navItems = {
     { to: '/promos', icon: Gift, label: 'Promo' },
     { to: '/reports', icon: FileBarChart, label: 'Laporan' },
     { to: '/customers', icon: Users, label: 'Pelanggan' },
+    { to: '/cash-movements', icon: Wallet, label: 'Rekap Kas' },
     { to: '/audit-log', icon: Shield, label: 'Audit Log' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ],
@@ -50,6 +53,7 @@ const navItems = {
     { to: '/pos', icon: ShoppingCart, label: 'POS' },
     { to: '/transactions', icon: ClipboardList, label: 'Transaksi' },
     { to: '/customers', icon: Users, label: 'Pelanggan' },
+    { to: '/cash-movements', icon: Wallet, label: 'Rekap Kas' },
   ],
   Acaraki: [{ to: '/kitchen', icon: ChefHat, label: 'Dapur' }],
   'Staf Gudang': [
@@ -116,8 +120,9 @@ export default function Layout() {
   }, [transactions, currentUser]);
 
   // Calculate shift stats
+  const movements = useCashMovementStore((s) => s.movements);
   const shiftStats = useMemo(() => {
-    if (!activeShift) return { totalSales: 0, totalTx: 0, expectedCash: 0 };
+    if (!activeShift) return { totalSales: 0, totalTx: 0, expectedCash: 0, cashIn: 0, cashOut: 0, cashSales: 0, qrisSales: 0, transferSales: 0 };
     // LOGIC-4 fix: Only count Selesai transactions for sales and expected cash
     const shiftTx = transactions.filter(
       (t) =>
@@ -127,8 +132,6 @@ export default function Layout() {
     );
     const totalSales = shiftTx.reduce((a, t) => a + t.totalAmount, 0);
 
-    // BUG-K1 fix: Expected cash only includes Selesai cash transactions
-    // Cancel = voided (money returned/not collected), Demo = test data
     const cashSales = shiftTx
       .filter((t) => t.paymentMethod === 'Cash')
       .reduce((a, t) => a + t.totalAmount, 0);
@@ -138,9 +141,23 @@ export default function Layout() {
     const transferSales = shiftTx
       .filter((t) => t.paymentMethod === 'Transfer')
       .reduce((a, t) => a + t.totalAmount, 0);
-    const expectedCash = activeShift.openingCash + cashSales;
-    return { totalSales, totalTx: shiftTx.length, expectedCash, cashSales, qrisSales, transferSales };
-  }, [activeShift, transactions, currentUser]);
+
+    // Calculate cash movements (Kas Masuk & Kas Keluar) during active shift
+    const shiftMovements = movements.filter(
+      (m) =>
+        m.cashierId === currentUser.id &&
+        new Date(m.date) >= new Date(activeShift.openedAt)
+    );
+    const cashIn = shiftMovements
+      .filter((m) => m.type === 'in')
+      .reduce((a, m) => a + m.amount, 0);
+    const cashOut = shiftMovements
+      .filter((m) => m.type === 'out')
+      .reduce((a, m) => a + m.amount, 0);
+
+    const expectedCash = activeShift.openingCash + cashSales + cashIn - cashOut;
+    return { totalSales, totalTx: shiftTx.length, expectedCash, cashSales, qrisSales, transferSales, cashIn, cashOut };
+  }, [activeShift, transactions, movements, currentUser]);
 
   const handleLogout = () => {
     if (activeShift && (currentUser.role === 'Kasir' || currentUser.role === 'Manager')) {
@@ -214,9 +231,11 @@ export default function Layout() {
       `  - QRIS: ${formatRupiah(shiftStats.qrisSales || 0)}`,
       `  - Transfer: ${formatRupiah(shiftStats.transferSales || 0)}`,
       `Jumlah Transaksi: ${shiftStats.totalTx}`,
+      `Kas Masuk: +${formatRupiah(shiftStats.cashIn || 0)}`,
+      `Kas Keluar: -${formatRupiah(shiftStats.cashOut || 0)}`,
       ``,
       `Expected Cash: ${formatRupiah(shiftStats.expectedCash)}`,
-      `(Modal Awal + Tunai)`,
+      `(Modal Awal + Tunai + Kas Masuk - Kas Keluar)`,
       `Kas Aktual (Fisik): ${formatRupiah(closingCash)}`,
       `Selisih Kas: ${formatRupiah(closingCash - shiftStats.expectedCash)}`,
       ``,
@@ -367,6 +386,9 @@ export default function Layout() {
 
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0 h-full">
+        {/* Printer Status Banner — monitors Bluetooth connections */}
+        <PrinterStatusBanner />
+
         {/* Mobile header (Centered Logo & Store Name) */}
         <header className="lg:hidden relative flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700/50 min-h-[56px]">
           <button onClick={() => setSidebarOpen(true)} className="btn-ghost p-2 z-10">
@@ -410,24 +432,72 @@ export default function Layout() {
         dismissible={false}
       >
         <div className="space-y-5">
-          <div className="bg-blue-50 rounded-xl p-4">
-            <h3 className="font-semibold text-sm text-blue-800 mb-2">Ringkasan Shift</h3>
-            <div className="space-y-1.5 text-sm">
+          <div className="bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/50 rounded-xl p-4">
+            <h3 className="font-semibold text-sm text-blue-900 dark:text-blue-200 mb-2.5 flex items-center justify-between">
+              <span>Ringkasan Shift</span>
+              <span className="text-xs font-normal text-blue-600 dark:text-blue-300">Shift Active</span>
+            </h3>
+            <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-blue-600">Modal Awal</span>
-                <span className="font-medium">{formatRupiah(activeShift?.openingCash || 0)}</span>
+                <span className="text-blue-700 dark:text-blue-300">Modal Awal</span>
+                <span className="font-medium text-slate-900 dark:text-slate-100">{formatRupiah(activeShift?.openingCash || 0)}</span>
               </div>
+
               <div className="flex justify-between">
-                <span className="text-blue-600">Total Penjualan</span>
-                <span className="font-medium">{formatRupiah(shiftStats.totalSales)}</span>
+                <span className="text-blue-700 dark:text-blue-300">Total Penjualan</span>
+                <span className="font-medium text-slate-900 dark:text-slate-100">{formatRupiah(shiftStats.totalSales)}</span>
               </div>
+
+              <div className="pl-3 space-y-1 text-xs text-slate-600 dark:text-slate-400 border-l-2 border-blue-200 dark:border-blue-800">
+                <div className="flex justify-between">
+                  <span>• Penjualan Tunai (Cash)</span>
+                  <span>{formatRupiah(shiftStats.cashSales || 0)}</span>
+                </div>
+                {shiftStats.qrisSales > 0 && (
+                  <div className="flex justify-between">
+                    <span>• Penjualan QRIS</span>
+                    <span>{formatRupiah(shiftStats.qrisSales)}</span>
+                  </div>
+                )}
+                {shiftStats.transferSales > 0 && (
+                  <div className="flex justify-between">
+                    <span>• Penjualan Transfer</span>
+                    <span>{formatRupiah(shiftStats.transferSales)}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Kas Masuk */}
+              <div className="flex justify-between items-center bg-green-50 dark:bg-green-950/30 px-2.5 py-1.5 rounded-lg border border-green-200/50 dark:border-green-900/30">
+                <span className="text-green-700 dark:text-green-300 font-medium text-xs">
+                  📥 Kas Masuk (Shift Ini)
+                </span>
+                <span className="font-bold text-green-700 dark:text-green-300">
+                  +{formatRupiah(shiftStats.cashIn || 0)}
+                </span>
+              </div>
+
+              {/* Kas Keluar */}
+              <div className="flex justify-between items-center bg-red-50 dark:bg-red-950/30 px-2.5 py-1.5 rounded-lg border border-red-200/50 dark:border-red-900/30">
+                <span className="text-red-700 dark:text-red-300 font-medium text-xs">
+                  📤 Kas Keluar (Shift Ini)
+                </span>
+                <span className="font-bold text-red-700 dark:text-red-300">
+                  -{formatRupiah(shiftStats.cashOut || 0)}
+                </span>
+              </div>
+
               <div className="flex justify-between">
-                <span className="text-blue-600">Jumlah Transaksi</span>
-                <span className="font-medium">{shiftStats.totalTx}</span>
+                <span className="text-blue-700 dark:text-blue-300">Jumlah Transaksi</span>
+                <span className="font-medium text-slate-900 dark:text-slate-100">{shiftStats.totalTx}</span>
               </div>
-              <div className="flex justify-between border-t border-blue-200 pt-1.5 mt-1.5">
-                <span className="text-blue-800 font-semibold">Expected Cash di Laci</span>
-                <span className="font-bold text-blue-800">{formatRupiah(shiftStats.expectedCash)}</span>
+
+              <div className="flex justify-between items-start border-t border-blue-200 dark:border-blue-800 pt-2.5 mt-2">
+                <div>
+                  <span className="text-blue-900 dark:text-blue-200 font-bold block">Expected Cash di Laci</span>
+                  <span className="text-[10px] text-blue-600 dark:text-blue-400 block font-normal">(Modal Awal + Tunai + Kas Masuk - Kas Keluar)</span>
+                </div>
+                <span className="font-bold text-blue-900 dark:text-blue-200 text-base">{formatRupiah(shiftStats.expectedCash)}</span>
               </div>
             </div>
           </div>
