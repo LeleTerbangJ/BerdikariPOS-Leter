@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 
 ## Project Name: BerdikariPOS
-## Product Version: 4.2 (Production)
+## Product Version: 4.4 (Production)
 ## Document Status: Production Ready
 ## Last Updated: 27 Juli 2026
 ## Production URL: Deployed on Vercel
@@ -11,7 +11,7 @@
 
 ## 1. Product Overview
 
-**BerdikariPOS** adalah aplikasi Point of Sale (Sistem Kasir) berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Sistem ini menghubungkan pesanan dari Kasir langsung ke layar Dapur/Pemenuhan secara real-time melalui shared state, menyediakan dashboard analitik komprehensif untuk Manager, modul Rekap Kas & Stock Opname, serta fitur CRM pelanggan, manajemen shift kasir, dan integrasi multi-printer dengan background monitor koneksi.
+**BerdikariPOS** adalah aplikasi Point of Sale (Sistem Kasir) berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Sistem ini menghubungkan pesanan dari Kasir langsung ke layar Dapur/Pemenuhan secara real-time melalui shared state, menyediakan dashboard analitik komprehensif untuk Manager, modul Rekap Kas & Stock Opname, serta fitur **Atomic Inventory Transaction Engine** setara POS enterprise (Square/Toast/Odoo) dengan State Machine, Automatic Rollback Engine, Idempotency Control, Snapshot Recipe, dan Snapshot HPP.
 
 ### 1.1. Tech Stack
 
@@ -53,8 +53,8 @@ Sistem menggunakan Role-Based Access Control (RBAC) dengan 4 peran utama:
 - **Fokus**: Analisis dashboard, manajemen katalog & harga, laporan keuangan, otorisasi void/pembatalan/penghapusan transaksi & kas, pengaturan toko, pajak & printer
 
 ### 2.2. Kasir (Frontdesk)
-- **Akses**: POS, Transaksi, Pelanggan, Rekap Kas
-- **Fokus**: Pembuatan pesanan, pencatatan kas masuk/keluar, serah terima kas (shift management), melihat riwayat transaksi harian
+- **Akses**: POS, Transaksi, Pelanggan, Rekap Kas, Settings (Pengaturan Printer Thermal)
+- **Fokus**: Pembuatan pesanan, pencatatan kas masuk/keluar, serah terima kas (shift management), melihat riwayat transaksi harian, serta mengatur & memantau koneksi printer thermal
 - **Wajib**: Input modal kas awal saat buka shift, input kas aktual + print ringkasan saat tutup shift
 
 ### 2.3. Acaraki (Kitchen)

@@ -12,6 +12,7 @@ import type { User, Role } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { formatRupiah } from '../utils/format';
+import BackupRestoreTab from '../components/backup/BackupRestoreTab';
 import {
   Users,
   Plus,
@@ -31,6 +32,7 @@ import {
   Upload,
   Percent,
   Receipt,
+  HardDriveDownload,
 } from 'lucide-react';
 import { generateShades, THEME_PRESETS, hexToRgbValues } from '../utils/theme';
 
@@ -195,7 +197,9 @@ export default function SettingsPage() {
   const [superPinInput, setSuperPinInput] = useState('');
   const [superPinError, setSuperPinError] = useState('');
   const [newSuperPin, setNewSuperPin] = useState('');
-  const [activeTab, setActiveTab] = useState<'general' | 'printers' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'printers' | 'users' | 'backup'>(() => {
+    return currentUser?.role === 'Kasir' ? 'printers' : 'general';
+  });
 
   // Table settings local state
   const [newTableInput, setNewTableInput] = useState('');
@@ -305,43 +309,67 @@ export default function SettingsPage() {
       </div>
 
       {/* Tab Menu */}
-      <div className="flex border-b border-slate-200 dark:border-slate-700/50 overflow-x-auto scrollbar-none whitespace-nowrap -mx-4 px-4 sm:mx-0 sm:px-0">
-        <button
-          onClick={() => setActiveTab('general')}
-          className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
-            activeTab === 'general'
-              ? 'border-brand-600 text-brand-600 dark:text-brand-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-          }`}
-        >
-          <Store size={16} />
-          <span>Umum & Tampilan</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('printers')}
-          className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
-            activeTab === 'printers'
-              ? 'border-brand-600 text-brand-600 dark:text-brand-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-          }`}
-        >
-          <Printer size={16} />
-          <span>Printer & KDS</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
-            activeTab === 'users'
-              ? 'border-brand-600 text-brand-600 dark:text-brand-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-          }`}
-        >
-          <Users size={16} />
-          <span>Pengguna & Sistem</span>
-        </button>
-      </div>
+      {currentUser?.role === 'Kasir' ? (
+        <div className="flex border-b border-slate-200 dark:border-slate-700/50 overflow-x-auto scrollbar-none whitespace-nowrap -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex items-center gap-2 px-5 py-3 border-b-2 border-brand-600 font-semibold text-sm text-brand-600 dark:text-brand-400 flex-shrink-0">
+            <Printer size={16} />
+            <span>Pengaturan Printer Thermal</span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex border-b border-slate-200 dark:border-slate-700/50 overflow-x-auto scrollbar-none whitespace-nowrap -mx-4 px-4 sm:mx-0 sm:px-0">
+          <button
+            onClick={() => setActiveTab('general')}
+            className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
+              activeTab === 'general'
+                ? 'border-brand-600 text-brand-600 dark:text-brand-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Store size={16} />
+            <span>Umum & Tampilan</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('printers')}
+            className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
+              activeTab === 'printers'
+                ? 'border-brand-600 text-brand-600 dark:text-brand-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Printer size={16} />
+            <span>Printer & KDS</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
+              activeTab === 'users'
+                ? 'border-brand-600 text-brand-600 dark:text-brand-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Users size={16} />
+            <span>Pengguna & Sistem</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('backup')}
+            className={`flex items-center gap-2 px-5 py-3 border-b-2 font-semibold text-sm transition-all flex-shrink-0 ${
+              activeTab === 'backup'
+                ? 'border-brand-600 text-brand-600 dark:text-brand-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <HardDriveDownload size={16} />
+            <span>Backup & Restore</span>
+          </button>
+        </div>
+      )}
 
-      {activeTab === 'general' && (
+      {activeTab === 'backup' && currentUser?.role !== 'Kasir' && (
+        <BackupRestoreTab />
+      )}
+
+      {activeTab === 'general' && currentUser?.role !== 'Kasir' && (
         <div className="space-y-6">
           {/* Store Settings */}
           <div className="card p-5">
@@ -724,7 +752,7 @@ export default function SettingsPage() {
       </div>
       )}
 
-      {activeTab === 'printers' && (
+      {(activeTab === 'printers' || currentUser?.role === 'Kasir') && (
         <div className="space-y-6">
           {/* Printer Settings */}
           <div className="card p-5">
@@ -1366,7 +1394,7 @@ export default function SettingsPage() {
       </div>
       )}
 
-      {activeTab === 'users' && (
+      {activeTab === 'users' && currentUser?.role !== 'Kasir' && (
         <div className="space-y-6">
           {/* User Management */}
           <div className="card p-5">

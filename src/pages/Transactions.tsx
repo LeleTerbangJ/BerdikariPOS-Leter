@@ -461,38 +461,73 @@ export default function Transactions() {
               {expanded === tx.id && (
                 <div className="px-4 pb-4 border-t border-slate-100 dark:border-slate-700/50 pt-3 space-y-3">
                   {/* Items */}
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     {tx.items.map((item) => (
-                      <div key={item.lineId} className="flex justify-between text-sm">
-                        <div>
-                          <span className="font-medium dark:text-slate-200">{item.name}</span>
-                          <span className="text-slate-500 dark:text-slate-400 ml-2">
-                            x{item.quantity}{item.showTemperature !== false ? ` • ${item.temperature}` : ''}{item.showSugarLevel !== false ? ` • ${item.sugar}` : ''}
-                          </span>
-                          {item.addons.length > 0 && (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 ml-1">
-                              (+{item.addons.map((a) => a.name).join(', ')})
+                      <div key={item.lineId} className="border-b border-slate-100 dark:border-slate-800 pb-2.5 last:border-0">
+                        <div className="flex justify-between text-sm">
+                          <div>
+                            <span className="font-medium dark:text-slate-200">{item.name}</span>
+                            <span className="text-slate-500 dark:text-slate-400 ml-2">
+                              x{item.quantity}{item.showTemperature !== false ? ` • ${item.temperature}` : ''}{item.showSugarLevel !== false ? ` • ${item.sugar}` : ''}
                             </span>
-                          )}
+                            {item.addons.length > 0 && (
+                              <span className="text-xs text-slate-400 dark:text-slate-500 ml-1">
+                                (+{item.addons.map((a) => a.name).join(', ')})
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-medium dark:text-slate-200">{formatRupiah(item.subtotal)}</span>
                         </div>
-                        <span className="font-medium dark:text-slate-200">{formatRupiah(item.subtotal)}</span>
+
+                        {/* Snapshot Recipe (BOM) Breakdown */}
+                        {item.recipeSnapshot && item.recipeSnapshot.length > 0 && (
+                          <div className="mt-1.5 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50 text-xs">
+                            <div className="flex items-center justify-between font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                              <span>📦 Snapshot Recipe (BOM):</span>
+                              <span className="text-brand-600 dark:text-brand-400">Modal HPP: {formatRupiah(item.hpp || item.cogs || 0)}</span>
+                            </div>
+                            <div className="space-y-0.5 text-slate-500 dark:text-slate-400">
+                              {item.recipeSnapshot.map((ing, idx) => (
+                                <div key={idx} className="flex justify-between items-center text-[11px]">
+                                  <span>• {ing.inventoryName} ({ing.totalQty} {ing.unit})</span>
+                                  <span>{formatRupiah(ing.unitCost)}/{ing.unit} = <strong className="text-slate-700 dark:text-slate-300">{formatRupiah(ing.subtotalCost)}</strong></span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
 
-                  {tx.discount > 0 && (
-                    <div className="flex justify-between text-sm text-red-500 dark:text-red-400">
-                      <span>Diskon</span>
-                      <span>-{formatRupiah(tx.discount)}</span>
-                    </div>
-                  )}
+                  {/* Summary & Snapshot HPP */}
+                  <div className="space-y-1 pt-1 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/50">
+                    {tx.discount > 0 && (
+                      <div className="flex justify-between text-sm text-red-500 dark:text-red-400">
+                        <span>Diskon</span>
+                        <span>-{formatRupiah(tx.discount)}</span>
+                      </div>
+                    )}
 
-                  {tx.tax !== undefined && tx.tax > 0 && (
-                    <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
-                      <span>Pajak</span>
-                      <span>{formatRupiah(tx.tax)}</span>
+                    {tx.tax !== undefined && tx.tax > 0 && (
+                      <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
+                        <span>Pajak</span>
+                        <span>{formatRupiah(tx.tax)}</span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-1">
+                      <span>Total HPP Snapshot (COGS):</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-300">{formatRupiah(tx.cogs ?? tx.hpp)}</span>
                     </div>
-                  )}
+
+                    <div className="flex justify-between items-center">
+                      <span>Estimasi Laba Kotor (Gross Profit):</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatRupiah(tx.grossProfit ?? ((tx.subtotal - tx.discount) - tx.hpp))}
+                      </span>
+                    </div>
+                  </div>
 
                   {/* Actions */}
                   <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-700/50">

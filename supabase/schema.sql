@@ -1,5 +1,5 @@
 -- ============================================================
--- BerdikariPOS — Supabase Database Schema (v3.6)
+-- BerdikariPOS — Supabase Database Schema (v4.3)
 -- Run this in Supabase SQL Editor (Dashboard → SQL Editor → New Query)
 -- ============================================================
 

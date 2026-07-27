@@ -11,6 +11,7 @@ import { calculateMenuHPP } from '../utils/hpp';
 import type { Menu, AddOn } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useToastStore } from '../store/toastStore';
 import {
   Plus,
   Pencil,
@@ -22,6 +23,7 @@ import {
   Tag,
   ToggleLeft,
   ToggleRight,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 export default function Catalog() {
@@ -208,6 +210,28 @@ export default function Catalog() {
     a.click();
   };
 
+  const { addToast } = useToastStore();
+
+  // Download CSV Template for Catalog Menu
+  const handleDownloadTemplate = () => {
+    const header = 'Nama Menu,Kategori,Harga Jual,Best Seller (true/false),Bahan Baku (JSON),Addons (JSON),HPP Manual,Target Dapur,Pilihan Gula (true/false),Pilihan Suhu (true/false)\n';
+    const sampleRows = [
+      'Kopi Susu Gula Aren,Signature,18000,true,"{""inv-sample-1"":18,""inv-sample-2"":0.1,""inv-sample-3"":25}","[{""name"":""Extra Shot"",""price"":4000}]",0,Bar,true,true',
+      'Americano,Coffee,15000,false,"{""inv-sample-1"":18}","[]",0,Bar,true,true',
+      'Roti Bakar Cokelat,Makanan,12000,false,"{}","[]",5000,Dapur Makanan,false,false',
+    ].join('\n');
+
+    const csvContent = '\uFEFF' + header + sampleRows;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'template-import-katalog-menu.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    addToast('Template CSV Katalog Menu berhasil diunduh', 'info');
+  };
+
   // CSV Import
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -236,6 +260,7 @@ export default function Catalog() {
             };
           });
       importMenus(imported);
+      addToast('Import katalog menu CSV berhasil!', 'success');
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -245,9 +270,12 @@ export default function Catalog() {
     <div>
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📦 Katalog Menu</h1>
-        <div className="flex items-center justify-center sm:justify-end gap-2 w-full sm:w-auto">
+        <div className="flex items-center justify-center sm:justify-end gap-2 w-full sm:w-auto flex-wrap">
           <button onClick={handleExport} className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
             <Download size={16} /> Export CSV
+          </button>
+          <button onClick={handleDownloadTemplate} title="Unduh Template CSV Import Menu" className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+            <FileSpreadsheet size={16} /> Template CSV
           </button>
           <label className="btn-secondary text-sm cursor-pointer flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
             <Upload size={16} /> Import CSV

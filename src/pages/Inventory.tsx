@@ -10,6 +10,7 @@ import type { InventoryItem } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import StockOpname from './StockOpname';
+import { useToastStore } from '../store/toastStore';
 import {
   Plus,
   Pencil,
@@ -22,6 +23,7 @@ import {
   Settings2,
   ClipboardCheck,
   Warehouse,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 export default function Inventory() {
@@ -156,6 +158,29 @@ export default function Inventory() {
     a.click();
   };
 
+  const { addToast } = useToastStore();
+
+  // Download CSV Template for Inventory
+  const handleDownloadTemplate = () => {
+    const header = 'ID,Nama Bahan,Stok,Satuan,Harga per Satuan,Min. Stok\n';
+    const sampleRows = [
+      'inv-sample-1,Kopi Arabika (Biji),1000,gram,300,200',
+      'inv-sample-2,Susu UHT Fresh,10,liter,18000,2',
+      'inv-sample-3,Gula Aren Cair,5000,ml,40,500',
+      'inv-sample-4,Cup Plastik 16oz,100,pcs,500,20',
+    ].join('\n');
+
+    const csvContent = '\uFEFF' + header + sampleRows;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'template-import-bahan-baku.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    addToast('Template CSV Bahan Baku berhasil diunduh', 'info');
+  };
+
   // CSV Import
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -186,6 +211,7 @@ export default function Inventory() {
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'update_inventory', `Import bahan baku dari CSV`);
       }
+      addToast('Import bahan baku CSV berhasil!', 'success');
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -210,10 +236,15 @@ export default function Inventory() {
             <Download size={16} /> Export
           </button>
           {currentUser?.role !== 'Staf Gudang' && (
-            <label className="btn-secondary text-sm cursor-pointer flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
-              <Upload size={16} /> Import
-              <input type="file" accept=".csv" onChange={handleImport} className="hidden" />
-            </label>
+            <>
+              <button onClick={handleDownloadTemplate} title="Unduh Template CSV Import" className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+                <FileSpreadsheet size={16} /> Template CSV
+              </button>
+              <label className="btn-secondary text-sm cursor-pointer flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+                <Upload size={16} /> Import
+                <input type="file" accept=".csv" onChange={handleImport} className="hidden" />
+              </label>
+            </>
           )}
         </div>
       </div>
