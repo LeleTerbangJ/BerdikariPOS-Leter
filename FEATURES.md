@@ -1,4 +1,4 @@
-# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan (v4.2)
+# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan (v4.4)
 
 ## Aplikasi Point of Sale Modern untuk Berbagai Jenis Usaha
 
@@ -6,17 +6,25 @@
 
 ## 🎯 Ringkasan
 
-BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Menghubungkan kasir, bagian dapur/pemenuhan, manajemen gudang, dan manajemen eksekutif dalam satu platform terintegrasi dengan cloud sync real-time.
+BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk berbagai jenis usaha (F&B, retail, kelontong, jasa, salon, laundry, bakery, dll). Menghubungkan kasir, bagian dapur/pemenuhan, manajemen gudang, dan manajemen eksekutif dalam satu platform terintegrasi dengan cloud sync real-time dan **Atomic Inventory Transaction Engine** setara POS enterprise.
 
 ---
 
 ## ✨ Fitur Utama
 
-### 1. 🛒 Point of Sale (Kasir)
+### 1. 🛒 Point of Sale (Kasir) & Atomic Checkout Engine
 - Tampilan grid produk dengan foto atau inisial
 - Filter kategori + pencarian cepat
 - Kustomisasi pesanan: suhu (hangat/dingin), level gula, add-ons
   - Suhu dan level gula dapat dinonaktifkan per produk (misal makanan tanpa pilihan suhu)
+- **Atomic Inventory Checkout Engine (Enterprise POS Standard)**:
+  - **All-or-Nothing Execution**: Transaksi diproses secara atomik. Jika ada 1 bahan baku yang gagal/kurang, seluruh checkout langsung dibatalkan tanpa mengurangi stok sedikit pun.
+  - **Pre-checkout Validation**: Menjamin kecukupan seluruh bahan baku utama + add-ons sebelum eksekusi mutasi.
+  - **Snapshot Recipe (BOM) & Snapshot HPP**: Menyimpan histori resep dan HPP secara permanen pada saat checkout sehingga perubahan resep di masa depan tidak mempengaruhi histori transaksi lama.
+  - **Transaction State Machine**: Menelusuri lifecycle transaksi (`PENDING` → `VALIDATING` → `PROCESSING` → `COMMITTED` → `SYNC_PENDING` → `SYNCED` / `ROLLED_BACK`).
+  - **Idempotency Protection**: Mencegah transaksi diproses dua kali akibat double-click tombol bayar, browser refresh, atau re-sync.
+  - **Automatic Rollback Engine**: Memulihkan snapshot stok inventaris secara otomatis jika terjadi error sebelum transaksi di-commit.
+  - **Post-Commit Asynchronous Isolation**: Kegagalan printer atau koneksi internet tidak pernah membatalkan transaksi yang sudah berhasil di-commit (otomatis Retry Queue).
 - Keranjang belanja dengan quantity controls
 - **Kosongkan keranjang 1-klik** (muncul jika item ≥ 2, dengan konfirmasi)
 - Diskon manual (nominal Rupiah)
@@ -26,7 +34,6 @@ BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk
 - Kalkulator kembalian otomatis + quick cash buttons
 - Nomor antrean otomatis (reset harian)
 - Cetak struk otomatis (browser print / Bluetooth thermal)
-- Validasi stok sebelum checkout (warning jika bahan kurang)
 - Keyboard shortcut: F1 = Bayar, Esc = Batal
 - Mobile: keranjang minimize/maximize (floating bar)
 - **Tipe pesanan**: Dine In / Take Away (pilihan di checkout)

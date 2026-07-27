@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.2
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.4
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -23,6 +23,8 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `src/lib/cloudSync.ts` | Cloud sync logic (Supabase integration) |
 | `src/lib/offlineQueue.ts` | Offline queue & auto-retry |
+| `src/lib/atomicTransactionEngine.ts` | Atomic Transaction Engine (State Machine, Rollback & Idempotency) |
+| `src/lib/inventoryEngine.ts` | Inventory Engine (Pre-flight validation & Stock Snapshot) |
 | `src/store/*.ts` | State management (semua 14 Zustand stores, termasuk `cashMovementStore`) |
 | `src/hooks/usePrinterMonitor.ts` | Background service polling koneksi printer Bluetooth |
 | `vite.config.ts` | Build config + PWA setup |

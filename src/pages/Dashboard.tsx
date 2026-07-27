@@ -280,20 +280,23 @@ export default function Dashboard() {
 
     filterTxs.forEach((t) => {
       t.items.forEach((item) => {
-        const menuObj = menus.find((m) => m.id === item.menuId);
-        if (!menuObj) return;
-        
         if (!map[item.menuId]) {
           map[item.menuId] = { name: item.name, qty: 0, revenue: 0, hpp: 0 };
         }
         
-        // Calculate HPP using shared utility (supports both ingredients and manualHpp)
-        const menuHpp = calculateMenuHPP(menuObj, inventory);
-        const baseHpp = menuObj.price > 0 ? (item.basePrice / menuObj.price) * menuHpp : 0;
+        // Priority: Read permanent Snapshot HPP (item.hpp / item.cogs).
+        // Fallback for legacy transactions created before snapshot feature.
+        const menuObj = menus.find((m) => m.id === item.menuId);
+        let itemHpp = item.cogs ?? item.hpp;
+        if (itemHpp === undefined) {
+          const menuHpp = menuObj ? calculateMenuHPP(menuObj, inventory) : 0;
+          const baseHpp = menuObj && menuObj.price > 0 ? (item.basePrice / menuObj.price) * menuHpp : 0;
+          itemHpp = baseHpp * item.quantity;
+        }
 
         map[item.menuId].qty += item.quantity;
         map[item.menuId].revenue += item.subtotal;
-        map[item.menuId].hpp += baseHpp * item.quantity;
+        map[item.menuId].hpp += itemHpp;
       });
     });
 

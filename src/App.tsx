@@ -206,7 +206,7 @@ export default function App() {
           <Route path="/promos" element={<ProtectedRoute allowedRoles={['Manager']}><Promos /></ProtectedRoute>} />
           <Route path="/cash-movements" element={<ProtectedRoute allowedRoles={['Manager', 'Kasir']}><CashMovements /></ProtectedRoute>} />
           <Route path="/audit-log" element={<ProtectedRoute allowedRoles={['Manager']}><AuditLog /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute allowedRoles={['Manager']}><SettingsPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute allowedRoles={['Manager', 'Kasir']}><SettingsPage /></ProtectedRoute>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

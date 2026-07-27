@@ -52,6 +52,18 @@ export type KitchenStatus = 'Waiting' | 'Processing' | 'Done';
 export type TxStatus = 'Selesai' | 'Cancel' | 'Demo';
 export type OrderType = 'Dine In' | 'Take Away';
 
+export interface RecipeIngredientSnapshot {
+  inventoryId: string;
+  inventoryName: string;
+  unit: string;
+  qty: number;          // Kebutuhan bahan per 1 unit item (misal 18 gram)
+  totalQty: number;     // Total kebutuhan bahan pada transaksi (qty * item.quantity)
+  unitCost: number;     // Cost per unit bahan baku saat checkout (costPerUnit)
+  subtotalCost: number; // Total modal/HPP bahan ini (totalQty * unitCost)
+  source?: 'menu' | 'addon';
+  addonName?: string;
+}
+
 export interface CartItem {
   lineId: string; // unique per line
   menuId: string;
@@ -66,7 +78,21 @@ export interface CartItem {
   showSugarLevel?: boolean;
   showTemperature?: boolean;
   tableNumber?: string;
+  // Snapshot Recipe & HPP (BOM at checkout time)
+  recipeSnapshot?: RecipeIngredientSnapshot[];
+  cogs?: number; // Total HPP / Cost of Goods Sold untuk item ini
+  hpp?: number;  // Alias untuk cogs
 }
+
+export type TransactionLifecycleState = 
+  | 'PENDING'
+  | 'VALIDATING'
+  | 'PROCESSING'
+  | 'COMMITTED'
+  | 'SYNC_PENDING'
+  | 'SYNCED'
+  | 'FAILED'
+  | 'ROLLED_BACK';
 
 export interface Transaction {
   id: string;
@@ -85,10 +111,47 @@ export interface Transaction {
   cashierName: string;
   customerId?: string; // opsional (CRM)
   customerName?: string;
-  hpp: number; // total cost of goods sold
+  hpp: number; // Total cost of goods sold (COGS) snapshot
+  cogs?: number; // Alias untuk hpp (COGS)
+  totalCogs?: number; // Alias untuk total hpp
+  grossProfit?: number; // Laba kotor snapshot = Net Sales (subtotal - discount) - HPP
   tax?: number; // GAP-3 fix: Nilai pajak
   orderType?: 'Dine In' | 'Take Away'; // Tipe pesanan: makan di tempat atau bawa pulang
   tableNumber?: string; // Fitur nomor meja
+  lifecycleState?: TransactionLifecycleState; // Atomic State Machine
+  outletId?: string; // Multi-outlet enterprise extension
+}
+
+export interface AtomicCheckoutParams {
+  transactionId?: string;
+  cartItems: CartItem[];
+  subtotal: number;
+  discount: number;
+  taxAmount: number;
+  totalAmount: number;
+  payMethod: PaymentMethod;
+  cashReceived?: number;
+  orderType?: OrderType;
+  tableNumber?: string;
+  selectedCustomerId?: string;
+  selectedCustomerName?: string;
+  currentUser?: { id: string; name: string; role: string } | null;
+  settings: any;
+  preOpenedPrintWindow?: Window | null;
+}
+
+export interface AtomicCheckoutResult {
+  success: boolean;
+  transaction?: Transaction;
+  error?: string;
+  warnings?: {
+    ingredientId: string;
+    ingredientName: string;
+    required: number;
+    available: number;
+    unit: string;
+  }[];
+  idempotentReplay?: boolean;
 }
 
 // CRM (extension beyond PRD MVP)

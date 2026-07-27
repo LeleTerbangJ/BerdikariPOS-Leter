@@ -10,9 +10,10 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { usePromoStore } from '../store/promoStore';
 import { useAuditLogStore } from '../store/auditLogStore';
+import { AtomicTransactionEngine } from '../lib/atomicTransactionEngine';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
-import { calculateTransactionHPP, calculateItemDeductions } from '../utils/hpp';
+import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
 import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType } from '../types';
@@ -170,6 +171,7 @@ export default function POS() {
   const [category, setCategory] = useState('Semua');
   const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [checkoutTxId, setCheckoutTxId] = useState<string>(() => uuid());
 
   // Mobile cart toggle
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
@@ -394,50 +396,39 @@ export default function POS() {
       preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
     }
 
-    const queueNum = await getNextQueueNumber();
-
-    const hpp = calculateTransactionHPP(cart.items, menus, inventory);
-
-    // Deduct inventory (BUG-04 fix: includes addon ingredients via calculateItemDeductions)
-    const deductions = calculateItemDeductions(cart.items, menus);
-    deductStock(deductions);
-
-    const tx = {
-      id: uuid(),
-      queueNumber: queueNum,
-      date: new Date().toISOString(),
-      items: cart.items,
+    // Execute Atomic Checkout via AtomicTransactionEngine
+    const result = await AtomicTransactionEngine.executeCheckout({
+      transactionId: checkoutTxId,
+      cartItems: cart.items,
       subtotal,
       discount: totalDiscount,
-      tax: taxAmount, // GAP-3 fix: Save tax amount
+      taxAmount,
       totalAmount: total,
-      paymentMethod: payMethod,
-      cashReceived: payMethod === 'Cash' ? cash : undefined,
-      change: payMethod === 'Cash' ? Math.max(0, cash - total) : undefined,
-      kitchenStatus: 'Waiting' as const,
-      txStatus: 'Selesai' as const,
-      cashierId: currentUser?.id || '',
-      cashierName: currentUser?.name || '',
-      customerId: selectedCustomerId || undefined,
-      customerName: selectedCustomer?.name || undefined,
-      hpp,
+      payMethod,
+      cashReceived: cash,
       orderType,
       tableNumber: orderType === 'Dine In' && settings.tableFeaturesEnabled ? tableNumber : undefined,
-    };
+      selectedCustomerId: selectedCustomerId || undefined,
+      selectedCustomerName: selectedCustomer?.name || undefined,
+      currentUser,
+      settings,
+      preOpenedPrintWindow,
+    });
 
-    addTransaction(tx);
+    if (!result.success) {
+      if (preOpenedPrintWindow && !preOpenedPrintWindow.closed) {
+        preOpenedPrintWindow.close();
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        setStockWarnings(result.warnings);
+        setShowStockWarning(true);
+      } else {
+        addToast(result.error || 'Gagal memproses transaksi!', 'error');
+      }
+      return;
+    }
 
-    // Audit log
-    if (currentUser) {
-      addLog(currentUser.id, currentUser.name, currentUser.role, 'create_transaction', `Transaksi #${queueNum} sebesar ${formatRupiah(total)}`, { transactionId: tx.id, queueNumber: queueNum, total });
-    }
-    if (settings.printerEnabled || settings.autoPrintOnCheckout) {
-      const receiptData = buildReceiptFromTransaction(tx, settings);
-      printReceipt(receiptData, settings, 'all', preOpenedPrintWindow);
-    } else if (preOpenedPrintWindow) {
-      // Close the pre-opened window if printing is not needed
-      preOpenedPrintWindow.close();
-    }
+    const tx = result.transaction!;
 
     // Record customer visit
     if (selectedCustomerId) {
@@ -449,16 +440,26 @@ export default function POS() {
       incrementUsage(appliedPromoId);
     }
 
+    // Clear cart & reset state with fresh transaction ID for next checkout
     cart.clearCart();
     setShowCheckout(false);
     setDiscountInput('');
+    setVoucherCode('');
     setCashReceived('');
-    setPayMethod('Cash');
     setSelectedCustomerId(null);
+    setTableNumber('');
+    setCheckoutTxId(uuid());
+
+    setPayMethod('Cash');
     clearPromo();
     setOrderType('Dine In');
-    setTableNumber('');
-    addToast(`Pesanan #${queueNum} berhasil! 🎉`, 'success');
+
+    addToast(
+      result.idempotentReplay
+        ? `Transaksi #${tx.queueNumber} sudah diproses sebelumnya.`
+        : `Transaksi #${tx.queueNumber} berhasil! 🎉`,
+      'success'
+    );
   };
 
   const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;

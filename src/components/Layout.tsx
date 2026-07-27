@@ -32,6 +32,7 @@ import {
   Sun,
   Moon,
   ClipboardCheck,
+  Printer,
 } from 'lucide-react';
 
 const navItems = {
@@ -54,6 +55,7 @@ const navItems = {
     { to: '/transactions', icon: ClipboardList, label: 'Transaksi' },
     { to: '/customers', icon: Users, label: 'Pelanggan' },
     { to: '/cash-movements', icon: Wallet, label: 'Rekap Kas' },
+    { to: '/settings', icon: Printer, label: 'Printer' },
   ],
   Acaraki: [{ to: '/kitchen', icon: ChefHat, label: 'Dapur' }],
   'Staf Gudang': [
