@@ -61,64 +61,18 @@ export const useSettingsStore = create<SettingsState>()(
       loadFromCloud: async () => {
         const cloudSettings = await fetchSettingsFromCloud();
         if (cloudSettings) {
-          // LOGIC-ERR-01 fix: Track fields where both local and cloud diverged from seed
-          const conflictFields: string[] = [];
-
           set((s: SettingsState) => {
-            const merged = { ...seedSettings } as any;
-            // LOGIC-6: Merge settings per-field rather than overwriting completely
-            // Local modifications and cloud modifications are both preserved if they don't conflict.
-            Object.keys(seedSettings).forEach((k) => {
+            const merged = { ...s.settings };
+            // Cloud settings take precedence for all synced keys across devices
+            Object.keys(cloudSettings).forEach((k) => {
               const key = k as keyof AppSettings;
-              const localVal = s.settings[key];
               const cloudVal = cloudSettings[key];
-              const seedVal = seedSettings[key];
-
-              const localChanged = localVal !== undefined && JSON.stringify(localVal) !== JSON.stringify(seedVal);
-              const cloudChanged = cloudVal !== undefined && JSON.stringify(cloudVal) !== JSON.stringify(seedVal);
-
-              if (localChanged && !cloudChanged) {
-                merged[key] = localVal;
-              } else if (!localChanged && cloudChanged) {
-                merged[key] = cloudVal;
-              } else if (localChanged && cloudChanged) {
-                // LOGIC-ERR-01 fix: Cloud still wins, but track the conflict
-                // Skip sensitive fields (PINs) and complex objects (themeShades) from notification
-                if (JSON.stringify(localVal) !== JSON.stringify(cloudVal)) {
-                  const skipNotify = ['managerPin', 'superAdminPin', 'themeShades'];
-                  if (!skipNotify.includes(key)) {
-                    conflictFields.push(key);
-                  }
-                }
-                merged[key] = cloudVal; // Cloud wins conflict
-              } else {
-                merged[key] = localVal !== undefined ? localVal : seedVal;
+              if (cloudVal !== undefined && cloudVal !== null) {
+                (merged as any)[key] = cloudVal;
               }
             });
             return { settings: merged as AppSettings };
           });
-
-          // LOGIC-ERR-01 fix: Notify user if conflicts were detected
-          if (conflictFields.length > 0) {
-            const fieldLabels: Record<string, string> = {
-              storeName: 'Nama Toko',
-              storeAddress: 'Alamat Toko',
-              storePhone: 'Telepon Toko',
-              storeLogo: 'Logo Toko',
-              taxPercent: 'Pajak (%)',
-              printerEnabled: 'Printer',
-              printerType: 'Tipe Printer',
-              themeColor: 'Warna Tema',
-            };
-            const labels = conflictFields.map((f) => fieldLabels[f] || f).join(', ');
-            setTimeout(() => {
-              useToastStore.getState().addToast(
-                `⚠️ Pengaturan "${labels}" diperbarui dari perangkat lain. Perubahan lokal Anda digantikan oleh data cloud.`,
-                'warning',
-                6000
-              );
-            }, 1500);
-          }
         }
       },
     }),

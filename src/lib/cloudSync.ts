@@ -288,6 +288,21 @@ export function subscribeToUsers(callback: (payload: any) => void) {
   return channel;
 }
 
+export function subscribeToSettings(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('settings-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'settings' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 export function subscribeToStockOpnames(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
 
