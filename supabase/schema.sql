@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS settings (
   printer_width TEXT DEFAULT '58mm',
   auto_print_on_checkout BOOLEAN DEFAULT false,
   super_admin_pin TEXT DEFAULT '000000',
+  demo_mode BOOLEAN DEFAULT true,
   loyalty_enabled BOOLEAN DEFAULT false,
   loyalty_settings JSONB DEFAULT '{}',
   kitchen_printers JSONB DEFAULT '[]',
@@ -222,12 +223,14 @@ END $$;
 DO $$
 BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE menus;
+  ALTER TABLE menus REPLICA IDENTITY FULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$
 BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE inventory;
+  ALTER TABLE inventory REPLICA IDENTITY FULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
