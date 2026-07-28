@@ -165,7 +165,11 @@ CREATE TABLE IF NOT EXISTS settings (
   theme_shades JSONB,
   table_features_enabled BOOLEAN DEFAULT false,
   available_table_numbers JSONB DEFAULT '[]',
-  table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}'
+  table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}',
+  receipt_header TEXT,
+  receipt_footer TEXT,
+  receipt_ascii_only BOOLEAN DEFAULT false,
+  auto_print_receipt BOOLEAN DEFAULT false
 );
 
 -- Insert default settings row
