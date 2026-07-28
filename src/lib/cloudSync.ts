@@ -477,6 +477,10 @@ export async function syncSettings(settings: AppSettings) {
     auto_print_on_checkout: settings.autoPrintOnCheckout,
     super_admin_pin: settings.superAdminPin,
     demo_mode: settings.demoMode,
+    receipt_header: settings.receiptHeader || null,
+    receipt_footer: settings.receiptFooter || null,
+    receipt_ascii_only: settings.receiptAsciiOnly ?? false,
+    auto_print_receipt: settings.autoPrintReceipt ?? false,
   };
   if (!migrationNeeded.kitchenPrinters) {
     data.kitchen_printers = settings.kitchenPrinters || [];
@@ -523,6 +527,10 @@ export async function fetchSettingsFromCloud(): Promise<AppSettings | null> {
       themeShades: data.theme_shades || undefined,
       tableFeaturesEnabled: data.table_features?.enabled || false,
       availableTableNumbers: data.table_features?.tables || ['Meja 1', 'Meja 2', 'Meja 3', 'Meja 4', 'Meja 5'],
+      receiptHeader: data.receipt_header || undefined,
+      receiptFooter: data.receipt_footer || undefined,
+      receiptAsciiOnly: data.receipt_ascii_only || false,
+      autoPrintReceipt: data.auto_print_receipt || false,
     };
   } catch (e) {
     console.warn('[CloudSync] Fetch settings failed:', e);
