@@ -348,6 +348,21 @@ export function subscribeToInventory(callback: (payload: any) => void) {
   return channel;
 }
 
+export function subscribeToCashMovements(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-cash-movements-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'cash_movements' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 // ============================================================
 // INVENTORY
 // ============================================================
