@@ -136,13 +136,13 @@ export async function runMigrations() {
       migrationNeeded.tableNumber = true;
     }
 
-    // Migration 13: Add tax_enabled column to settings table
-    const { error: taxEnabledError } = await supabase.from('settings').select('tax_enabled').limit(1);
-    if (taxEnabledError && taxEnabledError.message.includes('tax_enabled')) {
-      console.warn('[Migration] Column "tax_enabled" missing in settings table.');
+    // Migration 14: Add demo_mode column to settings table
+    const { error: demoModeError } = await supabase.from('settings').select('demo_mode').limit(1);
+    if (demoModeError && demoModeError.message.includes('demo_mode')) {
+      console.warn('[Migration] Column "demo_mode" missing in settings table.');
       console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
-      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;');
-      migrationNeeded.taxEnabled = true;
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS demo_mode BOOLEAN DEFAULT TRUE;');
+      migrationNeeded.demoMode = true;
     }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
@@ -150,7 +150,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -318,6 +318,36 @@ export function subscribeToStockOpnames(callback: (payload: any) => void) {
   return channel;
 }
 
+export function subscribeToMenus(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-menus-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'menus' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
+export function subscribeToInventory(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-inventory-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'inventory' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 // ============================================================
 // INVENTORY
 // ============================================================
@@ -364,7 +394,7 @@ export async function syncMenu(menu: Menu) {
     price: menu.price,
     image: menu.image,
     is_best_seller: menu.isBestSeller,
-    is_available: menu.isAvailable,
+    is_available: menu.isAvailable !== false,
     ingredients: menu.ingredients,
     available_addons: menu.availableAddons,
     description: menu.description,
@@ -491,12 +521,14 @@ export async function syncSettings(settings: AppSettings) {
     printer_width: settings.printerWidth,
     auto_print_on_checkout: settings.autoPrintOnCheckout,
     super_admin_pin: settings.superAdminPin,
-    demo_mode: settings.demoMode,
     receipt_header: settings.receiptHeader || null,
     receipt_footer: settings.receiptFooter || null,
     receipt_ascii_only: settings.receiptAsciiOnly ?? false,
     auto_print_receipt: settings.autoPrintReceipt ?? false,
   };
+  if (!migrationNeeded.demoMode) {
+    data.demo_mode = settings.demoMode;
+  }
   if (!migrationNeeded.kitchenPrinters) {
     data.kitchen_printers = settings.kitchenPrinters || [];
   }

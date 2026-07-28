@@ -9,7 +9,7 @@ import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
 import { useState, useMemo, useEffect } from 'react';
-import { getQueueLength, setQueueChangeListener } from '../lib/offlineQueue';
+import { getQueueLength, setQueueChangeListener, flushQueue } from '../lib/offlineQueue';
 import Modal from './Modal';
 import PrinterStatusBanner from './PrinterStatusBanner';
 import {
@@ -323,11 +323,24 @@ export default function Layout() {
 
         {/* Cloud sync status */}
         {!sidebarCollapsed && cloudStatus !== 'disabled' && (
-          <div className={`mx-3 mb-2 px-3 py-1.5 rounded-lg flex items-center justify-between text-xs ${
-            cloudStatus === 'connected' ? 'bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400' :
-            cloudStatus === 'disconnected' ? 'bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400' :
-            'bg-slate-50 dark:bg-slate-900 text-slate-400 dark:text-slate-500'
-          }`}>
+          <button
+            onClick={async () => {
+              if (queueLength > 0) {
+                const res = await flushQueue();
+                if (res.success > 0) {
+                  alert(`Berhasil mengirim ${res.success} data ke Cloud! 🎉`);
+                } else if (res.failed > 0) {
+                  alert(`Gagal mengirim data ke Cloud (${res.failed} gagal). Pastikan skema database Supabase sudah di-update.`);
+                }
+              }
+            }}
+            className={`w-[calc(100%-1.5rem)] mx-3 mb-2 px-3 py-1.5 rounded-lg flex items-center justify-between text-xs transition ${
+              cloudStatus === 'connected' ? 'bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/30' :
+              cloudStatus === 'disconnected' ? 'bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400' :
+              'bg-slate-50 dark:bg-slate-900 text-slate-400 dark:text-slate-500'
+            }`}
+            title={queueLength > 0 ? `${queueLength} operasi sync tertunda. Klik untuk coba sinkronisasi manual ke Supabase.` : 'Cloud Sync Aktif'}
+          >
             <div className="flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${
                 cloudStatus === 'connected' ? 'bg-blue-500' :
@@ -337,11 +350,11 @@ export default function Layout() {
               <span>{cloudStatus === 'connected' ? 'Cloud Sync' : cloudStatus === 'disconnected' ? 'Offline' : 'Connecting...'}</span>
             </div>
             {queueLength > 0 && (
-              <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500 text-white rounded-full animate-pulse" title={`${queueLength} operasi sync tertunda`}>
+              <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500 text-white rounded-full animate-pulse">
                 {queueLength}
               </span>
             )}
-          </div>
+          </button>
         )}
 
         {/* Collapse & Theme toggles */}
