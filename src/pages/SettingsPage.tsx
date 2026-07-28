@@ -250,6 +250,16 @@ export default function SettingsPage() {
       address: storeAddress,
       storeLogo: storeLogo || undefined,
     });
+    if (currentUser) {
+      addLog(
+        currentUser.id,
+        currentUser.name,
+        currentUser.role,
+        'update_settings',
+        `Update Pengaturan Toko: Nama=${storeName}, Alamat=${storeAddress}`
+      );
+    }
+    alert('Pengaturan Toko berhasil disimpan! 🎉');
   };
 
   const openAddUser = () => {
