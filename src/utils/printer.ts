@@ -291,76 +291,137 @@ async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Prom
 // ============================================================
 
 export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', preOpenedWindow?: Window | null) {
-  const fontSize = width === '58mm' ? '10px' : '12px';
+  const fontSize = width === '58mm' ? '11px' : '12px';
   const paperWidth = width === '58mm' ? '48mm' : '72mm';
-  const separator = width === '58mm' ? '-'.repeat(32) : '-'.repeat(42);
-
   const dateStr = new Date(data.date).toLocaleString('id-ID');
 
-  let lines: string[] = [];
-
-  // Header
-  if (data.isReprint) {
-    lines.push(center('*** CETAK ULANG ***', width));
-  }
-  lines.push(center(data.storeName, width));
-  if (data.storeAddress) lines.push(center(data.storeAddress, width));
-  if (data.receiptHeader) lines.push(center(data.receiptHeader, width));
-  lines.push(separator);
-
-  // Transaction info
-  const orderHeader = getOrderTypeHeaderLines(data.orderType, data.tableNumber);
-  lines.push(leftRight(`No: #${data.queueNumber}`, orderHeader.line1, width));
-  if (orderHeader.line2) {
-    lines.push(leftRight(`Tgl: ${dateStr}`, orderHeader.line2, width));
-  } else {
-    lines.push(`Tgl: ${dateStr}`);
-  }
-  lines.push(`Kasir: ${data.cashierName}`);
-  if (data.customerName) lines.push(`Pelanggan: ${data.customerName}`);
-  lines.push(separator);
-
-  // Items
-  for (const item of data.items) {
+  const itemsHtml = data.items.map((item) => {
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
-    lines.push(`${item.name}`);
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
-    if (detailStr) {
-      lines.push(`  ${detailStr}`);
-    }
-    lines.push(`  ${item.quantity}x ${formatRupiah(item.basePrice + item.addons.reduce((a, b) => a + b.price, 0))}${padLeft(formatRupiah(item.subtotal), width)}`);
-  }
+    const unitPrice = item.basePrice + item.addons.reduce((a, b) => a + b.price, 0);
 
-  lines.push(separator);
+    return `
+      <div class="item-row">
+        <div class="font-bold">${item.name}</div>
+        ${detailStr ? `<div class="item-details">${detailStr}</div>` : ''}
+        <div class="flex-between">
+          <span style="padding-left: 4px;">${item.quantity}x ${formatRupiah(unitPrice)}</span>
+          <span class="font-bold">${formatRupiah(item.subtotal)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 
-  // Totals
-  lines.push(leftRight('Subtotal', formatRupiah(data.subtotal), width));
-  if (data.discount > 0) {
-    lines.push(leftRight('Diskon', `-${formatRupiah(data.discount)}`, width));
-  }
-  if (data.tax && data.tax > 0) {
-    lines.push(leftRight('Pajak', formatRupiah(data.tax), width));
-  }
-  lines.push(leftRight('TOTAL', formatRupiah(data.total), width));
-  lines.push(separator);
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Struk #${data.queueNumber}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: 'Courier New', Courier, monospace;
+          font-size: ${fontSize};
+          width: ${paperWidth};
+          margin: 0 auto;
+          padding: 4mm 2mm;
+          color: #000;
+          background: #fff;
+          line-height: 1.3;
+        }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .font-bold { font-weight: bold; }
+        .uppercase { text-transform: uppercase; }
+        .divider { border-bottom: 1px dashed #000; margin: 6px 0; }
+        .flex-between { display: flex; justify-content: space-between; align-items: flex-start; }
+        .item-row { margin-bottom: 5px; }
+        .item-details { font-size: 90%; color: #444; padding-left: 4px; }
+        .logo-container { text-align: center; margin-bottom: 6px; }
+        .logo-img { max-height: 48px; max-width: 100%; object-fit: contain; }
+        @media print {
+          @page { margin: 0; size: ${width} auto; }
+          body { width: 100%; padding: 2mm; }
+        }
+      </style>
+    </head>
+    <body>
+      ${data.storeLogo && data.showLogoOnReceipt !== false ? `<div class="logo-container"><img id="receipt-logo" src="${data.storeLogo}" class="logo-img" alt="Logo" /></div>` : ''}
+      
+      ${data.isReprint ? `<div class="text-center font-bold">*** CETAK ULANG ***</div>` : ''}
+      <div class="text-center font-bold uppercase" style="font-size: 110%;">${data.storeName}</div>
+      ${data.storeAddress ? `<div class="text-center" style="font-size: 90%;">${data.storeAddress}</div>` : ''}
+      ${data.receiptHeader ? `<div class="text-center" style="font-size: 90%; margin-top: 2px;">${data.receiptHeader}</div>` : ''}
+      
+      <div class="divider"></div>
+      
+      <div class="flex-between" style="font-size: 95%;">
+        <div>
+          <div>No: #${data.queueNumber}</div>
+          <div>Tgl: ${dateStr}</div>
+          <div>Kasir: ${data.cashierName}</div>
+          ${data.customerName ? `<div>Pelanggan: ${data.customerName}</div>` : ''}
+        </div>
+        <div class="text-right font-bold uppercase">
+          ${data.orderType ? `<div>${data.orderType}</div>` : ''}
+          ${data.tableNumber ? `<div>${data.tableNumber}</div>` : ''}
+        </div>
+      </div>
+      
+      <div class="divider"></div>
+      
+      <div style="margin: 4px 0;">
+        ${itemsHtml}
+      </div>
+      
+      <div class="divider"></div>
+      
+      <div style="font-size: 95%;">
+        <div class="flex-between"><span>Subtotal</span><span>${formatRupiah(data.subtotal)}</span></div>
+        ${data.discount > 0 ? `<div class="flex-between"><span>Diskon</span><span>-${formatRupiah(data.discount)}</span></div>` : ''}
+        ${data.tax && data.tax > 0 ? `<div class="flex-between"><span>Pajak</span><span>${formatRupiah(data.tax)}</span></div>` : ''}
+        <div class="flex-between font-bold" style="font-size: 105%; margin-top: 2px;"><span>TOTAL</span><span>${formatRupiah(data.total)}</span></div>
+      </div>
+      
+      <div class="divider"></div>
+      
+      <div style="font-size: 95%;">
+        <div class="flex-between"><span>Bayar (${data.paymentMethod})</span><span>${formatRupiah(data.cashReceived || data.total)}</span></div>
+        ${data.paymentMethod === 'Cash' && data.change !== undefined ? `<div class="flex-between"><span>Kembali</span><span>${formatRupiah(data.change)}</span></div>` : ''}
+      </div>
+      
+      <div class="divider"></div>
+      
+      <div class="text-center" style="margin-top: 6px; font-size: 90%;">
+        ${data.receiptFooter ? data.receiptFooter : 'Terima kasih atas kunjungan Anda!'}
+      </div>
 
-  // Payment
-  lines.push(leftRight(`Bayar (${data.paymentMethod})`, formatRupiah(data.cashReceived || data.total), width));
-  if (data.paymentMethod === 'Cash' && data.change !== undefined) {
-    lines.push(leftRight('Kembali', formatRupiah(data.change), width));
-  }
-
-  lines.push(separator);
-  lines.push('');
-  if (data.receiptFooter) {
-    lines.push(center(data.receiptFooter, width));
-  } else {
-    lines.push(center('Terima kasih!', width));
-    lines.push(center('Semoga sehat selalu', width));
-  }
-  lines.push('');
+      <script>
+        function triggerPrint() {
+          window.focus();
+          window.print();
+          setTimeout(function() { window.close(); }, 1200);
+        }
+        window.onload = function() {
+          var img = document.getElementById('receipt-logo');
+          if (img) {
+            if (img.complete && img.naturalWidth !== 0) {
+              triggerPrint();
+            } else {
+              img.onload = triggerPrint;
+              img.onerror = triggerPrint;
+              setTimeout(triggerPrint, 1000);
+            }
+          } else {
+            triggerPrint();
+          }
+        };
+      </script>
+    </body>
+    </html>
+  `;
 
   // Use pre-opened window if available, otherwise open a new one
   const printWindow = preOpenedWindow || window.open('', '_blank', 'width=400,height=600');
@@ -369,34 +430,8 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
     return;
   }
 
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Struk #${data.queueNumber}</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Courier New', monospace; font-size: ${fontSize}; width: ${paperWidth}; margin: 0 auto; padding: 4mm 2mm; color: #000; }
-        pre { white-space: pre-wrap; word-break: break-all; line-height: 1.4; font-family: inherit; }
-        @media print {
-          @page { margin: 0; size: ${width} auto; }
-          body { width: 100%; padding: 2mm; }
-        }
-      </style>
-    </head>
-    <body>
-      ${data.storeLogo && data.showLogoOnReceipt !== false ? `<div style="text-align: center; margin-bottom: 6px;"><img src="${data.storeLogo}" style="max-height: 48px; max-width: 100%; object-fit: contain;" /></div>` : ''}
-      <pre>${lines.join('\n')}</pre>
-    </body>
-    </html>
-  `);
+  printWindow.document.write(html);
   printWindow.document.close();
-
-  setTimeout(() => {
-    printWindow.focus();
-    printWindow.print();
-    setTimeout(() => printWindow.close(), 1000);
-  }, 300);
 }
 
 // ============================================================
