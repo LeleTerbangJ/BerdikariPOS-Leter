@@ -318,6 +318,36 @@ export function subscribeToStockOpnames(callback: (payload: any) => void) {
   return channel;
 }
 
+export function subscribeToMenus(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-menus-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'menus' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
+export function subscribeToInventory(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-inventory-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'inventory' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 // ============================================================
 // INVENTORY
 // ============================================================
@@ -364,7 +394,7 @@ export async function syncMenu(menu: Menu) {
     price: menu.price,
     image: menu.image,
     is_best_seller: menu.isBestSeller,
-    is_available: menu.isAvailable,
+    is_available: menu.isAvailable !== false,
     ingredients: menu.ingredients,
     available_addons: menu.availableAddons,
     description: menu.description,
