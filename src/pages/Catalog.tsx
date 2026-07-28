@@ -8,6 +8,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
 import { calculateMenuHPP } from '../utils/hpp';
+import { processAndUploadMenuImage } from '../utils/imageUpload';
 import type { Menu, AddOn } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -77,6 +78,7 @@ export default function Catalog() {
   const [formPrice, setFormPrice] = useState('');
   const [formBestSeller, setFormBestSeller] = useState(false);
   const [formImage, setFormImage] = useState('');
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [formIngredients, setFormIngredients] = useState<{ invId: string; amount: string }[]>([]);
   const [formAddons, setFormAddons] = useState<{ name: string; price: string }[]>([]);
   const [formManualHpp, setFormManualHpp] = useState('');
@@ -459,24 +461,30 @@ export default function Catalog() {
               {formImage && (
                 <img src={formImage} alt="Preview" className="w-16 h-16 rounded-xl object-cover border border-slate-200" />
               )}
-              <label className="btn-secondary text-xs cursor-pointer">
-                {formImage ? 'Ganti Foto' : 'Upload Foto'}
+              <label className={`btn-secondary text-xs cursor-pointer ${isUploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                {isUploadingImage ? 'Memproses Foto...' : formImage ? 'Ganti Foto' : 'Upload Foto'}
                 <input
                   type="file"
                   accept="image/*"
+                  disabled={isUploadingImage}
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    if (file.size > 500 * 1024) { alert('Maks 500KB'); return; }
-                    const reader = new FileReader();
-                    reader.onload = (ev) => setFormImage(ev.target?.result as string);
-                    reader.readAsDataURL(file);
-                    e.target.value = '';
+                    try {
+                      setIsUploadingImage(true);
+                      const imageUrl = await processAndUploadMenuImage(file);
+                      setFormImage(imageUrl);
+                    } catch (err) {
+                      alert('Gagal memproses foto produk');
+                    } finally {
+                      setIsUploadingImage(false);
+                      e.target.value = '';
+                    }
                   }}
                 />
               </label>
-              {formImage && (
+              {formImage && !isUploadingImage && (
                 <button onClick={() => setFormImage('')} className="text-xs text-red-500 hover:underline">Hapus</button>
               )}
             </div>
