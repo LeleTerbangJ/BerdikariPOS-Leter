@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useCashMovementStore } from '../store/cashMovementStore';
 import { useAuthStore } from '../store/authStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useAuditLogStore } from '../store/auditLogStore';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate } from '../utils/format';
 import type { CashMovement, CashMovementType } from '../types';
 import Modal from '../components/Modal';
@@ -41,10 +42,23 @@ const CATEGORIES_OUT = [
 type DateFilterType = 'today' | 'week' | 'month' | 'all';
 
 export default function CashMovements() {
-  const { movements, addMovement, updateMovement, deleteMovement } = useCashMovementStore();
+  const { movements, addMovement, updateMovement, deleteMovement, loadFromCloud } = useCashMovementStore();
   const { currentUser } = useAuthStore();
   const { activeShift } = useShiftStore();
   const { addLog } = useAuditLogStore();
+
+  // Real-time sync for cash movements
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    loadFromCloud();
+    const channel = supabase
+      .channel('cash-movements-rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_movements' }, () => {
+        loadFromCloud();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
   const [searchQuery, setSearchQuery] = useState('');
