@@ -9,7 +9,7 @@ import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
 import { useState, useMemo, useEffect } from 'react';
-import { getQueueLength, setQueueChangeListener, flushQueue } from '../lib/offlineQueue';
+import { getQueueLength, setQueueChangeListener, flushQueue, clearQueue } from '../lib/offlineQueue';
 import Modal from './Modal';
 import PrinterStatusBanner from './PrinterStatusBanner';
 import {
@@ -327,10 +327,16 @@ export default function Layout() {
             onClick={async () => {
               if (queueLength > 0) {
                 const res = await flushQueue();
-                if (res.success > 0) {
+                if (res.success > 0 && res.failed === 0) {
                   alert(`Berhasil mengirim ${res.success} data ke Cloud! 🎉`);
+                } else if (res.success > 0 && res.failed > 0) {
+                  alert(`Berhasil sync ${res.success} data, tersisa ${res.failed} data tertunda.`);
                 } else if (res.failed > 0) {
-                  alert(`Gagal mengirim data ke Cloud (${res.failed} gagal). Pastikan skema database Supabase sudah di-update.`);
+                  const shouldClear = window.confirm(`Gagal mengirim data ke Cloud (${res.failed} gagal tersangkut data lama).\n\nApakah Anda ingin membersihkan (hapus) antrean data lama yang tersangkut?`);
+                  if (shouldClear) {
+                    clearQueue();
+                    alert('Antrean tersangkut berhasil dibersihkan! ✨');
+                  }
                 }
               }
             }}
