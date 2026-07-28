@@ -15,7 +15,7 @@ import { useCashMovementStore } from './store/cashMovementStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, unsubscribeChannel } from './lib/cloudSync';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, unsubscribeChannel } from './lib/cloudSync';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
 import ToastContainer from './components/ToastContainer';
@@ -139,7 +139,7 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
 
-    const channel = subscribeToUsers((payload: any) => {
+    const userChannel = subscribeToUsers((payload: any) => {
       if (payload.new && payload.new.id === currentUser.id) {
         const localActiveSessionId = currentUser.activeSessionId;
         const newActiveSessionId = payload.new.active_session_id;
@@ -153,8 +153,14 @@ export default function App() {
       }
     });
 
+    // Realtime settings subscription: sync Manager PIN & app settings immediately across devices
+    const settingsChannel = subscribeToSettings(() => {
+      useSettingsStore.getState().loadFromCloud();
+    });
+
     return () => {
-      if (channel) unsubscribeChannel(channel);
+      if (userChannel) unsubscribeChannel(userChannel);
+      if (settingsChannel) unsubscribeChannel(settingsChannel);
     };
   }, [currentUser]);
 
