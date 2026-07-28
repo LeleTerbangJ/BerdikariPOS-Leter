@@ -479,8 +479,8 @@ export default function Transactions() {
                           <span className="font-medium dark:text-slate-200">{formatRupiah(item.subtotal)}</span>
                         </div>
 
-                        {/* Snapshot Recipe (BOM) Breakdown */}
-                        {item.recipeSnapshot && item.recipeSnapshot.length > 0 && (
+                        {/* Snapshot Recipe (BOM) Breakdown - Manager Only */}
+                        {currentUser?.role === 'Manager' && item.recipeSnapshot && item.recipeSnapshot.length > 0 && (
                           <div className="mt-1.5 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50 text-xs">
                             <div className="flex items-center justify-between font-semibold text-slate-600 dark:text-slate-300 mb-1">
                               <span>📦 Snapshot Recipe (BOM):</span>
@@ -516,17 +516,22 @@ export default function Transactions() {
                       </div>
                     )}
 
-                    <div className="flex justify-between items-center pt-1">
-                      <span>Total HPP Snapshot (COGS):</span>
-                      <span className="font-bold text-slate-700 dark:text-slate-300">{formatRupiah(tx.cogs ?? tx.hpp)}</span>
-                    </div>
+                    {/* HPP & Gross Profit - Manager Only */}
+                    {currentUser?.role === 'Manager' && (
+                      <>
+                        <div className="flex justify-between items-center pt-1">
+                          <span>Total HPP Snapshot (COGS):</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{formatRupiah(tx.cogs ?? tx.hpp)}</span>
+                        </div>
 
-                    <div className="flex justify-between items-center">
-                      <span>Estimasi Laba Kotor (Gross Profit):</span>
-                      <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                        {formatRupiah(tx.grossProfit ?? ((tx.subtotal - tx.discount) - tx.hpp))}
-                      </span>
-                    </div>
+                        <div className="flex justify-between items-center">
+                          <span>Estimasi Laba Kotor (Gross Profit):</span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                            {formatRupiah(tx.grossProfit ?? ((tx.subtotal - tx.discount) - tx.hpp))}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Actions */}
