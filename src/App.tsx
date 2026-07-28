@@ -15,7 +15,7 @@ import { useCashMovementStore } from './store/cashMovementStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, unsubscribeChannel } from './lib/cloudSync';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, unsubscribeChannel } from './lib/cloudSync';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
 import ToastContainer from './components/ToastContainer';
@@ -158,9 +158,21 @@ export default function App() {
       useSettingsStore.getState().loadFromCloud();
     });
 
+    // Global Realtime subscription for menus across all devices
+    const menuChannel = subscribeToMenus(() => {
+      useMenuStore.getState().loadFromCloud(true);
+    });
+
+    // Global Realtime subscription for inventory across all devices
+    const inventoryChannel = subscribeToInventory(() => {
+      useInventoryStore.getState().loadFromCloud(true);
+    });
+
     return () => {
       if (userChannel) unsubscribeChannel(userChannel);
       if (settingsChannel) unsubscribeChannel(settingsChannel);
+      if (menuChannel) unsubscribeChannel(menuChannel);
+      if (inventoryChannel) unsubscribeChannel(inventoryChannel);
     };
   }, [currentUser]);
 
