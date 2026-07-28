@@ -140,6 +140,31 @@ export async function flushQueue(): Promise<{ success: number; failed: number }>
       }
 
       if (error) {
+        // Self-healing: If error is due to missing column in DB schema, strip bad column & retry immediately
+        if (typeof error.message === 'string') {
+          const missingColMatch = error.message.match(/column ["']?([a-zA-Z0-9_]+)["']? of relation/i) ||
+                                  error.message.match(/Could not find the ["']?([a-zA-Z0-9_]+)["']? column/i) ||
+                                  error.message.match(/column ["']?([a-zA-Z0-9_]+)["']? does not exist/i);
+          if (missingColMatch && missingColMatch[1] && op.data && op.data[missingColMatch[1]] !== undefined) {
+            const badCol = missingColMatch[1];
+            console.warn(`[OfflineQueue] Self-healing: Stripping missing column "${badCol}" from queued ${op.table} payload...`);
+            delete op.data[badCol];
+            let retryErr: any = null;
+            if (op.action === 'upsert') {
+              ({ error: retryErr } = await supabase.from(op.table).upsert(op.data));
+            } else if (op.action === 'update' && op.filter) {
+              ({ error: retryErr } = await supabase.from(op.table).update(op.data).eq(op.filter.column, op.filter.value));
+            } else if (op.action === 'insert') {
+              ({ error: retryErr } = await supabase.from(op.table).insert(op.data));
+            }
+            if (!retryErr) {
+              error = null; // Self-healed successfully!
+            }
+          }
+        }
+      }
+
+      if (error) {
         op.retries++;
         if (op.retries < MAX_RETRIES) {
           remaining.push(op);
@@ -164,6 +189,11 @@ export async function flushQueue(): Promise<{ success: number; failed: number }>
 
   console.log(`[OfflineQueue] Done. Success: ${success}, Failed: ${failed}, Remaining: ${remaining.length}`);
   return { success, failed };
+}
+
+export function clearQueue() {
+  saveQueue([]);
+  updateQueueCount();
 }
 
 // ============================================================
