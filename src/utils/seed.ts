@@ -60,7 +60,7 @@ export const seedInventory: InventoryItem[] = [
 
 export const seedMenus: Menu[] = [
   {
-    id: 'seed-menu-kunyit-asam',
+    id: 'a0000000-0000-4000-a000-000000000001',
     name: 'Kunyit Asam Signature',
     category: 'Jamu Murni',
     price: 18000,
@@ -73,7 +73,7 @@ export const seedMenus: Menu[] = [
     ],
   },
   {
-    id: 'seed-menu-beras-kencur',
+    id: 'a0000000-0000-4000-a000-000000000002',
     name: 'Beras Kencur',
     category: 'Jamu Murni',
     price: 16000,
@@ -83,7 +83,7 @@ export const seedMenus: Menu[] = [
     availableAddons: [{ name: 'Ekstra Madu', price: 5000 }],
   },
   {
-    id: 'seed-menu-wedang-jahe',
+    id: 'a0000000-0000-4000-a000-000000000003',
     name: 'Wedang Jahe',
     category: 'Wedang',
     price: 15000,
@@ -95,7 +95,7 @@ export const seedMenus: Menu[] = [
     ],
   },
   {
-    id: 'seed-menu-temulawak-madu',
+    id: 'a0000000-0000-4000-a000-000000000004',
     name: 'Temulawak Madu',
     category: 'Jamu Murni',
     price: 20000,
@@ -103,7 +103,7 @@ export const seedMenus: Menu[] = [
     availableAddons: [{ name: 'Lemon', price: 3000 }],
   },
   {
-    id: 'seed-menu-wedang-uwuh',
+    id: 'a0000000-0000-4000-a000-000000000005',
     name: 'Wedang Uwuh',
     category: 'Wedang',
     price: 17000,
@@ -111,7 +111,7 @@ export const seedMenus: Menu[] = [
     availableAddons: [{ name: 'Ekstra Madu', price: 5000 }],
   },
   {
-    id: 'seed-menu-golden-milk',
+    id: 'a0000000-0000-4000-a000-000000000006',
     name: 'Golden Milk',
     category: 'Signature',
     price: 25000,
@@ -124,7 +124,7 @@ export const seedMenus: Menu[] = [
     ],
   },
   {
-    id: 'seed-menu-jeruk-nipis',
+    id: 'a0000000-0000-4000-a000-000000000007',
     name: 'Jeruk Nipis Peras',
     category: 'Segar',
     price: 14000,
@@ -132,7 +132,7 @@ export const seedMenus: Menu[] = [
     availableAddons: [{ name: 'Ekstra Madu', price: 5000 }],
   },
   {
-    id: 'seed-menu-lemon-jahe',
+    id: 'a0000000-0000-4000-a000-000000000008',
     name: 'Lemon Jahe',
     category: 'Segar',
     price: 16000,
