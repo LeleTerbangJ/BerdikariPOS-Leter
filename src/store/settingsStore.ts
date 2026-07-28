@@ -63,9 +63,22 @@ export const useSettingsStore = create<SettingsState>()(
         if (cloudSettings) {
           set((s: SettingsState) => {
             const merged = { ...s.settings };
-            // Cloud settings take precedence for all synced keys across devices
+            // Printer settings are device-specific (hardware bound) and should NOT be overwritten by cloud
+            const LOCAL_PRINTER_KEYS = [
+              'printerEnabled',
+              'printerType',
+              'printerWidth',
+              'autoPrintOnCheckout',
+              'cashierBluetoothDeviceId',
+              'cashierBluetoothDeviceName',
+              'kitchenPrinters',
+              'autoPrintReceipt',
+              'autoPrintKitchen',
+              'showLogoOnReceipt',
+            ];
             Object.keys(cloudSettings).forEach((k) => {
               const key = k as keyof AppSettings;
+              if (LOCAL_PRINTER_KEYS.includes(key as string)) return; // Keep device local printer setup!
               const cloudVal = cloudSettings[key];
               if (cloudVal !== undefined && cloudVal !== null) {
                 (merged as any)[key] = cloudVal;
