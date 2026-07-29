@@ -766,9 +766,14 @@ export default function SettingsPage() {
         <div className="space-y-6">
           {/* Printer Settings */}
           <div className="card p-5">
-        <h2 className="font-bold text-lg flex items-center gap-2 mb-4">
-          <Printer size={18} /> Integrasi Printer Thermal
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-bold text-lg flex items-center gap-2">
+            <Printer size={18} /> Integrasi Printer Thermal
+          </h2>
+          <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/60">
+            📌 Disimpan Lokal per Perangkat
+          </span>
+        </div>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
