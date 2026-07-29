@@ -404,6 +404,14 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
   const dateStr = formatDateShort(data.date);
 
   const itemsHtml = data.items.map((item) => {
+    if (item.isBundleChild) {
+      return `
+        <div style="font-size: 85%; color: #555; padding-left: 12px; margin-bottom: 2px;">
+          - ${item.quantity}x ${item.name}
+        </div>
+      `;
+    }
+
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
@@ -412,7 +420,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
 
     return `
       <div class="item-row">
-        <div class="font-bold">${item.name}</div>
+        <div class="font-bold">${item.name} ${item.isBundle ? '<span style="font-size: 80%; font-weight: normal;">(Paket)</span>' : ''}</div>
         ${detailStr ? `<div class="item-details">${detailStr}</div>` : ''}
         <div class="flex-between">
           <span style="padding-left: 4px;">${item.quantity}x ${formatRupiah(unitPrice)}</span>
@@ -845,8 +853,9 @@ export async function printReceipt(
     const kitchenJobs = settings.kitchenPrinters
       .filter(kp => kp.enabled)
       .map(async (kp): Promise<PrintJobResult> => {
-        // Filter items by kitchen target
+        // Filter items by kitchen target (Bundles themselves are NEVER printed in kitchen, only child items)
         const matchingItems = data.items.filter((item) => {
+          if (item.isBundle) return false;
           const itemTarget = (item.kitchenTarget || '').trim().toLowerCase();
           const printerTarget = (kp.targetCategory || '').trim().toLowerCase();
           return itemTarget === printerTarget && printerTarget !== '';

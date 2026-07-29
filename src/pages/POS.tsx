@@ -14,6 +14,7 @@ import { AtomicTransactionEngine } from '../lib/atomicTransactionEngine';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
+import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
 import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType } from '../types';
@@ -345,8 +346,17 @@ export default function POS() {
       kitchenTarget: selectedMenu.kitchenTarget,
       showSugarLevel: selectedMenu.showSugarLevel !== false,
       showTemperature: selectedMenu.showTemperature !== false,
+      isBundle: selectedMenu.isBundle || false,
     };
-    cart.addItem(item);
+
+    if (selectedMenu.isBundle) {
+      item.bundleComponentsSnapshot = buildBundleComponentsSnapshot(selectedMenu, qty, menus, inventory);
+      const childItems = createBundleChildCartItems(item, selectedMenu, menus, inventory);
+      cart.addBundleItem(item, childItems);
+    } else {
+      cart.addItem(item);
+    }
+
     setSelectedMenu(null);
     addToast(`${selectedMenu.name} ditambahkan ke keranjang`, 'success');
   };
@@ -854,44 +864,58 @@ export default function POS() {
             </div>
           ) : (
             cart.items.map((item) => (
-              <div key={item.lineId} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3">
-                <div className="flex justify-between items-start mb-1">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate">{item.name}</p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}
-                      {item.addons.length > 0 && ` • +${item.addons.map((a) => a.name).join(', ')}`}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => cart.removeItem(item.lineId)}
-                    className="p-1 text-red-400 hover:text-red-650 transition"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+              item.isBundleChild ? (
+                <div key={item.lineId} className="pl-4 py-1.5 border-l-2 border-brand-400/50 my-1 bg-amber-50/40 dark:bg-slate-900/30 rounded-r-lg flex items-center justify-between text-xs">
+                  <span className="text-slate-600 dark:text-slate-400 font-medium flex items-center gap-1.5">
+                    <span className="text-brand-500 font-bold">↳</span> {item.quantity}x {item.name} <span className="text-[10px] text-slate-400 font-normal">(Isi Paket)</span>
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-500">{item.kitchenTarget || 'Dapur'}</span>
                 </div>
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center gap-2">
+              ) : (
+                <div key={item.lineId} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate flex items-center gap-1.5">
+                        <span>{item.name}</span>
+                        {item.isBundle && (
+                          <span className="badge bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] px-1.5 py-0.5">📦 PAKET</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}
+                        {item.addons.length > 0 && ` • +${item.addons.map((a) => a.name).join(', ')}`}
+                      </p>
+                    </div>
                     <button
-                      onClick={() => {
-                        if (item.quantity <= 1) cart.removeItem(item.lineId);
-                        else cart.updateQuantity(item.lineId, item.quantity - 1);
-                      }}
-                      className="w-7 h-7 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center dark:text-slate-300 dark:hover:bg-slate-700 transition"
+                      onClick={() => cart.removeItem(item.lineId)}
+                      className="p-1 text-red-400 hover:text-red-650 transition"
                     >
-                      <Minus size={12} />
-                    </button>
-                    <span className="text-sm font-semibold w-5 text-center text-slate-800 dark:text-slate-200">{item.quantity}</span>
-                    <button
-                      onClick={() => cart.updateQuantity(item.lineId, item.quantity + 1)}
-                      className="w-7 h-7 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center dark:text-slate-300 dark:hover:bg-slate-700 transition"
-                    >
-                      <Plus size={12} />
+                      <Trash2 size={14} />
                     </button>
                   </div>
-                  <p className="font-semibold text-sm text-brand-700 dark:text-brand-400">{formatRupiah(item.subtotal)}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          if (item.quantity <= 1) cart.removeItem(item.lineId);
+                          else cart.updateQuantity(item.lineId, item.quantity - 1);
+                        }}
+                        className="w-7 h-7 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center dark:text-slate-300 dark:hover:bg-slate-700 transition"
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span className="text-sm font-semibold w-5 text-center text-slate-800 dark:text-slate-200">{item.quantity}</span>
+                      <button
+                        onClick={() => cart.updateQuantity(item.lineId, item.quantity + 1)}
+                        className="w-7 h-7 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center dark:text-slate-300 dark:hover:bg-slate-700 transition"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                    <p className="font-semibold text-sm text-brand-700 dark:text-brand-400">{formatRupiah(item.subtotal)}</p>
+                  </div>
                 </div>
-              </div>
+              )
             ))
           )}
         </div>

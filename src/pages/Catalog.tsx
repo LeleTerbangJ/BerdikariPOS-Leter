@@ -8,7 +8,10 @@ import { useSettingsStore } from '../store/settingsStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
 import { calculateMenuHPP } from '../utils/hpp';
-import type { Menu, AddOn } from '../types';
+import { validateMenuComponent } from '../lib/bundleValidation';
+import { calculateBundleHPP } from '../lib/bundleService';
+import { processAndUploadMenuImage } from '../utils/imageUpload';
+import type { Menu, AddOn, ComponentType } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToastStore } from '../store/toastStore';
@@ -72,17 +75,21 @@ export default function Catalog() {
   const [deleteMenuId, setDeleteMenuId] = useState<string | null>(null);
 
   // Form state
+  const { menuComponents, addComponent } = useMenuStore();
   const [formName, setFormName] = useState('');
   const [formCategory, setFormCategory] = useState('');
   const [formPrice, setFormPrice] = useState('');
   const [formBestSeller, setFormBestSeller] = useState(false);
   const [formImage, setFormImage] = useState('');
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [formIngredients, setFormIngredients] = useState<{ invId: string; amount: string }[]>([]);
   const [formAddons, setFormAddons] = useState<{ name: string; price: string }[]>([]);
   const [formManualHpp, setFormManualHpp] = useState('');
   const [formKitchenTarget, setFormKitchenTarget] = useState('');
   const [formShowSugarLevel, setFormShowSugarLevel] = useState(true);
   const [formShowTemperature, setFormShowTemperature] = useState(true);
+  const [formIsBundle, setFormIsBundle] = useState(false);
+  const [formComponents, setFormComponents] = useState<{ childType: ComponentType; childId: string; quantity: number }[]>([]);
 
   const allCategories = getCategories();
   const filterCategories = ['Semua', ...allCategories];
@@ -113,6 +120,8 @@ export default function Catalog() {
     setFormKitchenTarget('');
     setFormShowSugarLevel(true);
     setFormShowTemperature(true);
+    setFormIsBundle(false);
+    setFormComponents([]);
     setShowForm(true);
   };
 
@@ -136,6 +145,9 @@ export default function Catalog() {
     setFormKitchenTarget(menu.kitchenTarget || '');
     setFormShowSugarLevel(menu.showSugarLevel !== false);
     setFormShowTemperature(menu.showTemperature !== false);
+    setFormIsBundle(menu.isBundle || false);
+    const comps = menu.components || menuComponents.filter((c) => c.parentMenuId === menu.id);
+    setFormComponents(comps.map((c) => ({ childType: c.childType, childId: c.childId, quantity: c.quantity })));
     setShowForm(true);
   };
 
@@ -148,18 +160,33 @@ export default function Catalog() {
       .filter((a) => a.name && parseInt(a.price))
       .map((a) => ({ name: a.name, price: parseInt(a.price) }));
 
+    const targetMenuId = editId || uuid();
+    const components = formIsBundle
+      ? formComponents.map((c, idx) => ({
+          id: `${targetMenuId}-comp-${idx + 1}-${c.childId}`,
+          parentMenuId: targetMenuId,
+          childType: c.childType,
+          childId: c.childId,
+          quantity: c.quantity,
+          mode: 'Bundle' as const,
+          sortOrder: idx,
+        }))
+      : [];
+
     const data: Omit<Menu, 'id'> = {
       name: formName,
       category: formCategory,
       price: parseInt(formPrice) || 0,
       isBestSeller: formBestSeller,
       image: formImage || undefined,
-      ingredients,
+      ingredients: formIsBundle ? {} : ingredients,
       availableAddons: addons,
-      manualHpp: Object.keys(ingredients).length > 0 ? 0 : (parseInt(formManualHpp) || 0),
+      manualHpp: formIsBundle ? 0 : (Object.keys(ingredients).length > 0 ? 0 : (parseInt(formManualHpp) || 0)),
       kitchenTarget: formKitchenTarget || undefined,
       showSugarLevel: formShowSugarLevel,
       showTemperature: formShowTemperature,
+      isBundle: formIsBundle,
+      components,
     };
 
     if (editId) {
@@ -168,12 +195,13 @@ export default function Catalog() {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'update_menu', `Edit menu: ${formName}`, { menuId: editId });
       }
     } else {
-      const newId = uuid();
-      addMenu({ id: newId, ...data });
+      addMenu({ id: targetMenuId, ...data });
       if (currentUser) {
-        addLog(currentUser.id, currentUser.name, currentUser.role, 'create_menu', `Tambah menu: ${formName}`, { menuId: newId });
+        addLog(currentUser.id, currentUser.name, currentUser.role, 'create_menu', `Tambah menu: ${formName}`, { menuId: targetMenuId });
       }
     }
+
+    components.forEach((c) => addComponent(c));
     setShowForm(false);
   };
 
@@ -324,12 +352,15 @@ export default function Catalog() {
             </thead>
             <tbody>
               {paginated.map((menu) => {
-                const hpp = calculateMenuHPP(menu, inventory);
+                const hpp = menu.isBundle
+                  ? calculateBundleHPP(menu, menus, inventory)
+                  : calculateMenuHPP(menu, inventory);
                 const margin = menu.price - hpp;
                 return (
                   <tr key={menu.id} className="border-b border-slate-50 dark:border-slate-700/40 hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <td className="p-3 font-medium">
-                      {menu.name}
+                      <span>{menu.name}</span>
+                      {menu.isBundle && <span className="ml-2 badge bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] px-2 py-0.5 font-bold">📦 PAKET</span>}
                       {menu.isBestSeller && <span className="ml-2 text-amber-500">⭐</span>}
                       {menu.isAvailable === false && <span className="ml-2 badge bg-slate-100 text-slate-500 text-xs">Nonaktif</span>}
                     </td>
@@ -459,100 +490,201 @@ export default function Catalog() {
               {formImage && (
                 <img src={formImage} alt="Preview" className="w-16 h-16 rounded-xl object-cover border border-slate-200" />
               )}
-              <label className="btn-secondary text-xs cursor-pointer">
-                {formImage ? 'Ganti Foto' : 'Upload Foto'}
+              <label className={`btn-secondary text-xs cursor-pointer ${isUploadingImage ? 'opacity-50 pointer-events-none' : ''}`}>
+                {isUploadingImage ? 'Memproses Foto...' : formImage ? 'Ganti Foto' : 'Upload Foto'}
                 <input
                   type="file"
                   accept="image/*"
+                  disabled={isUploadingImage}
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    if (file.size > 500 * 1024) { alert('Maks 500KB'); return; }
-                    const reader = new FileReader();
-                    reader.onload = (ev) => setFormImage(ev.target?.result as string);
-                    reader.readAsDataURL(file);
-                    e.target.value = '';
+                    try {
+                      setIsUploadingImage(true);
+                      const imageUrl = await processAndUploadMenuImage(file);
+                      setFormImage(imageUrl);
+                    } catch (err) {
+                      alert('Gagal memproses foto produk');
+                    } finally {
+                      setIsUploadingImage(false);
+                      e.target.value = '';
+                    }
                   }}
                 />
               </label>
-              {formImage && (
+              {formImage && !isUploadingImage && (
                 <button onClick={() => setFormImage('')} className="text-xs text-red-500 hover:underline">Hapus</button>
               )}
             </div>
           </div>
 
-          {/* Ingredients */}
-          <div>
-            <label className="label">Komposisi Bahan (Opsional)</label>
-            {formIngredients.map((ing, idx) => (
-              <div key={idx} className="flex gap-2 mb-2">
-                <select
-                  value={ing.invId}
-                  onChange={(e) => {
-                    const arr = [...formIngredients];
-                    arr[idx].invId = e.target.value;
-                    setFormIngredients(arr);
-                  }}
-                  className="input flex-1"
-                >
-                  <option value="">Pilih bahan</option>
-                  {inventory.map((inv) => (
-                    <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
-                  ))}
-                </select>
-                <input
-                  value={ing.amount}
-                  onChange={(e) => {
-                    const arr = [...formIngredients];
-                    arr[idx].amount = e.target.value;
-                    setFormIngredients(arr);
-                  }}
-                  placeholder="Jumlah"
-                  className="input w-24"
-                />
-                <button onClick={() => setFormIngredients(formIngredients.filter((_, i) => i !== idx))} className="p-2 text-red-400">
-                  <X size={16} />
-                </button>
+          {/* Bundle Toggle */}
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl space-y-1">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-sm text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                  📦 Menu Paket / Combo Bundle
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  Aktifkan jika menu ini adalah gabungan beberapa produk (misal: Paket Lele + Nasi + Es Teh)
+                </p>
               </div>
-            ))}
-            <button
-              onClick={() => setFormIngredients([...formIngredients, { invId: '', amount: '' }])}
-              className="btn-ghost text-xs text-brand-600"
-            >
-              <Plus size={14} /> Tambah Bahan
-            </button>
+              <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                <input
+                  type="checkbox"
+                  checked={formIsBundle}
+                  onChange={(e) => setFormIsBundle(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-amber-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+              </label>
+            </div>
           </div>
 
-          {/* HPP Manual (Only visible if no ingredients are added) */}
-          {formIngredients.length === 0 ? (
-            <div>
-              <label className="label">HPP Manual (Rp)</label>
-              <input
-                value={formManualHpp}
-                onChange={(e) => setFormManualHpp(e.target.value.replace(/\D/g, ''))}
-                placeholder="Masukkan HPP untuk produk jadi (misal: Air Mineral)"
-                className="input"
-              />
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Gunakan HPP Manual jika produk tidak diproduksi dari komposisi bahan baku.
-              </span>
+          {formIsBundle ? (
+            /* Bundle Component Manager */
+            <div className="space-y-3 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+              <div className="flex justify-between items-center">
+                <label className="label mb-0 font-semibold">Isi Komponen Paket (Menu Produk)</label>
+                <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                  Estimasi HPP Paket: {formatRupiah(calculateBundleHPP({ id: editId || '', name: formName, category: formCategory, price: Number(formPrice) || 0, ingredients: {}, availableAddons: [], isBundle: true, components: formComponents.map((c, idx) => ({ id: `temp-${idx}`, parentMenuId: editId || '', childType: c.childType, childId: c.childId, quantity: c.quantity, mode: 'Bundle' })) }, menus, inventory))}
+                </span>
+              </div>
+
+              {formComponents.map((comp, idx) => (
+                <div key={idx} className="flex gap-2 items-center">
+                  <select
+                    value={comp.childId}
+                    onChange={(e) => {
+                      const childId = e.target.value;
+                      if (!childId) return;
+                      const validation = validateMenuComponent(
+                        editId || 'new',
+                        'Menu',
+                        childId,
+                        menus,
+                        formComponents.filter((_, i) => i !== idx).map((c) => ({ id: '', parentMenuId: '', childType: c.childType, childId: c.childId, quantity: c.quantity, mode: 'Bundle' }))
+                      );
+                      if (!validation.valid) {
+                        alert(validation.error);
+                        return;
+                      }
+                      const arr = [...formComponents];
+                      arr[idx].childId = childId;
+                      setFormComponents(arr);
+                    }}
+                    className="input flex-1 text-xs"
+                  >
+                    <option value="">-- Pilih Menu Isi Paket --</option>
+                    {menus.filter((m) => !m.isBundle && m.id !== editId).map((m) => (
+                      <option key={m.id} value={m.id}>{m.name} ({formatRupiah(m.price)})</option>
+                    ))}
+                  </select>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-slate-400">Qty:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={comp.quantity}
+                      onChange={(e) => {
+                        const q = Math.max(1, parseInt(e.target.value) || 1);
+                        const arr = [...formComponents];
+                        arr[idx].quantity = q;
+                        setFormComponents(arr);
+                      }}
+                      className="input w-16 text-center text-xs"
+                    />
+                  </div>
+                  <button onClick={() => setFormComponents(formComponents.filter((_, i) => i !== idx))} className="p-1.5 text-red-400 hover:text-red-600">
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => setFormComponents([...formComponents, { childType: 'Menu', childId: '', quantity: 1 }])}
+                className="btn-secondary text-xs"
+              >
+                <Plus size={14} /> Tambah Menu ke Paket
+              </button>
             </div>
           ) : (
-            <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">HPP Terhitung (dari Komposisi):</span>
-              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                {formatRupiah(
-                  formIngredients.reduce((total, ing) => {
-                    const item = inventory.find((i) => i.id === ing.invId);
-                    return total + (item ? item.costPerUnit * (parseFloat(ing.amount) || 0) : 0);
-                  }, 0)
-                )}
-              </p>
-              <span className="text-[10px] text-slate-400 mt-0.5 block">
-                HPP Manual dinonaktifkan karena komposisi bahan digunakan.
-              </span>
-            </div>
+            <>
+              {/* Ingredients */}
+              <div>
+                <label className="label">Komposisi Bahan (Opsional)</label>
+                {formIngredients.map((ing, idx) => (
+                  <div key={idx} className="flex gap-2 mb-2">
+                    <select
+                      value={ing.invId}
+                      onChange={(e) => {
+                        const arr = [...formIngredients];
+                        arr[idx].invId = e.target.value;
+                        setFormIngredients(arr);
+                      }}
+                      className="input flex-1"
+                    >
+                      <option value="">Pilih bahan</option>
+                      {inventory.map((inv) => (
+                        <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                      ))}
+                    </select>
+                    <input
+                      value={ing.amount}
+                      onChange={(e) => {
+                        const arr = [...formIngredients];
+                        arr[idx].amount = e.target.value;
+                        setFormIngredients(arr);
+                      }}
+                      placeholder="Jumlah"
+                      className="input w-24"
+                    />
+                    <button onClick={() => setFormIngredients(formIngredients.filter((_, i) => i !== idx))} className="p-2 text-red-400">
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setFormIngredients([...formIngredients, { invId: '', amount: '' }])}
+                  className="btn-ghost text-xs text-brand-600"
+                >
+                  <Plus size={14} /> Tambah Bahan
+                </button>
+              </div>
+
+              {/* HPP Manual (Only visible if no ingredients are added) */}
+              {formIngredients.length === 0 ? (
+                <div>
+                  <label className="label">HPP Manual (Rp)</label>
+                  <input
+                    value={formManualHpp}
+                    onChange={(e) => setFormManualHpp(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Masukkan HPP untuk produk jadi (misal: Air Mineral)"
+                    className="input"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    Gunakan HPP Manual jika produk tidak diproduksi dari komposisi bahan baku.
+                  </span>
+                </div>
+              ) : (
+                <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">HPP Terhitung (dari Komposisi):</span>
+                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                    {formatRupiah(
+                      formIngredients.reduce((total, ing) => {
+                        const item = inventory.find((i) => i.id === ing.invId);
+                        return total + (item ? item.costPerUnit * (parseFloat(ing.amount) || 0) : 0);
+                      }, 0)
+                    )}
+                  </p>
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    HPP Manual dinonaktifkan karena komposisi bahan digunakan.
+                  </span>
+                </div>
+              )}
+            </>
           )}
 
           {/* Add-ons */}

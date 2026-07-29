@@ -175,6 +175,7 @@ export default function Reports() {
     const map: Record<string, { revenue: number; qty: number }> = {};
     filteredTx.forEach((t) =>
       t.items.forEach((item) => {
+        if (item.isBundleChild) return; // Child bundle items are operational records only
         const menu = menus.find((m) => m.id === item.menuId);
         const cat = menu?.category || 'Lainnya';
         if (!map[cat]) map[cat] = { revenue: 0, qty: 0 };

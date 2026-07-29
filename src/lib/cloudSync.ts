@@ -10,6 +10,7 @@
 
 import { supabase, isSupabaseConfigured } from './supabase';
 import { smartUpsert, smartUpdate, smartDelete, smartInsert } from './offlineQueue';
+export { smartUpsert, smartUpdate, smartDelete, smartInsert };
 import type { 
   User, InventoryItem, Menu, Transaction, Customer, 
   CashierShift, Promo, AuditLogEntry, AppSettings, LoyaltySettings,
@@ -363,6 +364,21 @@ export function subscribeToCashMovements(callback: (payload: any) => void) {
   return channel;
 }
 
+export function subscribeToMenuComponents(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+
+  const channel = supabase
+    .channel('global-menu-components-realtime')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'menu_components' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 // ============================================================
 // INVENTORY
 // ============================================================
@@ -413,6 +429,7 @@ export async function syncMenu(menu: Menu) {
     ingredients: menu.ingredients,
     available_addons: menu.availableAddons,
     description: menu.description,
+    is_bundle: menu.isBundle || false,
   };
   // Only include manual_hpp if the column exists in DB
   if (!migrationNeeded.manualHpp) {
@@ -698,6 +715,7 @@ export async function fetchMenusFromCloud(): Promise<Menu[] | null> {
       showTemperature: (row.show_temperature !== undefined && row.show_temperature !== null)
         ? row.show_temperature
         : undefined,
+      isBundle: row.is_bundle || false,
     })) || null;
   } catch {
     return null;

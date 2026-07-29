@@ -1,14 +1,15 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Menu } from '../types';
+import type { Menu, MenuComponent, ComponentType, ComponentMode } from '../types';
 import { seedMenus } from '../utils/seed';
 import { syncMenu, deleteMenuCloud, fetchMenusFromCloud, syncCustomCategories, fetchCustomCategoriesFromCloud } from '../lib/cloudSync';
-
+import { fetchComponentsFromCloud, syncComponentToCloud, deleteComponentFromCloud } from '../lib/bundleRepository';
 import { useAuditLogStore } from './auditLogStore';
 import { useAuthStore } from './authStore';
 
 interface MenuState {
   menus: Menu[];
+  menuComponents: MenuComponent[];
   customCategories: string[];
   addMenu: (menu: Menu) => void;
   updateMenu: (id: string, data: Partial<Menu>) => void;
@@ -17,6 +18,10 @@ interface MenuState {
   getCategories: () => string[];
   addCategory: (cat: string) => void;
   deleteCategory: (cat: string) => void;
+  addComponent: (component: MenuComponent) => void;
+  updateComponent: (id: string, data: Partial<MenuComponent>) => void;
+  deleteComponent: (id: string) => void;
+  getComponentsByParent: (parentMenuId: string) => MenuComponent[];
   loadFromCloud: (fullSync?: boolean) => Promise<void>;
 }
 
@@ -24,7 +29,8 @@ export const useMenuStore = create<MenuState>()(
   persist(
     (set, get) => ({
       menus: seedMenus,
-      customCategories: ['Jamu Murni', 'Wedang', 'Signature', 'Segar'],
+      menuComponents: [],
+      customCategories: ['Jamu Murni', 'Wedang', 'Signature', 'Segar', 'Paket Combo'],
 
       addMenu: (menu) => {
         set((s) => ({ menus: [...s.menus, menu] }));
@@ -88,23 +94,84 @@ export const useMenuStore = create<MenuState>()(
         });
       },
 
+      addComponent: (component) => {
+        set((s) => {
+          const updated = [...s.menuComponents, component];
+          // Update parent menu components
+          const parentId = component.parentMenuId;
+          const parentComps = updated.filter((c) => c.parentMenuId === parentId);
+          const updatedMenus = s.menus.map((m) =>
+            m.id === parentId ? { ...m, components: parentComps } : m
+          );
+          return { menuComponents: updated, menus: updatedMenus };
+        });
+        syncComponentToCloud(component);
+        // Also sync updated parent menu
+        const parentMenu = get().menus.find((m) => m.id === component.parentMenuId);
+        if (parentMenu) syncMenu(parentMenu);
+      },
+
+      updateComponent: (id, data) => {
+        set((s) => {
+          const updated = s.menuComponents.map((c) => (c.id === id ? { ...c, ...data } : c));
+          const comp = updated.find((c) => c.id === id);
+          const parentId = comp?.parentMenuId;
+          let updatedMenus = s.menus;
+          if (parentId) {
+            const parentComps = updated.filter((c) => c.parentMenuId === parentId);
+            updatedMenus = s.menus.map((m) =>
+              m.id === parentId ? { ...m, components: parentComps } : m
+            );
+          }
+          return { menuComponents: updated, menus: updatedMenus };
+        });
+        const comp = get().menuComponents.find((c) => c.id === id);
+        if (comp) syncComponentToCloud(comp);
+      },
+
+      deleteComponent: (id) => {
+        const comp = get().menuComponents.find((c) => c.id === id);
+        const parentId = comp?.parentMenuId;
+        deleteComponentFromCloud(id);
+        set((s) => {
+          const updated = s.menuComponents.filter((c) => c.id !== id);
+          let updatedMenus = s.menus;
+          if (parentId) {
+            const parentComps = updated.filter((c) => c.parentMenuId === parentId);
+            updatedMenus = s.menus.map((m) =>
+              m.id === parentId ? { ...m, components: parentComps } : m
+            );
+          }
+          return { menuComponents: updated, menus: updatedMenus };
+        });
+      },
+
+      getComponentsByParent: (parentMenuId) => {
+        return get().menuComponents.filter((c) => c.parentMenuId === parentMenuId);
+      },
+
       loadFromCloud: async (fullSync = false) => {
         // Load menus
         const cloudMenus = await fetchMenusFromCloud();
+        const cloudComponents = await fetchComponentsFromCloud();
+
         if (cloudMenus !== null) {
           if (cloudMenus.length > 0) {
             set((s) => {
               const cloudIds = new Set(cloudMenus.map((m) => m.id));
               let localOnly: Menu[];
               if (fullSync) {
-                localOnly = []; // In fullSync, trust cloud completely for menus
+                localOnly = [];
               } else {
                 localOnly = s.menus.filter((m) => !cloudIds.has(m.id));
               }
+              const componentsList = cloudComponents !== null ? cloudComponents : s.menuComponents;
               const mergedMenus = cloudMenus.map((cm) => {
                 const local = s.menus.find((lm) => lm.id === cm.id);
+                const parentComps = componentsList.filter((c) => c.parentMenuId === cm.id);
                 return {
                   ...cm,
+                  components: parentComps,
                   showSugarLevel: cm.showSugarLevel !== undefined
                     ? cm.showSugarLevel
                     : (local?.showSugarLevel !== undefined ? local.showSugarLevel : true),
@@ -113,10 +180,12 @@ export const useMenuStore = create<MenuState>()(
                     : (local?.showTemperature !== undefined ? local.showTemperature : true),
                 };
               });
-              return { menus: [...mergedMenus, ...localOnly] };
+              return {
+                menus: [...mergedMenus, ...localOnly],
+                menuComponents: componentsList,
+              };
             });
           } else {
-            // Cloud is empty, seed it with local menus
             const localMenus = get().menus;
             for (const menu of localMenus) {
               await syncMenu(menu);
@@ -130,7 +199,6 @@ export const useMenuStore = create<MenuState>()(
           if (cloudCategories.length > 0) {
             set({ customCategories: cloudCategories });
           } else {
-            // Cloud is empty, sync local custom categories
             const localCategories = get().customCategories;
             await syncCustomCategories(localCategories);
           }

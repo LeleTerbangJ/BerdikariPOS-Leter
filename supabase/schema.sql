@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS inventory (
 
 -- 3. Menus table
 CREATE TABLE IF NOT EXISTS menus (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   category TEXT NOT NULL,
   price FLOAT NOT NULL,
@@ -40,8 +40,26 @@ CREATE TABLE IF NOT EXISTS menus (
   kitchen_target TEXT DEFAULT NULL,
   show_sugar_level BOOLEAN DEFAULT true,
   show_temperature BOOLEAN DEFAULT true,
+  is_bundle BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Safe migration for existing databases
+ALTER TABLE menus ADD COLUMN IF NOT EXISTS is_bundle BOOLEAN DEFAULT false;
+
+-- 3b. Menu Components table (Bundle & Add-on Engine)
+CREATE TABLE IF NOT EXISTS menu_components (
+  id TEXT PRIMARY KEY,
+  parent_menu_id TEXT NOT NULL REFERENCES menus(id) ON DELETE CASCADE,
+  child_type TEXT NOT NULL CHECK (child_type IN ('Menu', 'Inventory', 'Modifier')),
+  child_id TEXT NOT NULL,
+  quantity NUMERIC NOT NULL DEFAULT 1,
+  mode TEXT NOT NULL DEFAULT 'Bundle' CHECK (mode IN ('Bundle', 'Add-on')),
+  sort_order INT DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_menu_components_parent ON menu_components(parent_menu_id);
 
 -- 4. Transactions table
 CREATE TABLE IF NOT EXISTS transactions (
@@ -229,6 +247,13 @@ END $$;
 
 DO $$
 BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE menu_components;
+  ALTER TABLE menu_components REPLICA IDENTITY FULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE inventory;
   ALTER TABLE inventory REPLICA IDENTITY FULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
@@ -267,6 +292,7 @@ END $$;
 DO $$
 BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
+  ALTER TABLE cash_movements REPLICA IDENTITY FULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 

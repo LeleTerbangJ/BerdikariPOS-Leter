@@ -236,7 +236,7 @@ export default function Kitchen() {
                       </p>
 
                       <div className="space-y-2">
-                        {order.items.map((item) => (
+                        {order.items.filter((item) => !item.isBundle).map((item) => (
                           <div key={item.lineId} className="border-l-4 border-brand-300 dark:border-brand-600 pl-3">
                             <p className="font-bold text-base dark:text-slate-100">{item.name}</p>
                             <p className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
