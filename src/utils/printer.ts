@@ -295,18 +295,16 @@ async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Prom
  * Convert any image (URL or Base64) into a 1-bit Black & White monochrome canvas.
  * Transparent PNG backgrounds become crisp white, colored pixels are thresholded to black/white.
  */
-export function getMonochromeLogoCanvas(src: string, targetWidth = 384): Promise<HTMLCanvasElement> {
+export function getMonochromeLogoCanvas(src: string, targetWidth = 160): Promise<HTMLCanvasElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onerror = () => reject(new Error('Gagal memuat logo'));
     img.onload = () => {
-      let width = img.width;
-      let height = img.height;
-      if (width > targetWidth) {
-        height = Math.round((height * targetWidth) / width);
-        width = targetWidth;
-      }
+      // Scale image to compact targetWidth suitable for thermal receipt headers (~20mm width)
+      const scale = targetWidth / Math.max(img.width, 1);
+      const width = Math.max(8, Math.round(img.width * scale));
+      const height = Math.max(8, Math.round(img.height * scale));
 
       const canvas = document.createElement('canvas');
       canvas.width = width;
@@ -456,7 +454,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
         .item-row { margin-bottom: 5px; }
         .item-details { font-size: 90%; color: #444; padding-left: 4px; }
         .logo-container { text-align: center; margin-bottom: 6px; }
-        .logo-img { max-height: 48px; max-width: 100%; object-fit: contain; filter: grayscale(100%) contrast(200%); }
+        .logo-img { max-height: 45px; max-width: 130px; width: auto; height: auto; object-fit: contain; margin: 0 auto; display: block; filter: grayscale(100%) contrast(200%); }
         @media print {
           @page { margin: 0; size: ${width} auto; }
           body { width: 100%; padding: 2mm; }
@@ -567,7 +565,7 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   // 1. Monochromatic Logo Printing (converted to B&W 1-bit raster image)
   if (data.showLogoOnReceipt !== false && data.storeLogo) {
     try {
-      const targetPixelWidth = width === '58mm' ? 384 : 576;
+      const targetPixelWidth = width === '58mm' ? 160 : 220;
       const monoCanvas = await getMonochromeLogoCanvas(data.storeLogo, targetPixelWidth);
       const rasterBytes = convertCanvasToESCPOSRaster(monoCanvas);
       commands.push(...rasterBytes);

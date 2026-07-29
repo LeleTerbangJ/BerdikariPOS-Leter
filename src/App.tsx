@@ -15,7 +15,7 @@ import { useCashMovementStore } from './store/cashMovementStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, unsubscribeChannel } from './lib/cloudSync';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToTransactions, unsubscribeChannel } from './lib/cloudSync';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
 import ToastContainer from './components/ToastContainer';
@@ -127,12 +127,26 @@ export default function App() {
       if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
     });
 
+    const txChannel = subscribeToTransactions((payload: any) => {
+      if (payload?.eventType === 'DELETE' && payload.old?.id) {
+        useTransactionStore.getState().deleteTransactionLocal(payload.old.id);
+      } else {
+        fetchTransactionsFromCloud().then((txs) => {
+          if (txs) useTransactionStore.getState().loadFromCloud(txs, true);
+        });
+      }
+    });
+
     // Cleanup old logs, then load from cloud
     // BUG-C4 fix: Load stock logs and audit logs from cloud
     useStockLogStore.getState().clearOldLogs(30);
     useStockLogStore.getState().loadFromCloud();
     useAuditLogStore.getState().clearOldLogs(90);
     useAuditLogStore.getState().loadFromCloud();
+
+    return () => {
+      if (txChannel) unsubscribeChannel(txChannel);
+    };
   }, []);
 
   // Subscribe to realtime users table changes to prevent multi-device logins

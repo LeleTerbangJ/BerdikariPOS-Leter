@@ -13,6 +13,7 @@ interface TransactionState {
   updateKitchenStatus: (id: string, status: KitchenStatus) => void;
   updateTxStatus: (id: string, status: TxStatus) => void;
   deleteTransaction: (id: string) => void;
+  deleteTransactionLocal: (id: string) => void;
   getTodayTransactions: () => Transaction[];
   getActiveKitchenOrders: () => Transaction[];
   clearKdsDoneOrders: () => void;
@@ -117,6 +118,12 @@ export const useTransactionStore = create<TransactionState>()(
         }));
       },
 
+      deleteTransactionLocal: (id) => {
+        set((s) => ({
+          transactions: s.transactions.filter((t) => t.id !== id),
+        }));
+      },
+
       getTodayTransactions: () => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -149,25 +156,19 @@ export const useTransactionStore = create<TransactionState>()(
 
           let localOnly: Transaction[];
           if (fullSync) {
-            // Full sync mode (real-time triggered): cloud is authoritative within the window.
-            // Only keep local transactions created in the last 30 seconds (grace period)
-            // or those older than the oldest cloud transaction (outside the sync window).
-            const gracePeriod = 30 * 1000; // 30 seconds
-            const cutoff = Date.now() - gracePeriod;
+            // Full sync mode (real-time or explicit cloud refresh): cloud is authoritative within the window.
+            // Any local transaction newer than or equal to oldestCloudTime that is NOT in cloudIds was deleted on another device.
             localOnly = s.transactions.filter((t) => {
               if (cloudIds.has(t.id)) return false;
               const txTime = new Date(t.date).getTime();
-              if (txTime > cutoff) return true; // Keep in grace period
-              if (txTime > oldestCloudTime) return false; // Newer than oldest cloud but not in cloudIds -> deleted
-              return true; // Keep older transactions outside the window
+              if (txTime >= oldestCloudTime) return false; // Deleted on cloud
+              return true; // Keep older transactions outside the fetched window
             });
           } else {
-            // Initial load: keep local transactions only if they are older than the oldest cloud transaction
-            // (if they are newer but not in cloud list, they were deleted on another device).
             localOnly = s.transactions.filter((t) => {
               if (cloudIds.has(t.id)) return false;
               const txTime = new Date(t.date).getTime();
-              return txTime <= oldestCloudTime;
+              return txTime < oldestCloudTime;
             });
           }
 
