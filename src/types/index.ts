@@ -28,6 +28,39 @@ export interface AddOn {
   ingredients?: Record<string, number>; // { inventory_id: amount } resep bahan baku addon
 }
 
+export type ComponentType = 'Menu' | 'Inventory' | 'Modifier';
+export type ComponentMode = 'Bundle' | 'Add-on';
+
+export interface MenuComponent {
+  id: string;
+  parentMenuId: string;
+  childType: ComponentType;
+  childId: string;
+  quantity: number;
+  mode: ComponentMode;
+  sortOrder?: number;
+  createdAt?: string;
+
+  // Resolved metadata for UI / Processing
+  childName?: string;
+  childPrice?: number;
+  childCategory?: string;
+  childKitchenTarget?: string;
+  childIngredients?: Record<string, number>;
+}
+
+export interface BundleComponentSnapshot {
+  componentId: string;
+  childType: ComponentType;
+  childId: string;
+  childName: string;
+  quantity: number;        // Qty per 1 bundle unit
+  totalQuantity: number;   // quantity * bundleCartItem.quantity
+  kitchenTarget?: string;
+  ingredients?: Record<string, number>;
+  recipeSnapshot?: RecipeIngredientSnapshot[];
+}
+
 export interface Menu {
   id: string;
   name: string;
@@ -43,6 +76,10 @@ export interface Menu {
   kitchenTarget?: string; // Target dapur/printer split (misal: "Bar", "Dapur Makanan", atau kosong/default)
   showSugarLevel?: boolean; // true = tampilkan level gula, false = sembunyikan
   showTemperature?: boolean; // true = tampilkan pilihan suhu, false = sembunyikan (untuk makanan)
+  
+  // BUNDLE SUPPORT
+  isBundle?: boolean; // true = Paket / Bundle Menu
+  components?: MenuComponent[];
 }
 
 export type Temperature = 'Hangat' | 'Dingin';
@@ -82,6 +119,12 @@ export interface CartItem {
   recipeSnapshot?: RecipeIngredientSnapshot[];
   cogs?: number; // Total HPP / Cost of Goods Sold untuk item ini
   hpp?: number;  // Alias untuk cogs
+
+  // BUNDLE SUPPORT
+  isBundle?: boolean;       // true = Parent Bundle Menu
+  isBundleChild?: boolean;  // true = Child item generated from Bundle
+  parentLineId?: string;   // Line ID of parent Bundle item
+  bundleComponentsSnapshot?: BundleComponentSnapshot[];
 }
 
 export type TransactionLifecycleState = 
