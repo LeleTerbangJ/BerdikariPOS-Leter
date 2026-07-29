@@ -45,13 +45,14 @@ export default function SettingsPage() {
   // Real-time sync for users
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    const channelName = 'settings-users-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
-      .channel('settings-users-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
         loadUsersFromCloud(true);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
   }, []);
 
   // Store settings
