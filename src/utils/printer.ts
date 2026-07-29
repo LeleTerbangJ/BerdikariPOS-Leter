@@ -765,45 +765,56 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   const GS = 0x1D;
   const commands: number[] = [];
 
+  // Reset printer & center align
   commands.push(ESC, 0x40);
   commands.push(ESC, 0x61, 0x01);
+
+  // 1. Header (Scoped bold and explicit CRLF line feeds to prevent buffer overlap)
   commands.push(ESC, 0x45, 0x01);
-  commands.push(...encoder.encode(`TIKET DAPUR - #${data.queueNumber}\n`));
-  commands.push(...encoder.encode(`${kp.name.toUpperCase()}\n`));
-  if (data.isReprint) {
-    commands.push(...encoder.encode('*** CETAK ULANG ***\n'));
-  }
+  commands.push(...encoder.encode(`TIKET DAPUR - #${data.queueNumber}\r\n`));
   commands.push(ESC, 0x45, 0x00);
 
+  commands.push(ESC, 0x45, 0x01);
+  commands.push(...encoder.encode(`${kp.name.toUpperCase()}\r\n`));
+  commands.push(ESC, 0x45, 0x00);
+
+  if (data.isReprint) {
+    commands.push(ESC, 0x45, 0x01);
+    commands.push(...encoder.encode('*** CETAK ULANG ***\r\n'));
+    commands.push(ESC, 0x45, 0x00);
+  }
+
+  // Left align for body
   commands.push(ESC, 0x61, 0x00);
-  commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
-  commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\n`));
-  commands.push(...encoder.encode(`Kasir: ${data.cashierName}\n`));
+  commands.push(...encoder.encode('-'.repeat(maxChars) + '\r\n'));
+  commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\r\n`));
+  commands.push(...encoder.encode(`Kasir: ${data.cashierName}\r\n`));
   if (data.customerName) {
-    commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\n`));
+    commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\r\n`));
   }
   if (data.orderType) {
-    commands.push(...encoder.encode(`Tipe: ${data.orderType}${data.tableNumber ? ` (${data.tableNumber})` : ''}\n`));
+    commands.push(...encoder.encode(`Tipe: ${data.orderType}${data.tableNumber ? ` (${data.tableNumber})` : ''}\r\n`));
   }
-  commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
+  commands.push(...encoder.encode('-'.repeat(maxChars) + '\r\n'));
 
+  // Items list
   for (const item of items) {
-    commands.push(...encoder.encode(`${item.name}\n`));
+    commands.push(...encoder.encode(`${item.name}\r\n`));
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
     if (detailStr) {
-      commands.push(...encoder.encode(`  ${detailStr}\n`));
+      commands.push(...encoder.encode(`  ${detailStr}\r\n`));
     }
     commands.push(ESC, 0x45, 0x01);
-    commands.push(...encoder.encode(`  QTY: ${item.quantity}\n\n`));
+    commands.push(...encoder.encode(`  QTY: ${item.quantity}\r\n\r\n`));
     commands.push(ESC, 0x45, 0x00);
   }
 
-  commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
+  commands.push(...encoder.encode('-'.repeat(maxChars) + '\r\n'));
   commands.push(ESC, 0x61, 0x01);
-  commands.push(...encoder.encode('\nSelesai Tiket\n\n'));
+  commands.push(...encoder.encode('\r\nSelesai Tiket\r\n\r\n'));
   commands.push(ESC, 0x64, 0x04);
   commands.push(GS, 0x56, 0x00);
 
