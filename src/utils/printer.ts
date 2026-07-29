@@ -287,13 +287,121 @@ async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Prom
 }
 
 // ============================================================
+// ============================================================
+// MONOCHROME (BLACK & WHITE) LOGO CONVERSION FOR THERMAL PRINT
+// ============================================================
+
+/**
+ * Convert any image (URL or Base64) into a 1-bit Black & White monochrome canvas.
+ * Transparent PNG backgrounds become crisp white, colored pixels are thresholded to black/white.
+ */
+export function getMonochromeLogoCanvas(src: string, targetWidth = 384): Promise<HTMLCanvasElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => reject(new Error('Gagal memuat logo'));
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+      if (width > targetWidth) {
+        height = Math.round((height * targetWidth) / width);
+        width = targetWidth;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(canvas);
+        return;
+      }
+
+      // White background for transparent PNG logos
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+
+      // Convert to 1-bit Black & White (Grayscale + High-Contrast Thresholding)
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const alpha = data[i + 3];
+
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        const bw = (gray < 165 && alpha > 128) ? 0 : 255;
+
+        data[i] = bw;
+        data[i + 1] = bw;
+        data[i + 2] = bw;
+        data[i + 3] = 255;
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+      resolve(canvas);
+    };
+    img.src = src;
+  });
+}
+
+/**
+ * Convert Canvas bitmap into ESC/POS GS v 0 raster bit image commands.
+ */
+export function convertCanvasToESCPOSRaster(canvas: HTMLCanvasElement): Uint8Array {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new Uint8Array(0);
+
+  const width = canvas.width;
+  const height = canvas.height;
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const data = imgData.data;
+
+  const bytesWidth = Math.ceil(width / 8);
+  const commands: number[] = [];
+
+  const xL = bytesWidth & 0xFF;
+  const xH = (bytesWidth >> 8) & 0xFF;
+  const yL = height & 0xFF;
+  const yH = (height >> 8) & 0xFF;
+
+  // Center align logo
+  commands.push(0x1B, 0x61, 0x01);
+  // GS v 0 0 xL xH yL yH
+  commands.push(0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < bytesWidth; x++) {
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const px = x * 8 + bit;
+        if (px < width) {
+          const idx = (y * width + px) * 4;
+          const r = data[idx];
+          if (r < 128) {
+            byte |= (0x80 >> bit);
+          }
+        }
+      }
+      commands.push(byte);
+    }
+  }
+
+  commands.push(0x0A); // Line feed after logo
+  return new Uint8Array(commands);
+}
+
+// ============================================================
 // MODE 1: BROWSER PRINT (window.print)
 // ============================================================
 
 export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', preOpenedWindow?: Window | null) {
   const fontSize = width === '58mm' ? '11px' : '12px';
   const paperWidth = width === '58mm' ? '48mm' : '72mm';
-  const dateStr = new Date(data.date).toLocaleString('id-ID');
+  const dateStr = formatDateShort(data.date);
 
   const itemsHtml = data.items.map((item) => {
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
@@ -340,7 +448,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
         .item-row { margin-bottom: 5px; }
         .item-details { font-size: 90%; color: #444; padding-left: 4px; }
         .logo-container { text-align: center; margin-bottom: 6px; }
-        .logo-img { max-height: 48px; max-width: 100%; object-fit: contain; }
+        .logo-img { max-height: 48px; max-width: 100%; object-fit: contain; filter: grayscale(100%) contrast(200%); }
         @media print {
           @page { margin: 0; size: ${width} auto; }
           body { width: 100%; padding: 2mm; }
@@ -448,6 +556,24 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   // Initialize printer
   commands.push(ESC, 0x40);
 
+  // 1. Monochromatic Logo Printing (converted to B&W 1-bit raster image)
+  if (data.showLogoOnReceipt !== false && data.storeLogo) {
+    try {
+      const targetPixelWidth = width === '58mm' ? 384 : 576;
+      const monoCanvas = await getMonochromeLogoCanvas(data.storeLogo, targetPixelWidth);
+      const rasterBytes = convertCanvasToESCPOSRaster(monoCanvas);
+      commands.push(...rasterBytes);
+    } catch (e) {
+      console.warn('[ESCPOS] Logo conversion failed, printing text only:', e);
+    }
+  }
+
+  // 2. Header
+  if (data.isReprint) {
+    commands.push(ESC, 0x61, 0x01); // Center align
+    commands.push(...encoder.encode('*** CETAK ULANG ***\n'));
+  }
+
   // Center align + Bold store name
   commands.push(ESC, 0x61, 0x01);
   commands.push(ESC, 0x45, 0x01);
@@ -457,34 +583,33 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   if (data.storeAddress) {
     commands.push(...encoder.encode(data.storeAddress + '\n'));
   }
-
-  // Left align
-  commands.push(ESC, 0x61, 0x00);
-  if (data.isReprint) {
-    commands.push(...encoder.encode('*** CETAK ULANG ***\n'));
-  }
   if (data.receiptHeader) {
     commands.push(...encoder.encode(data.receiptHeader + '\n'));
   }
+
+  // Left align
+  commands.push(ESC, 0x61, 0x00);
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
-  // Transaction info
+  // 3. Transaction Info (Exact Left/Right Alignment)
   const orderHeader = getOrderTypeHeaderLines(data.orderType, data.tableNumber);
+  const formattedDate = formatDateShort(data.date);
+
   const line1 = leftRight(`No: #${data.queueNumber}`, orderHeader.line1, width);
   commands.push(...encoder.encode(line1 + '\n'));
-  if (orderHeader.line2) {
-    const line2 = leftRight(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}`, orderHeader.line2, width);
-    commands.push(...encoder.encode(line2 + '\n'));
-  } else {
-    commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\n`));
-  }
+
+  const dateLeft = `Tgl: ${formattedDate}`;
+  const rightTag = orderHeader.line2 || '';
+  const line2 = leftRight(dateLeft, rightTag, width);
+  commands.push(...encoder.encode(line2 + '\n'));
+
   commands.push(...encoder.encode(`Kasir: ${data.cashierName}\n`));
   if (data.customerName) {
     commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\n`));
   }
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
-  // Items
+  // 4. Items List (Exact Left/Right Alignment)
   for (const item of data.items) {
     commands.push(...encoder.encode(`${item.name}\n`));
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
@@ -494,37 +619,47 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
     if (detailStr) {
       commands.push(...encoder.encode(`  ${detailStr}\n`));
     }
-    commands.push(...encoder.encode(`  ${item.quantity}x    ${formatRupiah(item.subtotal)}\n`));
+
+    const unitPrice = item.basePrice + item.addons.reduce((a, b) => a + b.price, 0);
+    const qtyPriceStr = `  ${item.quantity}x ${formatRupiah(unitPrice)}`;
+    const subtotalStr = formatRupiah(item.subtotal);
+    commands.push(...encoder.encode(leftRight(qtyPriceStr, subtotalStr, width) + '\n'));
   }
 
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
-  // Totals
-  commands.push(...encoder.encode(`Subtotal: ${formatRupiah(data.subtotal)}\n`));
+  // 5. Totals (Exact Left/Right Alignment)
+  commands.push(...encoder.encode(leftRight('Subtotal', formatRupiah(data.subtotal), width) + '\n'));
   if (data.discount > 0) {
-    commands.push(...encoder.encode(`Diskon: -${formatRupiah(data.discount)}\n`));
+    commands.push(...encoder.encode(leftRight('Diskon', `-${formatRupiah(data.discount)}`, width) + '\n'));
   }
   if (data.tax && data.tax > 0) {
-    commands.push(...encoder.encode(`Pajak: ${formatRupiah(data.tax)}\n`));
+    commands.push(...encoder.encode(leftRight('Pajak', formatRupiah(data.tax), width) + '\n'));
   }
 
-  // Bold total
+  // Bold TOTAL
   commands.push(ESC, 0x45, 0x01);
-  commands.push(...encoder.encode(`TOTAL: ${formatRupiah(data.total)}\n`));
+  commands.push(...encoder.encode(leftRight('TOTAL', formatRupiah(data.total), width) + '\n'));
   commands.push(ESC, 0x45, 0x00);
 
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
-  commands.push(...encoder.encode(`Bayar (${data.paymentMethod}): ${formatRupiah(data.cashReceived || data.total)}\n`));
+
+  // Payment & Change (Exact Left/Right Alignment)
+  const payLabel = `Bayar (${data.paymentMethod})`;
+  const payVal = formatRupiah(data.cashReceived || data.total);
+  commands.push(...encoder.encode(leftRight(payLabel, payVal, width) + '\n'));
+
   if (data.paymentMethod === 'Cash' && data.change !== undefined) {
-    commands.push(...encoder.encode(`Kembali: ${formatRupiah(data.change)}\n`));
+    commands.push(...encoder.encode(leftRight('Kembali', formatRupiah(data.change), width) + '\n'));
   }
 
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
-  // Center footer
-  commands.push(ESC, 0x61, 0x01);
-  const footerText = data.receiptFooter || 'Terima kasih!\nSemoga sehat selalu';
-  commands.push(...encoder.encode(`\n${footerText}\n\n`));
+  // 6. Footer (Centered & Wrapped to prevent line overflow)
+  commands.push(ESC, 0x61, 0x01); // Center align
+  const rawFooter = data.receiptFooter || 'Terima kasih atas kunjungan Anda!';
+  const wrappedFooterLines = wrapCenterLines(rawFooter, width);
+  commands.push(...encoder.encode('\n' + wrappedFooterLines.join('\n') + '\n\n'));
 
   // Feed and cut
   commands.push(ESC, 0x64, 0x04);
@@ -917,6 +1052,35 @@ function fallbackBrowserPrintText(lines: string[], width: '58mm' | '80mm') {
 // ============================================================
 // HELPERS
 // ============================================================
+
+export function formatDateShort(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = String(d.getFullYear()).slice(-2);
+  const hours = String(d.getHours()).padStart(2, '0');
+  const mins = String(d.getMinutes()).padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${mins}`;
+}
+
+export function wrapCenterLines(text: string, width: '58mm' | '80mm'): string[] {
+  const maxChars = width === '58mm' ? 32 : 42;
+  const words = text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    if ((currentLine + (currentLine ? ' ' : '') + word).length <= maxChars) {
+      currentLine += (currentLine ? ' ' : '') + word;
+    } else {
+      if (currentLine) lines.push(center(currentLine, width));
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(center(currentLine, width));
+  return lines;
+}
 
 function center(text: string, width: '58mm' | '80mm'): string {
   const maxChars = width === '58mm' ? 32 : 42;
