@@ -51,13 +51,14 @@ export default function Catalog() {
   // Real-time sync for menus
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    const channelName = 'cat-menus-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
-      .channel('menus-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => {
         loadFromCloud(true);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
   }, []);
 
   const [search, setSearch] = useState('');
