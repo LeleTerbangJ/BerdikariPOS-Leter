@@ -21,13 +21,14 @@ export default function Customers() {
   // Real-time sync for customers
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    const channelName = 'cust-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
-      .channel('customers-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, () => {
         loadFromCloud(true); // fullSync: cloud is authoritative
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
   }, []);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
