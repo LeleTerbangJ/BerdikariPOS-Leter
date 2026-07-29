@@ -6,6 +6,7 @@ interface CartState {
   items: CartItem[];
   discount: number;
   addItem: (item: CartItem) => void;
+  addBundleItem: (parentItem: CartItem, childItems: CartItem[]) => void;
   removeItem: (lineId: string) => void;
   updateQuantity: (lineId: string, qty: number) => void;
   setDiscount: (amount: number) => void;
@@ -47,17 +48,39 @@ export const useCartStore = create<CartState>()(
         return { items: [...s.items, item] };
       }),
 
+      addBundleItem: (parentItem, childItems) => set((s) => ({
+        items: [...s.items, parentItem, ...childItems],
+      })),
+
       removeItem: (lineId) =>
-        set((s) => ({ items: s.items.filter((i) => i.lineId !== lineId) })),
+        set((s) => ({
+          // Remove target item and any child items linked to it
+          items: s.items.filter((i) => i.lineId !== lineId && i.parentLineId !== lineId),
+        })),
 
       updateQuantity: (lineId, qty) =>
-        set((s) => ({
-          items: s.items.map((i) => {
-            if (i.lineId !== lineId) return i;
-            const unitPrice = i.basePrice + i.addons.reduce((a, b) => a + b.price, 0);
-            return { ...i, quantity: qty, subtotal: unitPrice * qty };
-          }),
-        })),
+        set((s) => {
+          const targetItem = s.items.find((i) => i.lineId === lineId);
+          if (!targetItem) return { items: s.items };
+
+          const oldQty = targetItem.quantity;
+          if (oldQty <= 0) return { items: s.items };
+
+          return {
+            items: s.items.map((i) => {
+              if (i.lineId === lineId) {
+                const unitPrice = i.basePrice + i.addons.reduce((a, b) => a + b.price, 0);
+                return { ...i, quantity: qty, subtotal: unitPrice * qty };
+              }
+              // Scale child items linked to parent bundle
+              if (i.parentLineId === lineId) {
+                const perBundleQty = Math.max(1, Math.round(i.quantity / oldQty));
+                return { ...i, quantity: perBundleQty * qty };
+              }
+              return i;
+            }),
+          };
+        }),
 
       setDiscount: (amount) => set({ discount: amount }),
 
