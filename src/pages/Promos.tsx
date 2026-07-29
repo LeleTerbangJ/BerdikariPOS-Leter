@@ -26,13 +26,14 @@ export default function Promos() {
   // Real-time sync for promos
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    const channelName = 'promos-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
-      .channel('promos-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'promos' }, () => {
         loadFromCloud(true);
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
   }, []);
 
   const [activeSection, setActiveSection] = useState<'promos' | 'loyalty'>('promos');

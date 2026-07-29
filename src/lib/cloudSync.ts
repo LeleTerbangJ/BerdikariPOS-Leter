@@ -255,9 +255,9 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
 
 export function subscribeToTransactions(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-  
+  const channelName = `tx-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('transactions-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'transactions' },
@@ -270,15 +270,19 @@ export function subscribeToTransactions(callback: (payload: any) => void) {
 
 export function unsubscribeChannel(channel: any) {
   if (channel) {
-    supabase.removeChannel(channel);
+    try {
+      supabase.removeChannel(channel);
+    } catch (e) {
+      console.warn('[Realtime] Failed to remove channel:', e);
+    }
   }
 }
 
 export function subscribeToUsers(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-  
+  const channelName = `users-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('auth-users-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'users' },
@@ -291,9 +295,9 @@ export function subscribeToUsers(callback: (payload: any) => void) {
 
 export function subscribeToSettings(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `settings-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('settings-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'settings' },
@@ -306,9 +310,9 @@ export function subscribeToSettings(callback: (payload: any) => void) {
 
 export function subscribeToStockOpnames(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `stock-opnames-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('stock-opnames-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'stock_opnames' },
@@ -321,9 +325,9 @@ export function subscribeToStockOpnames(callback: (payload: any) => void) {
 
 export function subscribeToMenus(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `menus-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('global-menus-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'menus' },
@@ -336,9 +340,9 @@ export function subscribeToMenus(callback: (payload: any) => void) {
 
 export function subscribeToInventory(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `inventory-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('global-inventory-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'inventory' },
@@ -351,9 +355,9 @@ export function subscribeToInventory(callback: (payload: any) => void) {
 
 export function subscribeToCashMovements(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `cash-movements-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('global-cash-movements-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'cash_movements' },
@@ -366,9 +370,9 @@ export function subscribeToCashMovements(callback: (payload: any) => void) {
 
 export function subscribeToMenuComponents(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
-
+  const channelName = `menu-components-rt-${Math.random().toString(36).substring(2, 9)}`;
   const channel = supabase
-    .channel('global-menu-components-realtime')
+    .channel(channelName)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'menu_components' },

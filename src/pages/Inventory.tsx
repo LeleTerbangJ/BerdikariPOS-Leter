@@ -35,8 +35,9 @@ export default function Inventory() {
   // LOGIC-06 fix: Real-time sync for inventory and stock opnames
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    const channelName = 'inv-page-rt-' + Math.random().toString(36).substring(2, 9);
     const invChannel = supabase
-      .channel('inventory-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
         loadFromCloud(true);
       })
@@ -47,7 +48,7 @@ export default function Inventory() {
     });
 
     return () => {
-      if (invChannel) supabase.removeChannel(invChannel);
+      if (invChannel) try { supabase.removeChannel(invChannel); } catch (e) {}
       if (opnameChannel) unsubscribeChannel(opnameChannel);
     };
   }, []);

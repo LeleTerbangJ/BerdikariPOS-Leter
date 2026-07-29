@@ -70,32 +70,32 @@ export default function POS() {
       if (settingsChannel) supabase.removeChannel(settingsChannel);
 
       menuChannel = supabase
-        .channel('pos-menus-rt')
+        .channel('pos-menus-rt-' + Math.random().toString(36).substring(2, 9))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => {
           useMenuStore.getState().loadFromCloud(true);
         })
         .subscribe();
 
       invChannel = supabase
-        .channel('pos-inventory-rt')
+        .channel('pos-inventory-rt-' + Math.random().toString(36).substring(2, 9))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
           useInventoryStore.getState().loadFromCloud(true);
         })
         .subscribe();
 
       custChannel = supabase
-        .channel('pos-customers-rt')
+        .channel('pos-customers-rt-' + Math.random().toString(36).substring(2, 9))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, () => {
           useCustomerStore.getState().loadFromCloud(true);
         })
         .subscribe();
 
       settingsChannel = supabase
-        .channel('pos-settings-rt')
+        .channel('pos-settings-rt-' + Math.random().toString(36).substring(2, 9))
         .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => {
           useSettingsStore.getState().loadFromCloud();
-          usePromoStore.getState().loadFromCloud(true); // loyalty settings also in settings table
-          useMenuStore.getState().loadFromCloud(true); // custom categories also in settings table
+          usePromoStore.getState().loadFromCloud(true);
+          useMenuStore.getState().loadFromCloud(true);
         })
         .subscribe();
     };

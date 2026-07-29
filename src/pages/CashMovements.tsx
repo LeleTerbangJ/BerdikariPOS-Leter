@@ -51,13 +51,14 @@ export default function CashMovements() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     loadFromCloud();
+    const channelName = 'cm-page-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
-      .channel('cash-movements-rt')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_movements' }, () => {
         loadFromCloud();
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
   }, []);
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
