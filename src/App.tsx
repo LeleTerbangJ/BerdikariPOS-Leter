@@ -122,7 +122,7 @@ export default function App() {
     // BUG-C3 fix: Load shifts from cloud
     useShiftStore.getState().loadFromCloud();
     useStockOpnameStore.getState().loadFromCloud();
-    useCashMovementStore.getState().loadFromCloud();
+    useCashMovementStore.getState().loadFromCloud(true);
     fetchTransactionsFromCloud().then((txs) => {
       if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
     });
@@ -183,8 +183,12 @@ export default function App() {
     });
 
     // Global Realtime subscription for cash movements (Rekap Kas) across all devices
-    const cashMovementChannel = subscribeToCashMovements(() => {
-      useCashMovementStore.getState().loadFromCloud();
+    const cashMovementChannel = subscribeToCashMovements((payload: any) => {
+      if (payload?.eventType === 'DELETE' && payload.old?.id) {
+        useCashMovementStore.getState().deleteMovementLocal(payload.old.id);
+      } else {
+        useCashMovementStore.getState().loadFromCloud(true);
+      }
     });
 
     return () => {

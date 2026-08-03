@@ -17,13 +17,14 @@ interface CashMovementState {
     customDate?: string
   ) => CashMovement;
   deleteMovement: (id: string) => Promise<void>;
+  deleteMovementLocal: (id: string) => void;
   updateMovement: (
     id: string,
     updates: Partial<Pick<CashMovement, 'type' | 'amount' | 'category' | 'notes'>>
   ) => Promise<CashMovement | null>;
   getMovementsByShift: (shiftId: string) => CashMovement[];
   getMovementsByDateRange: (from: Date, to: Date) => CashMovement[];
-  loadFromCloud: () => Promise<void>;
+  loadFromCloud: (fullSync?: boolean) => Promise<void>;
 }
 
 export const useCashMovementStore = create<CashMovementState>()(
@@ -56,6 +57,10 @@ export const useCashMovementStore = create<CashMovementState>()(
         await deleteCashMovementCloud(id);
       },
 
+      deleteMovementLocal: (id) => {
+        set((s) => ({ movements: s.movements.filter((m) => m.id !== id) }));
+      },
+
       updateMovement: async (id, updates) => {
         let updated: CashMovement | null = null;
         set((s) => {
@@ -83,12 +88,18 @@ export const useCashMovementStore = create<CashMovementState>()(
           return d >= from && d <= to;
         }),
 
-      loadFromCloud: async () => {
+      loadFromCloud: async (fullSync = false) => {
         const cloudMovements = await fetchCashMovementsFromCloud();
-        if (cloudMovements && cloudMovements.length > 0) {
+        if (cloudMovements !== null) {
           set((s) => {
             const cloudIds = new Set(cloudMovements.map((m) => m.id));
-            const localOnly = s.movements.filter((m) => !cloudIds.has(m.id));
+            const gracePeriod = 15 * 1000;
+            const now = Date.now();
+            const localOnly = s.movements.filter((m) => {
+              if (cloudIds.has(m.id)) return false;
+              const txTime = new Date(m.createdAt || m.date).getTime();
+              return (now - txTime) < gracePeriod;
+            });
             const merged = [...cloudMovements, ...localOnly];
             merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             return { movements: merged };

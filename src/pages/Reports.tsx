@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useTransactionStore } from '../store/transactionStore';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
@@ -188,6 +188,12 @@ export default function Reports() {
 
   const { movements } = useCashMovementStore();
 
+  // Real-time & Cloud sync on mount and date filter change
+  useEffect(() => {
+    useCashMovementStore.getState().loadFromCloud(true);
+    useShiftStore.getState().loadFromCloud();
+  }, [dateFilterType, customDateFrom, customDateTo, filterMonth]);
+
   // Filter cash movements by date range
   const filteredMovements = useMemo(() => {
     return movements.filter((m) => {
@@ -213,6 +219,9 @@ export default function Reports() {
 
         const shiftTxs = filteredTx.filter((t) => {
           const td = new Date(t.date);
+          if (sh.status === 'open') {
+            return t.cashierId === sh.userId && td >= openedAt;
+          }
           return (
             t.cashierId === sh.userId &&
             td >= openedAt &&
@@ -230,11 +239,12 @@ export default function Reports() {
 
         const shiftMovements = movements.filter((m) => {
           const md = new Date(m.date);
-          return (
-            (m.shiftId ? m.shiftId === sh.id : m.cashierId === sh.userId) &&
-            md >= openedAt &&
-            md <= closedAt
-          );
+          const isMatch = m.shiftId ? m.shiftId === sh.id : m.cashierId === sh.userId;
+          if (!isMatch) return false;
+          if (sh.status === 'open') {
+            return md >= openedAt;
+          }
+          return md >= openedAt && md <= closedAt;
         });
 
         const cashIn = shiftMovements.filter((m) => m.type === 'in').reduce((a, m) => a + m.amount, 0);

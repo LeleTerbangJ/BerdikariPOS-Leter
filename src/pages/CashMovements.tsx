@@ -50,12 +50,12 @@ export default function CashMovements() {
   // Real-time sync for cash movements
   useEffect(() => {
     if (!isSupabaseConfigured) return;
-    loadFromCloud();
+    loadFromCloud(true);
     const channelName = 'cm-page-rt-' + Math.random().toString(36).substring(2, 9);
     const channel = supabase
       .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_movements' }, () => {
-        loadFromCloud();
+        loadFromCloud(true);
       })
       .subscribe();
     return () => { try { supabase.removeChannel(channel); } catch (e) {} };
