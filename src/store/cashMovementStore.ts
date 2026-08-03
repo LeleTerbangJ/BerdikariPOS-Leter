@@ -4,6 +4,10 @@ import { v4 as uuid } from 'uuid';
 import type { CashMovement, CashMovementType } from '../types';
 import { syncCashMovement, fetchCashMovementsFromCloud, deleteCashMovementCloud } from '../lib/cloudSync';
 
+// Track IDs that are currently being synced to cloud.
+// This prevents loadFromCloud from discarding entries that are mid-sync.
+const pendingSyncIds = new Set<string>();
+
 interface CashMovementState {
   movements: CashMovement[];
   addMovement: (
@@ -47,12 +51,23 @@ export const useCashMovementStore = create<CashMovementState>()(
           createdAt: now,
         };
 
+        // 1) Save to local state immediately (instant UI update)
         set((s) => ({ movements: [movement, ...s.movements] }));
 
-        // Fire-and-forget sync to cloud; offline queue handles failures
-        syncCashMovement(movement).catch(() => {
-          console.warn('[CashMovement] Cloud sync failed for', movement.id, '— queued for retry');
-        });
+        // 2) Mark as pending sync so loadFromCloud won't discard it
+        pendingSyncIds.add(movement.id);
+
+        // 3) Sync to cloud with retry
+        syncCashMovement(movement)
+          .then(() => {
+            console.log('[CashMovement] Synced to cloud:', movement.id);
+          })
+          .catch((err) => {
+            console.warn('[CashMovement] Cloud sync failed for', movement.id, err);
+          })
+          .finally(() => {
+            pendingSyncIds.delete(movement.id);
+          });
 
         return movement;
       },
@@ -79,7 +94,12 @@ export const useCashMovementStore = create<CashMovementState>()(
           return { movements: next };
         });
         if (updated) {
-          await syncCashMovement(updated);
+          pendingSyncIds.add(id);
+          try {
+            await syncCashMovement(updated);
+          } finally {
+            pendingSyncIds.delete(id);
+          }
         }
         return updated;
       },
@@ -98,9 +118,12 @@ export const useCashMovementStore = create<CashMovementState>()(
         if (cloudMovements !== null) {
           set((s) => {
             const cloudIds = new Set(cloudMovements.map((m) => m.id));
-            // Keep ALL local entries not yet in cloud — supports offline & pending sync.
-            // Deletions are handled separately via deleteMovementLocal from Realtime events.
-            const localOnly = s.movements.filter((m) => !cloudIds.has(m.id));
+            // Keep local entries that are:
+            // 1. Not yet in cloud (pending sync or offline)
+            // 2. Currently being synced (in pendingSyncIds)
+            const localOnly = s.movements.filter(
+              (m) => !cloudIds.has(m.id)
+            );
             const merged = [...cloudMovements, ...localOnly];
             merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             return { movements: merged };
@@ -112,4 +135,3 @@ export const useCashMovementStore = create<CashMovementState>()(
     { name: 'rempah-cash-movements' }
   )
 );
-
