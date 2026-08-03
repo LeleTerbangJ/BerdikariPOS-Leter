@@ -236,6 +236,14 @@ export function initOfflineQueue() {
 // SMART SYNC — wraps supabase calls with offline fallback
 // ============================================================
 
+function extractMissingColumn(errorMessage: string): string | null {
+  if (typeof errorMessage !== 'string') return null;
+  const match = errorMessage.match(/column ["']?([a-zA-Z0-9_]+)["']? of relation/i) ||
+                errorMessage.match(/Could not find the ["']?([a-zA-Z0-9_]+)["']? column/i) ||
+                errorMessage.match(/column ["']?([a-zA-Z0-9_]+)["']? does not exist/i);
+  return match && match[1] ? match[1] : null;
+}
+
 export async function smartUpsert(table: string, data: Record<string, any>): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
@@ -247,6 +255,14 @@ export async function smartUpsert(table: string, data: Record<string, any>): Pro
   try {
     const { error } = await supabase.from(table).upsert(data);
     if (error) {
+      const badCol = extractMissingColumn(error.message);
+      if (badCol && data[badCol] !== undefined) {
+        console.warn(`[SmartSync] Self-healing: Stripping missing column "${badCol}" from ${table} payload...`);
+        const copy = { ...data };
+        delete copy[badCol];
+        const retryRes = await supabase.from(table).upsert(copy);
+        if (!retryRes.error) return true;
+      }
       console.warn(`[SmartSync] Upsert failed, queuing:`, error.message);
       addToQueue({ table, action: 'upsert', data });
       return false;

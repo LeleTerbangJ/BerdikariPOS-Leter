@@ -487,11 +487,13 @@ export async function deleteCustomerCloud(id: string) {
 // SHIFTS
 // ============================================================
 
+const isValidUuid = (str?: string | null) => str ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str) : false;
+
 export async function syncShift(shift: CashierShift) {
   if (!isSupabaseConfigured) return;
   await smartUpsert('shifts', {
     id: shift.id,
-    user_id: shift.userId,
+    user_id: isValidUuid(shift.userId) ? shift.userId : null,
     user_name: shift.userName,
     opened_at: shift.openedAt,
     closed_at: shift.closedAt,
@@ -992,12 +994,12 @@ export async function syncCashMovement(movement: CashMovement) {
   if (!isSupabaseConfigured) return;
   await smartUpsert('cash_movements', {
     id: movement.id,
-    shift_id: movement.shiftId || null,
+    shift_id: isValidUuid(movement.shiftId) ? movement.shiftId : null,
     type: movement.type,
     amount: movement.amount,
     category: movement.category,
     notes: movement.notes || null,
-    cashier_id: movement.cashierId,
+    cashier_id: isValidUuid(movement.cashierId) ? movement.cashierId : null,
     cashier_name: movement.cashierName,
     date: movement.date,
     created_at: movement.createdAt,
