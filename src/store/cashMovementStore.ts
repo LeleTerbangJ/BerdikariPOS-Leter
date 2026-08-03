@@ -8,7 +8,6 @@ interface CashMovementState {
   movements: CashMovement[];
   addMovement: (
     type: CashMovementType,
-
     amount: number,
     category: string,
     notes: string | undefined,
@@ -49,7 +48,12 @@ export const useCashMovementStore = create<CashMovementState>()(
         };
 
         set((s) => ({ movements: [movement, ...s.movements] }));
-        syncCashMovement(movement);
+
+        // Fire-and-forget sync to cloud; offline queue handles failures
+        syncCashMovement(movement).catch(() => {
+          console.warn('[CashMovement] Cloud sync failed for', movement.id, '— queued for retry');
+        });
+
         return movement;
       },
 
@@ -89,25 +93,23 @@ export const useCashMovementStore = create<CashMovementState>()(
           return d >= from && d <= to;
         }),
 
-      loadFromCloud: async (fullSync = false) => {
+      loadFromCloud: async (_fullSync = false) => {
         const cloudMovements = await fetchCashMovementsFromCloud();
         if (cloudMovements !== null) {
           set((s) => {
             const cloudIds = new Set(cloudMovements.map((m) => m.id));
-            const gracePeriod = 15 * 1000;
-            const now = Date.now();
-            const localOnly = s.movements.filter((m) => {
-              if (cloudIds.has(m.id)) return false;
-              const txTime = new Date(m.createdAt || m.date).getTime();
-              return (now - txTime) < gracePeriod;
-            });
+            // Keep ALL local entries not yet in cloud — supports offline & pending sync.
+            // Deletions are handled separately via deleteMovementLocal from Realtime events.
+            const localOnly = s.movements.filter((m) => !cloudIds.has(m.id));
             const merged = [...cloudMovements, ...localOnly];
             merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             return { movements: merged };
           });
         }
+        // If cloudMovements is null (fetch failed / offline), keep existing local state intact
       },
     }),
     { name: 'rempah-cash-movements' }
   )
 );
+
