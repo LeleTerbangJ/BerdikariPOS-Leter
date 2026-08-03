@@ -8,6 +8,7 @@ interface CashMovementState {
   movements: CashMovement[];
   addMovement: (
     type: CashMovementType,
+
     amount: number,
     category: string,
     notes: string | undefined,
