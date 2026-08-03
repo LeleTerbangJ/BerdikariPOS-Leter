@@ -145,6 +145,17 @@ export async function runMigrations() {
       console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS demo_mode BOOLEAN DEFAULT TRUE;');
       migrationNeeded.demoMode = true;
     }
+
+    // Migration 15: Verify cash_movements table
+    const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
+    if (cmError) {
+      console.warn('[Migration] Table "cash_movements" missing or inaccessible in Supabase.');
+      console.warn('[Migration] Please run SQL in Supabase SQL Editor to create table & enable Realtime:');
+      console.warn('  CREATE TABLE IF NOT EXISTS public.cash_movements (id TEXT PRIMARY KEY, shift_id TEXT, type TEXT NOT NULL, amount NUMERIC NOT NULL DEFAULT 0, category TEXT NOT NULL, notes TEXT, cashier_id TEXT, cashier_name TEXT NOT NULL, date TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());');
+      console.warn('  ALTER TABLE public.cash_movements ENABLE ROW LEVEL SECURITY;');
+      console.warn('  CREATE POLICY "Allow all" ON public.cash_movements FOR ALL USING (true);');
+      console.warn('  ALTER PUBLICATION supabase_realtime ADD TABLE public.cash_movements;');
+    }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
   }
