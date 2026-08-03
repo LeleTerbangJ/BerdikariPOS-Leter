@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useTransactionStore } from '../store/transactionStore';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
@@ -188,10 +189,35 @@ export default function Reports() {
 
   const { movements } = useCashMovementStore();
 
-  // Real-time & Cloud sync on mount and date filter change
+  // Real-time subscription: sync cash movements & shifts instantly across devices
   useEffect(() => {
     useCashMovementStore.getState().loadFromCloud(true);
     useShiftStore.getState().loadFromCloud();
+
+    if (!isSupabaseConfigured) return;
+
+    // Subscribe to cash_movements Realtime changes
+    const cmChannelName = 'reports-cm-rt-' + Math.random().toString(36).substring(2, 9);
+    const cmChannel = supabase
+      .channel(cmChannelName)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_movements' }, () => {
+        useCashMovementStore.getState().loadFromCloud(true);
+      })
+      .subscribe();
+
+    // Subscribe to shifts Realtime changes
+    const shiftChannelName = 'reports-shifts-rt-' + Math.random().toString(36).substring(2, 9);
+    const shiftChannel = supabase
+      .channel(shiftChannelName)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, () => {
+        useShiftStore.getState().loadFromCloud();
+      })
+      .subscribe();
+
+    return () => {
+      try { supabase.removeChannel(cmChannel); } catch (_e) { /* ignore */ }
+      try { supabase.removeChannel(shiftChannel); } catch (_e) { /* ignore */ }
+    };
   }, [dateFilterType, customDateFrom, customDateTo, filterMonth]);
 
   // Filter cash movements by date range
