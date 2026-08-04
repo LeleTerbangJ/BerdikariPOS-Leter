@@ -1021,20 +1021,25 @@ export async function fetchCashMovementsFromCloud(): Promise<CashMovement[] | nu
   if (!isSupabaseConfigured) return null;
   try {
     const { data, error } = await supabase.from('cash_movements').select('*').order('date', { ascending: false }).limit(500);
-    if (error) return null;
+    if (error) {
+      console.warn('[CloudSync] Failed to fetch cash_movements:', error.message);
+      return null;
+    }
+    console.log('[CloudSync] Fetched', data?.length || 0, 'cash movements from cloud');
     return data?.map((row) => ({
       id: row.id,
       shiftId: row.shift_id || undefined,
       type: row.type as 'in' | 'out',
-      amount: row.amount,
+      amount: Number(row.amount) || 0,
       category: row.category,
       notes: row.notes || undefined,
-      cashierId: row.cashier_id,
+      cashierId: row.cashier_id || '',
       cashierName: row.cashier_name,
       date: row.date,
       createdAt: row.created_at || row.date,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[CloudSync] Exception fetching cash_movements:', e);
     return null;
   }
 }
