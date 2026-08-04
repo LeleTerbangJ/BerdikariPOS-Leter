@@ -264,13 +264,19 @@ export default function Reports() {
         const totalTax = shiftTxs.reduce((a, t) => a + (t.tax || 0), 0);
 
         const shiftMovements = movements.filter((m) => {
-          const md = new Date(m.date);
-          const isMatch = m.shiftId ? m.shiftId === sh.id : m.cashierId === sh.userId;
-          if (!isMatch) return false;
-          if (sh.status === 'open') {
-            return md >= openedAt;
+          if (m.shiftId && sh.id && m.shiftId === sh.id) {
+            return true;
           }
-          return md >= openedAt && md <= closedAt;
+          const md = new Date(m.date);
+          const isUserMatch = m.cashierId === sh.userId;
+          if (!isUserMatch) return false;
+
+          const openedAtMs = openedAt.getTime() - 60000;
+          if (sh.status === 'open') {
+            return md.getTime() >= openedAtMs;
+          }
+          const closedAtMs = closedAt.getTime() + 60000;
+          return md.getTime() >= openedAtMs && md.getTime() <= closedAtMs;
         });
 
         const cashIn = shiftMovements.filter((m) => m.type === 'in').reduce((a, m) => a + m.amount, 0);

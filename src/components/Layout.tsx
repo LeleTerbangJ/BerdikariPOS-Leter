@@ -145,11 +145,15 @@ export default function Layout() {
       .reduce((a, t) => a + t.totalAmount, 0);
 
     // Calculate cash movements (Kas Masuk & Kas Keluar) during active shift
-    const shiftMovements = movements.filter(
-      (m) =>
+    const shiftMovements = movements.filter((m) => {
+      if (m.shiftId && activeShift.id && m.shiftId === activeShift.id) {
+        return true;
+      }
+      return (
         m.cashierId === currentUser.id &&
-        new Date(m.date) >= new Date(activeShift.openedAt)
-    );
+        new Date(m.date).getTime() >= new Date(activeShift.openedAt).getTime() - 60000
+      );
+    });
     const cashIn = shiftMovements
       .filter((m) => m.type === 'in')
       .reduce((a, m) => a + m.amount, 0);
@@ -213,7 +217,6 @@ export default function Layout() {
 
   const handleCloseShift = async () => {
     const closingCash = parseInt(closingCashInput) || 0;
-    closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
 
     // Audit log
     if (currentUser) {
@@ -249,6 +252,9 @@ export default function Layout() {
       `===========================`,
     ];
     await printTextRaw(lines, settings);
+
+    // BUG-UI-STACKED-MODAL fix: Close shift AFTER printing finishes to prevent OpenShiftModal peeking
+    closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
 
     setShowCloseShift(false);
     logout();

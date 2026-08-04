@@ -25,7 +25,12 @@
 
 ## 🟠 Bug Menengah
 
-*(Tidak ada bug menengah aktif saat ini. Semua temuan menengah telah berhasil diperbaiki.)*
+### BUG-UI-STACKED-MODAL: OpenShiftModal Ter-render Dibalik CloseShiftModal Saat Tutup Shift (✅ Fixed)
+- **File**: `src/App.tsx` (`ShiftGuard`), `src/components/Layout.tsx` (`CloseShiftModal`)
+- **Severity**: 🟠 Medium
+- **Deskripsi**: Saat Kasir mengklik tombol "Print Ringkasan & Tutup Shift", fungsi `handleCloseShift()` memanggil `closeShift()` yang mengubah state `activeShift` menjadi `null`. Komponen `ShiftGuard` di `App.tsx` langsung merespons perubahan `activeShift === null` dan secara otomatis meng-instantiate komponen `<OpenShiftModal open={true} />` ke dalam React DOM tree. Pada saat yang bersamaan, modal `CloseShiftModal` di `Layout.tsx` masih aktif ditampilkan di layar. Karena modal Buka Shift memiliki ukuran lebih lebar (`max-w-lg`) daripada modal Tutup Shift (`max-w-md`), kartu modal Buka Shift beserta tombol quick-amount modal peeking/muncul persis di belakang modal Tutup Shift.
+- **Dampak**: Tampilan UI bertumpuk (stacked modal) yang membingungkan kasir, serta risiko pemicuan state modal awal secara tidak sengaja saat interaksi UI.
+- **Solusi**: Tunda penutupan state `closeShift(...)` sampai proses cetak ringkasan shift dan pemanggilan printer selesai penuh, lalu lakukan penutupan modal & logout secara sinkron.
 
 ---
 
@@ -103,6 +108,13 @@
   - Opsi A: Ubah pemanggilan di `StockOpname.tsx` menjadi update stok langsung tanpa trigger auto-log di `updateItem()` (misal: tambahkan parameter `{ skipLog: true }`).
   - Opsi B: Hapus pemanggilan `addStockLog()` eksplisit di `doSubmit()` dan biarkan `updateItem()` yang menangani logging (ubah reason default menjadi kontekstual).
 
+### LOGIC-ERR-09: Filter Jam Shift Strict Mengabaikan Cash Movement Saat Tutup Shift (✅ Fixed)
+- **File**: `src/pages/Reports.tsx`, `src/components/Layout.tsx`
+- **Severity**: 🟡 Low-Medium
+- **Deskripsi**: Logika pencocokan `shiftMovements` pada laporan shift menggunakan batasan waktu ketat `md >= openedAt && md <= closedAt`. Jika kasir mencatat pengeluaran kas (contoh: setor kas ke manager) persis sebelum atau saat menutup shift, jeda beberapa detik pada timestamp pencatatan lokal dapat membuat timestamp kas keluar berada sedikit di luar `closedAt`. Akibatnya, kas keluar tersebut tidak terhitung pada laporan shift (menampilkan Kas Keluar = Rp 0).
+- **Dampak**: Nominal kas keluar pada laporan shift kasir menjadi Rp 0 padahal kas fisik aktual berkurang.
+- **Solusi**: Utamakan pencocokan langsung berdasarkan ID Shift (`m.shiftId === sh.id`), serta berikan buffer toleransi waktu 1 menit pada perbandingan timestamp `openedAt` dan `closedAt`.
+
 ---
 
 ## 🔒 Masalah Keamanan
@@ -148,6 +160,15 @@
 - **Severity**: 🟡 Low
 - **Deskripsi**: `fetchTransactionsFromCloud()` hanya mengambil 500 transaksi terbaru. Untuk toko aktif dengan >500 transaksi, data lama tidak ter-sync ke device baru. Ini mempengaruhi laporan jika kasir login dari device baru.
 - **Status**: Acceptable untuk MVP, tapi perlu pagination atau filter berdasarkan rentang tanggal di masa depan.
+
+### SYNC-04: Format ID Kasir Non-UUID (`seed-kasir-001`) Memicu Postgres Error 22P02 pada Tabel Supabase
+- **File**: `src/lib/cloudSync.ts` (`syncCashMovement`, `syncShift`)
+- **Severity**: 🟡 Medium
+- **Deskripsi**: Kolom `cashier_id` dan `shift_id` pada skema Supabase PostgreSQL bawaan sering kali bertipe `UUID`. Ketika user akun default (seperti `seed-kasir-001` atau ID custom string) membuat transaksi/kas keluar, Supabase menolak payload dengan error `ERROR: 22P02: invalid input syntax for type uuid: "seed-kasir-001"`. Akibatnya, `smartUpsert` gagal dan catatan kas keluar hanya tersimpan di browser lokal lalu hilang saat reload/fetch dari cloud.
+- **Dampak**: Sinkronisasi catatan kas antar device gagal dan data kas hilang setelah refresh.
+- **Solusi**:
+  1. Lakukan sanitasi UUID (`isValidUuid`) pada `cloudSync.ts` sebelum pengiriman ke Supabase.
+  2. Ubah tipe kolom di Supabase via SQL `ALTER TABLE public.cash_movements ALTER COLUMN cashier_id TYPE TEXT;`.
 
 ---
 
@@ -256,12 +277,12 @@
 | 🟠 Menengah | 0 | - |
 | 🟡 Logic | 0 | - |
 | 🔒 Keamanan | 3 | SEC-01 s/d SEC-03 |
-| ☁️ Sync | 3 | SYNC-01 s/d SYNC-03 |
+| ☁️ Sync | 4 | SYNC-01 s/d SYNC-04 |
 | 🎨 UI/UX | 0 | - |
 | 🔧 Tech Debt | 4 | TECH-01 s/d TECH-04 |
 
-**Total temuan aktif: 10 item**
-**Total yang sudah diperbaiki: 45 item**
+**Total temuan aktif: 11 item**
+**Total yang sudah diperbaiki: 47 item**
 
 ---
 
