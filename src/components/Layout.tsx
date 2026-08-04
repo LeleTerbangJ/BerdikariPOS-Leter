@@ -217,7 +217,6 @@ export default function Layout() {
 
   const handleCloseShift = async () => {
     const closingCash = parseInt(closingCashInput) || 0;
-    closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
 
     // Audit log
     if (currentUser) {
@@ -253,6 +252,9 @@ export default function Layout() {
       `===========================`,
     ];
     await printTextRaw(lines, settings);
+
+    // BUG-UI-STACKED-MODAL fix: Close shift AFTER printing finishes to prevent OpenShiftModal peeking
+    closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
 
     setShowCloseShift(false);
     logout();
