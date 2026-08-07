@@ -214,6 +214,15 @@ export async function runMigrations() {
       migrationNeeded.autoPrintReceipt = true;
       migrationNeeded.receiptHeader = true;
       migrationNeeded.receiptFooter = true;
+    // Migration 15: Verify cash_movements table
+    const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
+    if (cmError) {
+      console.warn('[Migration] Table "cash_movements" missing or inaccessible in Supabase.');
+      console.warn('[Migration] Please run SQL in Supabase SQL Editor to create table & enable Realtime:');
+      console.warn('  CREATE TABLE IF NOT EXISTS public.cash_movements (id TEXT PRIMARY KEY, shift_id TEXT, type TEXT NOT NULL, amount NUMERIC NOT NULL DEFAULT 0, category TEXT NOT NULL, notes TEXT, cashier_id TEXT, cashier_name TEXT NOT NULL, date TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());');
+      console.warn('  ALTER TABLE public.cash_movements ENABLE ROW LEVEL SECURITY;');
+      console.warn('  CREATE POLICY "Allow all" ON public.cash_movements FOR ALL USING (true);');
+      console.warn('  ALTER PUBLICATION supabase_realtime ADD TABLE public.cash_movements;');
     }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
@@ -586,11 +595,13 @@ export async function deleteCustomerCloud(id: string) {
 // SHIFTS
 // ============================================================
 
+const isValidUuid = (str?: string | null) => str ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str) : false;
+
 export async function syncShift(shift: CashierShift) {
   if (!isSupabaseConfigured) return;
   await smartUpsert('shifts', {
     id: shift.id,
-    user_id: shift.userId,
+    user_id: isValidUuid(shift.userId) ? shift.userId : null,
     user_name: shift.userName,
     opened_at: shift.openedAt,
     closed_at: shift.closedAt,
@@ -1101,12 +1112,12 @@ export async function syncCashMovement(movement: CashMovement) {
   if (!isSupabaseConfigured) return;
   await smartUpsert('cash_movements', {
     id: movement.id,
-    shift_id: movement.shiftId || null,
+    shift_id: isValidUuid(movement.shiftId) ? movement.shiftId : null,
     type: movement.type,
     amount: movement.amount,
     category: movement.category,
     notes: movement.notes || null,
-    cashier_id: movement.cashierId,
+    cashier_id: isValidUuid(movement.cashierId) ? movement.cashierId : null,
     cashier_name: movement.cashierName,
     date: movement.date,
     created_at: movement.createdAt,
@@ -1117,20 +1128,25 @@ export async function fetchCashMovementsFromCloud(): Promise<CashMovement[] | nu
   if (!isSupabaseConfigured) return null;
   try {
     const { data, error } = await supabase.from('cash_movements').select('*').order('date', { ascending: false }).limit(500);
-    if (error) return null;
+    if (error) {
+      console.warn('[CloudSync] Failed to fetch cash_movements:', error.message);
+      return null;
+    }
+    console.log('[CloudSync] Fetched', data?.length || 0, 'cash movements from cloud');
     return data?.map((row) => ({
       id: row.id,
       shiftId: row.shift_id || undefined,
       type: row.type as 'in' | 'out',
-      amount: row.amount,
+      amount: Number(row.amount) || 0,
       category: row.category,
       notes: row.notes || undefined,
-      cashierId: row.cashier_id,
+      cashierId: row.cashier_id || '',
       cashierName: row.cashier_name,
       date: row.date,
       createdAt: row.created_at || row.date,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[CloudSync] Exception fetching cash_movements:', e);
     return null;
   }
 }
