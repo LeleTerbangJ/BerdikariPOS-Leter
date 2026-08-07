@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { v4 as uuid } from 'uuid';
+import { useSearchParams } from 'react-router-dom';
 import { useMenuStore } from '../store/menuStore';
 import { useCartStore } from '../store/cartStore';
-import { useTransactionStore } from '../store/transactionStore';
+import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
 import { useCustomerStore } from '../store/customerStore';
@@ -17,8 +18,10 @@ import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hp
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
-import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType } from '../types';
+import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType, Transaction, AtomicCheckoutParams } from '../types';
 import Modal from '../components/Modal';
+import PendingPaymentsModal from '../components/PendingPaymentsModal';
+import SplitBillModal from '../components/SplitBillModal';
 import {
   Search,
   Plus,
@@ -34,6 +37,9 @@ import {
   AlertTriangle,
   UtensilsCrossed,
   ShoppingBag as TakeAwayIcon,
+  Clock,
+  Scissors,
+  FileText,
 } from 'lucide-react';
 
 export default function POS() {
@@ -52,6 +58,117 @@ export default function POS() {
   // Order type & Table features state
   const [orderType, setOrderType] = useState<OrderType>('Dine In');
   const [tableNumber, setTableNumber] = useState('');
+
+  // Pending & Split Bill Modals State
+  const [showPendingModal, setShowPendingModal] = useState(false);
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [currentPendingTx, setCurrentPendingTx] = useState<Transaction | null>(null);
+
+  // v4.1 TO DO 3.1: selector primitive yang stabil — hasil number, re-render hanya saat count berubah
+  // (s.transactions + useMemo malah re-render pada tiap mutasi transaksi, termasuk kitchenStatus KDS).
+  const pendingCount = useTransactionStore((s) => s.transactions.filter(isPendingTransaction).length);
+
+  // Buka modal Pesanan Gantung saat diakses dari quick-access badge di sidebar (/pos?openPending=1)
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('openPending') === '1') {
+      setShowPendingModal(true);
+      setSearchParams({}, { replace: true }); // Bersihkan param agar refresh/back tidak membuka ulang
+    }
+  }, [searchParams, setSearchParams]);
+
+  // Deteksi perubahan item cart vs pesanan pending yang sedang dimuat.
+  // Dipakai untuk keputusan status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang,
+  // item sama → pertahankan status dapur (tidak mengganggu proses memasak / alarm).
+  const pendingItemsChanged = useMemo(() => {
+    if (!currentPendingTx) return true;
+    const sig = (items: CartItem[]) =>
+      JSON.stringify(
+        items
+          .map((i) => `${i.menuId}:${i.quantity}:${i.addons.map((a) => a.name).join(',')}`)
+          .sort()
+      );
+    return sig(cart.items) !== sig(currentPendingTx.items);
+  }, [cart.items, currentPendingTx]);
+
+  // Save Cart as Pending Transaction
+  const handleSavePending = async () => {
+    if (cart.items.length === 0) return;
+    if (orderType === 'Dine In' && settings.tableFeaturesEnabled && !tableNumber) {
+      addToast('Silakan pilih nomor meja untuk menyimpan pesanan gantung!', 'warning');
+      return;
+    }
+
+    const manualDiscount = parseInt(discountInput) || 0;
+    const rawTotalDiscount = Math.round(manualDiscount + promoDiscount + loyaltyDiscount);
+    const subtotal = Math.round(cart.getSubtotal());
+    const totalDiscount = Math.round(Math.min(rawTotalDiscount, subtotal));
+    const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
+    const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
+    const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
+    const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
+    const total = Math.round(netSubtotal + taxAmount);
+
+    const result = await AtomicTransactionEngine.executeCheckout({
+      transactionId: currentPendingTx ? currentPendingTx.id : checkoutTxId,
+      overrideQueueNumber: currentPendingTx ? currentPendingTx.queueNumber : undefined,
+      cartItems: cart.items,
+      subtotal,
+      discount: totalDiscount,
+      taxAmount,
+      totalAmount: total,
+      payMethod: 'Cash',
+      orderType,
+      tableNumber: orderType === 'Dine In' && settings.tableFeaturesEnabled ? tableNumber : undefined,
+      selectedCustomerId: selectedCustomerId || undefined,
+      selectedCustomerName: selectedCustomer?.name || undefined,
+      currentUser,
+      settings,
+      overrideTxStatus: 'Pending',
+      pendingNotes: 'Pesanan Gantung POS',
+      // v4.1 FIX (TO DO 1.3 & 1.4): izinkan update ulang dengan ID sama (bypass idempotency),
+      // deduksi stok DELTA (hanya item baru yang dipotong, item dihapus dikembalikan).
+      // Status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang; item sama → pertahankan.
+      bypassIdempotency: !!currentPendingTx,
+      overrideKitchenStatus:
+        currentPendingTx && !pendingItemsChanged ? currentPendingTx.kitchenStatus : 'Waiting',
+      reservedDeductions: currentPendingTx
+        ? calculateItemDeductions(currentPendingTx.items, menus)
+        : undefined,
+    });
+
+    if (result.success) {
+      cart.clearCart();
+      setShowCheckout(false);
+      setDiscountInput('');
+      setVoucherCode('');
+      setCashReceived('');
+      setSelectedCustomerId(null);
+      setTableNumber('');
+      setCheckoutTxId(uuid());
+      setCurrentPendingTx(null);
+      addToast(`Pesanan #${result.transaction?.queueNumber} berhasil disimpan ke Pesanan Gantung! ⏳`, 'success');
+    } else {
+      addToast(result.error || 'Gagal menyimpan pesanan gantung!', 'error');
+    }
+  };
+
+  // Resume Pending Transaction to Cart
+  const handleResumePendingOrder = (tx: Transaction) => {
+    if (cart.items.length > 0) {
+      if (!window.confirm(`⚠️ Keranjang saat ini berisi ${cart.items.length} item. Kosongkan keranjang & muat pesanan gantung #${tx.queueNumber}?`)) {
+        return;
+      }
+    }
+    cart.clearCart();
+    tx.items.forEach((item) => cart.addItem(item));
+    setOrderType(tx.orderType || 'Dine In'); // Restore tipe pesanan (Take Away tidak boleh jadi Dine In)
+    setTableNumber(tx.tableName || tx.tableNumber || '');
+    if (tx.customerId) setSelectedCustomerId(tx.customerId);
+    setCurrentPendingTx(tx);
+    setCheckoutTxId(tx.id);
+    addToast(`Pesanan gantung #${tx.queueNumber} dimuat ke keranjang.`, 'info');
+  };
 
   // GAP-3 fix: Real-time sync for menus, inventory, and customers (with GAP-2 auto-reconnect)
   // So Kasir sees changes from Manager's device even without navigating away
@@ -406,6 +523,18 @@ export default function POS() {
       preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
     }
 
+    // v4.1 FIX (TO DO 1.3 & 1.4): finalisasi pesanan gantung — re-commit dengan ID sama,
+    // pertahankan nomor antrean & status dapur, deduksi stok delta (item baru dipotong, item dihapus dikembalikan)
+    const pendingFinalizeParams: Partial<AtomicCheckoutParams> = currentPendingTx
+      ? {
+          overrideQueueNumber: currentPendingTx.queueNumber,
+          overrideTxStatus: 'Selesai',
+          overrideKitchenStatus: pendingItemsChanged ? 'Waiting' : currentPendingTx.kitchenStatus,
+          bypassIdempotency: true,
+          reservedDeductions: calculateItemDeductions(currentPendingTx.items, menus),
+        }
+      : {};
+
     // Execute Atomic Checkout via AtomicTransactionEngine
     const result = await AtomicTransactionEngine.executeCheckout({
       transactionId: checkoutTxId,
@@ -423,6 +552,7 @@ export default function POS() {
       currentUser,
       settings,
       preOpenedPrintWindow,
+      ...pendingFinalizeParams,
     });
 
     if (!result.success) {
@@ -487,15 +617,43 @@ export default function POS() {
       <div className="flex-1 flex flex-col p-4 lg:p-6 overflow-hidden">
         {/* Search & Filter */}
         <div className="mb-4 space-y-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cari menu..."
-              className="input pl-10"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Cari menu..."
+                className="input pl-10"
+              />
+            </div>
+            {/* Badge Pesanan Gantung (Pending Payments) */}
+            <button
+              onClick={() => setShowPendingModal(true)}
+              title={
+                pendingCount > 0
+                  ? `${pendingCount} pesanan gantung menunggu pembayaran`
+                  : 'Tidak ada pesanan gantung'
+              }
+              className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold border transition whitespace-nowrap ${
+                pendingCount > 0
+                  ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 shadow-sm'
+                  : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700/50'
+              }`}
+            >
+              <Clock size={15} />
+              <span className="hidden md:inline">Gantung</span>
+              <span
+                className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center ${
+                  pendingCount > 0
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-slate-200 dark:bg-slate-700 text-slate-500'
+                }`}
+              >
+                {pendingCount}
+              </span>
+            </button>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
             {categories.map((cat) => (
@@ -920,77 +1078,115 @@ export default function POS() {
           )}
         </div>
 
-        {/* Cart Footer */}
+        {/* Cart Summary Footer */}
         {cart.items.length > 0 && (
-          <div className="p-4 border-t border-slate-100 dark:border-slate-850 space-y-3">
-            {/* Promo/Voucher */}
-            <div className="space-y-2">
+          <div className="p-4 border-t border-slate-100 dark:border-slate-700/50 space-y-3 bg-white dark:bg-slate-800">
+            {/* Promo Voucher Code */}
+            <div className="space-y-1.5">
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={voucherCode}
-                  onChange={(e) => { setVoucherCode(e.target.value.toUpperCase()); setPromoError(''); }}
+                  onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
                   onKeyDown={(e) => e.key === 'Enter' && applyVoucherCode()}
                   placeholder="Kode voucher"
-                  className="input text-sm flex-1 font-mono"
+                  className="input text-xs uppercase flex-1 py-1.5"
                 />
-                <button onClick={applyVoucherCode} className="btn-secondary text-xs" disabled={!voucherCode}>OK</button>
+                {appliedPromoId ? (
+                  <button onClick={clearPromo} className="btn-secondary text-xs px-2.5 py-1.5 text-red-500">
+                    Batal
+                  </button>
+                ) : (
+                  <button onClick={applyVoucherCode} className="btn-secondary text-xs px-3 py-1.5" disabled={!voucherCode}>
+                    Pakai
+                  </button>
+                )}
               </div>
-              {activePromos.length > 0 && !appliedPromoId && (
-                <select onChange={(e) => selectPromo(e.target.value)} className="input text-xs" value="">
-                  <option value="">Pilih promo aktif...</option>
-                  {activePromos.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.type === 'percentage' ? `${p.value}%` : formatRupiah(p.value)})</option>
+              {appliedPromoId && (
+                <p className="text-[11px] text-green-600 dark:text-green-400 font-medium">
+                  ✓ Promo berhasil diterapkan (-{formatRupiah(promoDiscount)})
+                </p>
+              )}
+            </div>
+
+            {/* Manual Discount */}
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Diskon manual (Rp)"
+                  className="input text-xs flex-1 py-1.5"
+                />
+              </div>
+
+              {/* CRM Customer Selector */}
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-slate-500 dark:text-slate-400">Pelanggan CRM:</span>
+                <select
+                  value={selectedCustomerId || ''}
+                  onChange={(e) => setSelectedCustomerId(e.target.value || null)}
+                  className="input text-xs py-1 px-2 w-44"
+                >
+                  <option value="">-- Non-Member --</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.visitCount || 0}x Kunjungan)
+                    </option>
                   ))}
                 </select>
-              )}
-              {appliedPromoId && (
-                <div className="flex items-center justify-between p-2 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900/30 rounded-lg text-xs">
-                  <span className="text-green-700 dark:text-green-400 font-medium">✓ {activePromos.find(p => p.id === appliedPromoId)?.name} (-{formatRupiah(promoDiscount)})</span>
-                  <button onClick={clearPromo} className="text-red-500 hover:underline">Hapus</button>
+              </div>
+
+              {/* Loyalty Discount Banner */}
+              {selectedCustomer && loyaltyDiscount > 0 && (
+                <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-lg text-xs text-amber-700 dark:text-amber-400 font-medium flex justify-between items-center">
+                  <span>👑 Loyalty ({selectedCustomer.name}):</span>
+                  <span className="font-bold">-{formatRupiah(loyaltyDiscount)}</span>
                 </div>
               )}
-              {loyaltyDiscount > 0 && (
-                <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-lg text-xs text-amber-700 dark:text-amber-400 font-medium">
-                  👑 Loyalty discount: -{formatRupiah(loyaltyDiscount)}
+            </div>
+
+            <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-700/50">
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Subtotal</span>
+                <span className="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(cart.getSubtotal())}</span>
+              </div>
+              {(parseInt(discountInput) > 0 || promoDiscount > 0 || loyaltyDiscount > 0) && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-red-500">Total Diskon</span>
+                  <span className="text-red-500">-{formatRupiah(cappedPreviewDiscount)}</span>
                 </div>
               )}
-              {promoError && <p className="text-xs text-red-500">{promoError}</p>}
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={discountInput}
-                onChange={(e) => setDiscountInput(e.target.value.replace(/\D/g, ''))}
-                placeholder="Diskon manual (Rp)"
-                className="input text-sm flex-1"
-              />
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-500 dark:text-slate-400">Subtotal</span>
-              <span className="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(cart.getSubtotal())}</span>
-            </div>
-            {(parseInt(discountInput) > 0 || promoDiscount > 0 || loyaltyDiscount > 0) && (
-              <div className="flex justify-between text-sm">
-                <span className="text-red-500">Total Diskon</span>
-                <span className="text-red-500">-{formatRupiah(cappedPreviewDiscount)}</span>
+              {taxPercent > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500 dark:text-slate-400">Pajak ({taxPercent}%)</span>
+                  <span className="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(taxAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-bold text-lg text-slate-800 dark:text-slate-200">
+                <span>Total</span>
+                <span className="text-brand-700 dark:text-brand-400">
+                  {formatRupiah(finalTotal)}
+                </span>
               </div>
-            )}
-            {taxPercent > 0 && (
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-500 dark:text-slate-400">Pajak ({taxPercent}%)</span>
-                <span className="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(taxAmount)}</span>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleSavePending}
+                  disabled={cart.items.length === 0}
+                  className="btn-secondary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5"
+                  title="Simpan ke pesanan gantung (Pending)"
+                >
+                  <Clock size={16} />
+                  <span>Simpan Pending</span>
+                </button>
+                <button onClick={handleCheckout} className="btn-primary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5">
+                  <CreditCard size={16} />
+                  <span>Bayar</span>
+                </button>
               </div>
-            )}
-            <div className="flex justify-between font-bold text-lg text-slate-800 dark:text-slate-200">
-              <span>Total</span>
-              <span className="text-brand-700 dark:text-brand-400">
-                {formatRupiah(finalTotal)}
-              </span>
             </div>
-            <button onClick={handleCheckout} className="btn-primary w-full text-base">
-              <CreditCard size={18} /> Bayar
-            </button>
           </div>
         )}
       </div>
@@ -1255,17 +1451,31 @@ export default function POS() {
             </div>
           )}
 
-          {/* Finalize */}
-          <button
-            onClick={finalizeTransaction}
-            disabled={
-              payMethod === 'Cash' &&
-              (!cashReceived || (parseInt(cashReceived) || 0) < finalTotal)
-            }
-            className="btn-primary w-full text-base"
-          >
-            Selesaikan Pesanan
-          </button>
+          {/* Finalize / Split Bill Action Buttons */}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowCheckout(false);
+                setShowSplitModal(true);
+              }}
+              className="btn-secondary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5"
+              title="Pisahkan Pembayaran (Split Bill)"
+            >
+              <Scissors size={16} />
+              <span>Split Bill</span>
+            </button>
+            <button
+              onClick={finalizeTransaction}
+              disabled={
+                payMethod === 'Cash' &&
+                (!cashReceived || (parseInt(cashReceived) || 0) < finalTotal)
+              }
+              className="btn-primary flex-1 text-base py-2.5"
+            >
+              Selesaikan Pesanan
+            </button>
+          </div>
         </div>
       </Modal>
 
@@ -1303,6 +1513,41 @@ export default function POS() {
           </div>
         </div>
       </Modal>
+
+      {/* Pending Payments Modal */}
+      <PendingPaymentsModal
+        open={showPendingModal}
+        onClose={() => setShowPendingModal(false)}
+        onResumeOrder={handleResumePendingOrder}
+      />
+
+      {/* Split Bill Modal */}
+      <SplitBillModal
+        open={showSplitModal}
+        onClose={() => setShowSplitModal(false)}
+        cartItems={cart.items}
+        subtotal={cart.getSubtotal()}
+        discount={cappedPreviewDiscount}
+        taxAmount={taxAmount}
+        totalAmount={finalTotal}
+        orderType={orderType}
+        tableNumber={tableNumber}
+        parentTx={currentPendingTx}
+        selectedCustomerId={selectedCustomerId}
+        selectedCustomerName={selectedCustomer?.name}
+        appliedPromoId={appliedPromoId}
+        onCompleteSplit={() => {
+          cart.clearCart();
+          setShowCheckout(false);
+          setDiscountInput('');
+          setVoucherCode('');
+          setCashReceived('');
+          setSelectedCustomerId(null);
+          setTableNumber('');
+          setCheckoutTxId(uuid());
+          setCurrentPendingTx(null);
+        }}
+      />
     </div>
   );
 }

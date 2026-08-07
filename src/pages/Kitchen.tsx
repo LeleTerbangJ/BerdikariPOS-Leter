@@ -82,7 +82,7 @@ export default function Kitchen() {
   today.setHours(0, 0, 0, 0);
 
   const activeOrders = transactions.filter((t) => {
-    if (t.txStatus !== 'Selesai') return false;
+    if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
     // Only show today's orders
     if (new Date(t.date) < today) return false;
     // Hide Done orders that were cleared

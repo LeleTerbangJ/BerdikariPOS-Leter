@@ -137,6 +137,15 @@ export async function runMigrations() {
       migrationNeeded.tableNumber = true;
     }
 
+    // Migration 13: Add tax_enabled column to settings table
+    const { error: taxEnabledError } = await supabase.from('settings').select('tax_enabled').limit(1);
+    if (taxEnabledError && taxEnabledError.message.includes('tax_enabled')) {
+      console.warn('[Migration] Column "tax_enabled" missing in settings table.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;');
+      migrationNeeded.taxEnabled = true;
+    }
+
     // Migration 14: Add demo_mode column to settings table
     const { error: demoModeError } = await supabase.from('settings').select('demo_mode').limit(1);
     if (demoModeError && demoModeError.message.includes('demo_mode')) {
@@ -146,6 +155,65 @@ export async function runMigrations() {
       migrationNeeded.demoMode = true;
     }
 
+    // Migration 15: Add pending/split columns to transactions table (Pending Payment & Split Bill v4.1)
+    // PostgREST returns an error if ANY of these columns is missing, so one query validates all of them.
+    const pendingColumns = ['table_name', 'is_pending', 'pending_notes', 'split_parent_id', 'split_index', 'total_split_count', 'paid_amount'];
+    const { error: pendingColError } = await supabase
+      .from('transactions')
+      .select(pendingColumns.join(','))
+      .limit(1);
+    // PostgREST mengembalikan error format: Could not find the 'is_pending' column of 'transactions' in the schema cache
+    // Cukup cek apakah nama kolom yang hilang muncul di pesan error.
+    const pendingColMissing =
+      !!pendingColError &&
+      pendingColumns.some((c) => pendingColError.message?.includes(c));
+    if (pendingColMissing) {
+      console.warn('[Migration] Kolom Pending/Split Bill belum ada di tabel transactions (fitur Pending Payment & Split Bill v4.1).');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  DO $$ DECLARE cname TEXT; BEGIN');
+      console.warn('    SELECT conname INTO cname FROM pg_constraint');
+      console.warn('    WHERE conrelid = \'transactions\'::regclass AND contype = \'c\' AND pg_get_constraintdef(oid) LIKE \'%tx_status%\';');
+      console.warn('    IF cname IS NOT NULL THEN EXECUTE format(\'ALTER TABLE transactions DROP CONSTRAINT %I\', cname); END IF;');
+      console.warn('  END $$;');
+      console.warn('  ALTER TABLE transactions ADD CONSTRAINT transactions_tx_status_check CHECK (tx_status IN (\'Selesai\', \'Cancel\', \'Pending\', \'Demo\'));');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_name TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_pending BOOLEAN DEFAULT FALSE;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS pending_notes TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;');
+      migrationNeeded.tableName = true;
+      migrationNeeded.isPending = true;
+      migrationNeeded.pendingNotes = true;
+      migrationNeeded.splitParentId = true;
+      migrationNeeded.splitIndex = true;
+      migrationNeeded.totalSplitCount = true;
+      migrationNeeded.paidAmount = true;
+    }
+
+    // Migration 16: Add receipt print columns to settings table (TO DO 2.7)
+    // syncSettings menulis keempat kolom ini — tanpa deteksi, upsert pada DB lama akan gagal dan
+    // menumpuk offline queue. Deteksi dalam satu query (PostgREST error bila salah satu hilang).
+    const receiptPrintColumns = ['receipt_ascii_only', 'auto_print_receipt', 'receipt_header', 'receipt_footer'];
+    const { error: receiptPrintError } = await supabase
+      .from('settings')
+      .select(receiptPrintColumns.join(','))
+      .limit(1);
+    const receiptPrintMissing =
+      !!receiptPrintError &&
+      receiptPrintColumns.some((c) => receiptPrintError.message?.includes(c));
+    if (receiptPrintMissing) {
+      console.warn('[Migration] Kolom cetak struk di settings belum lengkap (TO DO 2.7): receipt_ascii_only / auto_print_receipt / receipt_header / receipt_footer.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_header TEXT;');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_footer TEXT;');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_ascii_only BOOLEAN DEFAULT FALSE;');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_print_receipt BOOLEAN DEFAULT FALSE;');
+      migrationNeeded.receiptAsciiOnly = true;
+      migrationNeeded.autoPrintReceipt = true;
+      migrationNeeded.receiptHeader = true;
+      migrationNeeded.receiptFooter = true;
     // Migration 15: Verify cash_movements table
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
     if (cmError) {
@@ -162,7 +230,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -202,7 +270,29 @@ export async function syncTransaction(tx: Transaction) {
     data.order_type = tx.orderType || null;
   }
   if (!migrationNeeded.tableNumber) {
-    data.table_number = tx.tableNumber || null;
+    data.table_number = tx.tableNumber || tx.tableName || null;
+  }
+  // v4.1: Pending Payment & Split Bill columns (guarded against missing DB migration)
+  if (!migrationNeeded.tableName) {
+    data.table_name = tx.tableName || null;
+  }
+  if (!migrationNeeded.isPending) {
+    data.is_pending = tx.isPending || tx.txStatus === 'Pending';
+  }
+  if (!migrationNeeded.pendingNotes) {
+    data.pending_notes = tx.pendingNotes || null;
+  }
+  if (!migrationNeeded.splitParentId) {
+    data.split_parent_id = tx.splitParentId || null;
+  }
+  if (!migrationNeeded.splitIndex) {
+    data.split_index = tx.splitIndex || null;
+  }
+  if (!migrationNeeded.totalSplitCount) {
+    data.total_split_count = tx.totalSplitCount || null;
+  }
+  if (!migrationNeeded.paidAmount) {
+    data.paid_amount = tx.paidAmount || null;
   }
   await smartUpsert('transactions', data);
 }
@@ -252,7 +342,14 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       hpp: row.hpp,
       tax: row.tax || 0,
       orderType: row.order_type || undefined,
-      tableNumber: row.table_number || undefined,
+      tableNumber: row.table_number || row.table_name || undefined,
+      tableName: row.table_name || row.table_number || undefined,
+      isPending: row.is_pending || row.tx_status === 'Pending',
+      pendingNotes: row.pending_notes || undefined,
+      splitParentId: row.split_parent_id || undefined,
+      splitIndex: row.split_index || undefined,
+      totalSplitCount: row.total_split_count || undefined,
+      paidAmount: row.paid_amount || undefined,
     })) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);
@@ -570,11 +667,21 @@ export async function syncSettings(settings: AppSettings) {
     printer_width: settings.printerWidth,
     auto_print_on_checkout: settings.autoPrintOnCheckout,
     super_admin_pin: settings.superAdminPin,
-    receipt_header: settings.receiptHeader || null,
-    receipt_footer: settings.receiptFooter || null,
-    receipt_ascii_only: settings.receiptAsciiOnly ?? false,
-    auto_print_receipt: settings.autoPrintReceipt ?? false,
   };
+  // v4.1 TO DO 2.7: kolom opsional settings — hanya ditulis jika kolom sudah ada di DB
+  // (tanpa guard, upsert pada DB lama gagal → offline queue menumpuk).
+  if (!migrationNeeded.receiptHeader) {
+    data.receipt_header = settings.receiptHeader || null;
+  }
+  if (!migrationNeeded.receiptFooter) {
+    data.receipt_footer = settings.receiptFooter || null;
+  }
+  if (!migrationNeeded.receiptAsciiOnly) {
+    data.receipt_ascii_only = settings.receiptAsciiOnly ?? false;
+  }
+  if (!migrationNeeded.autoPrintReceipt) {
+    data.auto_print_receipt = settings.autoPrintReceipt ?? false;
+  }
   if (!migrationNeeded.demoMode) {
     data.demo_mode = settings.demoMode;
   }

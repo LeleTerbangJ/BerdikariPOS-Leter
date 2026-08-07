@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Transaction, KitchenStatus, TxStatus } from '../types';
+
+// v4.1 TO DO 3.1/3.2: predicate tunggal pesanan pending — satu sumber kebenaran agar
+// angka konsisten di POS, Layout, PendingPaymentsModal & Transactions (paritas angka).
+export const isPendingTransaction = (t: Transaction): boolean =>
+  t.txStatus === 'Pending' || t.isPending === true;
 import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, deleteTransactionCloud } from '../lib/cloudSync';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
@@ -12,12 +17,15 @@ interface TransactionState {
   addTransaction: (tx: Transaction) => void;
   updateKitchenStatus: (id: string, status: KitchenStatus) => void;
   updateTxStatus: (id: string, status: TxStatus) => void;
+  // v4.1 TO DO 2.8: perbarui metadata transaksi (mis. paymentMethod parent split) tanpa menyentuh status/cloud
+  updateTxMeta: (id: string, partial: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
   deleteTransactionLocal: (id: string) => void;
   getTodayTransactions: () => Transaction[];
   getActiveKitchenOrders: () => Transaction[];
   clearKdsDoneOrders: () => void;
   getNextQueueNumber: () => Promise<number>;
+  cancelPendingTransaction: (id: string) => void;
   loadFromCloud: (transactions: Transaction[], fullSync?: boolean) => void;
 }
 
@@ -81,12 +89,14 @@ export const useTransactionStore = create<TransactionState>()(
         syncTransaction(tx); // Cloud sync
         set((s) => {
           const today = getTodayDateStr();
-          const todayTxs = [tx, ...s.transactions].filter(
+          const filteredExisting = s.transactions.filter((t) => t.id !== tx.id);
+          const nextList = [tx, ...filteredExisting];
+          const todayTxs = nextList.filter(
             (t) => t.date.startsWith(today) && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
           );
           const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
           return {
-            transactions: [tx, ...s.transactions],
+            transactions: nextList,
             nextQueueNumber: maxQueue + 1,
             lastQueueDate: today,
           };
@@ -107,6 +117,15 @@ export const useTransactionStore = create<TransactionState>()(
         set((s) => ({
           transactions: s.transactions.map((t) =>
             t.id === id ? { ...t, txStatus: status } : t
+          ),
+        }));
+      },
+
+      // v4.1 TO DO 2.8: update metadata lokal (paymentMethod parent split, dst.) — status tetap via updateTxStatus
+      updateTxMeta: (id, partial) => {
+        set((s) => ({
+          transactions: s.transactions.map((t) =>
+            t.id === id ? { ...t, ...partial } : t
           ),
         }));
       },
@@ -132,19 +151,42 @@ export const useTransactionStore = create<TransactionState>()(
         );
       },
 
+      cancelPendingTransaction: (id) => {
+        const tx = get().transactions.find((t) => t.id === id);
+        if (tx) {
+          get().updateTxStatus(id, 'Cancel');
+          // Revert reserved stock if transaction had items
+          if (tx.items && tx.items.length > 0) {
+            import('../utils/hpp').then(({ createSnapshotForCartItems }) => {
+              import('../store/menuStore').then(({ useMenuStore }) => {
+                import('../store/inventoryStore').then(({ useInventoryStore }) => {
+                  import('../lib/inventoryEngine').then(({ InventoryEngine }) => {
+                    const menus = useMenuStore.getState().menus;
+                    const inventory = useInventoryStore.getState().items;
+                    const { itemsWithSnapshot } = createSnapshotForCartItems(tx.items, menus, inventory);
+                    const deductions = InventoryEngine.computeDeductions(itemsWithSnapshot, menus);
+                    useInventoryStore.getState().revertStock(deductions, `Void Pending #${tx.queueNumber}`);
+                  });
+                });
+              });
+            });
+          }
+        }
+      },
+
       getActiveKitchenOrders: () => {
         return get().transactions.filter(
           (t) =>
             t.kitchenStatus !== 'Done' &&
-            t.txStatus === 'Selesai'
+            (t.txStatus === 'Selesai' || t.txStatus === 'Pending')
         );
       },
 
       clearKdsDoneOrders: () => set({ lastKdsClearTime: new Date().toISOString() }),
 
-      loadFromCloud: (cloudTransactions, fullSync = false) => {
+      loadFromCloud: (cloudTransactions: Transaction[], fullSync = false) => {
         set((s) => {
-          const cloudIds = new Set(cloudTransactions.map((t) => t.id));
+          const cloudIds = new Set(cloudTransactions.map((t: Transaction) => t.id));
           
           // Find the oldest transaction date from the cloud list to establish the sync window boundary
           let oldestCloudTime = 0;

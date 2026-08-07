@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   cash_received FLOAT,
   change FLOAT,
   kitchen_status TEXT NOT NULL DEFAULT 'Waiting' CHECK (kitchen_status IN ('Waiting', 'Processing', 'Done')),
-  tx_status TEXT NOT NULL DEFAULT 'Selesai' CHECK (tx_status IN ('Selesai', 'Cancel', 'Demo')),
+  tx_status TEXT NOT NULL DEFAULT 'Selesai' CHECK (tx_status IN ('Selesai', 'Cancel', 'Pending', 'Demo')),
   cashier_id TEXT,
   cashier_name TEXT,
   customer_id TEXT,
@@ -83,8 +83,42 @@ CREATE TABLE IF NOT EXISTS transactions (
   tax INT DEFAULT 0,
   order_type TEXT DEFAULT 'Dine In',
   table_number TEXT,
+  -- Pending Payment & Split Bill (v4.1)
+  table_name TEXT,
+  is_pending BOOLEAN DEFAULT FALSE,
+  pending_notes TEXT,
+  split_parent_id TEXT,
+  split_index INT,
+  total_split_count INT,
+  paid_amount FLOAT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Safe migration for existing databases (Pending Payment & Split Bill v4.1)
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_name TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_pending BOOLEAN DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS pending_notes TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+
+-- Safe migration: izinkan status 'Pending' pada tx_status (di-drop lalu di-add ulang dengan nilai yang sama, aman dijalankan berulang)
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  SELECT conname INTO cname
+  FROM pg_constraint
+  WHERE conrelid = 'transactions'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) LIKE '%tx_status%';
+  IF cname IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE transactions DROP CONSTRAINT %I', cname);
+  END IF;
+END $$;
+ALTER TABLE transactions ADD CONSTRAINT transactions_tx_status_check
+  CHECK (tx_status IN ('Selesai', 'Cancel', 'Pending', 'Demo'));
 
 -- 5. Customers table
 CREATE TABLE IF NOT EXISTS customers (
@@ -368,10 +402,43 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tax INT DEFAULT 0;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'Dine In';
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_number TEXT;
 
+-- Skrip untuk fitur Pending Payment & Split Bill (v4.1):
+-- 1) Izinkan status 'Pending' pada CHECK constraint tx_status
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  SELECT conname INTO cname
+  FROM pg_constraint
+  WHERE conrelid = 'transactions'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) LIKE '%tx_status%';
+  IF cname IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE transactions DROP CONSTRAINT %I', cname);
+  END IF;
+END $$;
+ALTER TABLE transactions ADD CONSTRAINT transactions_tx_status_check
+  CHECK (tx_status IN ('Selesai', 'Cancel', 'Pending', 'Demo'));
+-- 2) Kolom tambahan untuk Pending Payment & Split Bill
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_name TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_pending BOOLEAN DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS pending_notes TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS kitchen_printers JSONB DEFAULT '[]';
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_color TEXT;
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_shades JSONB;
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}';
+-- Kolom settings lain yang ditulis syncSettings (TO DO 2.6/2.7) — pastikan ada di DB lama:
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS demo_mode BOOLEAN DEFAULT TRUE;
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_header TEXT;
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_footer TEXT;
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_ascii_only BOOLEAN DEFAULT FALSE;
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_print_receipt BOOLEAN DEFAULT FALSE;
 
 ALTER PUBLICATION supabase_realtime ADD TABLE stock_opnames;
 

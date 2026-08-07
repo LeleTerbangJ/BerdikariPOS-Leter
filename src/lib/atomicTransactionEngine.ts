@@ -14,12 +14,12 @@ import { useMenuStore } from '../store/menuStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { syncTransaction } from './cloudSync';
-
-interface ProcessedRegistryEntry {
-  state: TransactionLifecycleState;
-  transaction?: Transaction;
-  timestamp: string;
-}
+import {
+  pruneIdempotencyEntries,
+  IDEMPOTENCY_TTL_MS,
+  MAX_IDEMPOTENCY_ENTRIES,
+  type ProcessedRegistryEntry,
+} from '../utils/idempotencyCleanup';
 
 /**
  * ATOMIC TRANSACTION ENGINE (Enterprise POS Architecture)
@@ -33,6 +33,7 @@ interface ProcessedRegistryEntry {
  */
 export class AtomicTransactionEngine {
   private static idempotencyRegistry = new Map<string, ProcessedRegistryEntry>();
+  private static registerStateCalls = 0;
 
   /**
    * Execute atomic checkout operation.
@@ -43,7 +44,29 @@ export class AtomicTransactionEngine {
     // 1. Idempotency Check
     const existingEntry = this.idempotencyRegistry.get(txId);
     if (existingEntry) {
-      if (
+      // In-flight guard: mencegah double-submit saat transaksi masih diproses (berlaku untuk SEMUA alur)
+      if (existingEntry.state === 'VALIDATING' || existingEntry.state === 'PROCESSING') {
+        return {
+          success: false,
+          error: 'Transaksi sedang diproses. Mohon tunggu sejenak.',
+        };
+      }
+      if (params.bypassIdempotency) {
+        // Resume/update/finalize pending: re-commit dengan ID yang sama DIIZINKAN,
+        // kecuali transaksi sudah berstatus 'Selesai' (sudah dilunasi) → tolak replay (anti double-pay).
+        if (
+          (existingEntry.state === 'COMMITTED' ||
+            existingEntry.state === 'SYNC_PENDING' ||
+            existingEntry.state === 'SYNCED') &&
+          existingEntry.transaction?.txStatus === 'Selesai'
+        ) {
+          return {
+            success: true,
+            transaction: existingEntry.transaction,
+            idempotentReplay: true,
+          };
+        }
+      } else if (
         existingEntry.state === 'COMMITTED' ||
         existingEntry.state === 'SYNC_PENDING' ||
         existingEntry.state === 'SYNCED'
@@ -54,12 +77,16 @@ export class AtomicTransactionEngine {
           idempotentReplay: true,
         };
       }
-      if (existingEntry.state === 'VALIDATING' || existingEntry.state === 'PROCESSING') {
-        return {
-          success: false,
-          error: 'Transaksi sedang diproses. Mohon tunggu sejenak.',
-        };
-      }
+    }
+
+    // Guard: keranjang kosong tidak boleh diproses.
+    // Mencegah race re-commit kosong (misal double-click update pending setelah cart.clearCart())
+    // yang bisa salah me-revert stok reserve / membuat transaksi kosong.
+    if (!params.cartItems || params.cartItems.length === 0) {
+      return {
+        success: false,
+        error: 'Keranjang kosong. Tidak ada item untuk diproses.',
+      };
     }
 
     // Register PENDING state
@@ -70,10 +97,15 @@ export class AtomicTransactionEngine {
 
     // 2. Pre-checkout Inventory Validation (VALIDATING)
     this.registerState(txId, 'VALIDATING');
+    // Resume Pending: stok efektif = stok saat ini + stok yang sudah di-reserve oleh pesanan pending.
+    // Tanpa ini, validasi akan salah gagal karena stok sudah berkurang akibat reservasi awal.
+    const effectiveInventory = params.reservedDeductions
+      ? inventory.map((i) => ({ ...i, stock: i.stock + (params.reservedDeductions![i.id] || 0) }))
+      : inventory;
     const validation = InventoryEngine.validateStockAvailability(
       params.cartItems,
       menus,
-      inventory
+      effectiveInventory
     );
 
     if (!validation.valid) {
@@ -90,7 +122,7 @@ export class AtomicTransactionEngine {
     const inventorySnapshot = InventoryEngine.captureSnapshot(inventory);
 
     try {
-      const queueNum = await useTransactionStore.getState().getNextQueueNumber();
+      const queueNum = params.overrideQueueNumber || (await useTransactionStore.getState().getNextQueueNumber());
       const { itemsWithSnapshot, totalHpp } = createSnapshotForCartItems(
         params.cartItems,
         menus,
@@ -100,6 +132,7 @@ export class AtomicTransactionEngine {
       const deductions = InventoryEngine.computeDeductions(itemsWithSnapshot, menus);
       const netSales = Math.max(0, params.subtotal - params.discount);
       const grossProfit = netSales - totalHpp;
+      const targetTxStatus = params.overrideTxStatus || 'Selesai';
 
       const tx: Transaction = {
         id: txId,
@@ -113,8 +146,8 @@ export class AtomicTransactionEngine {
         paymentMethod: params.payMethod,
         cashReceived: params.payMethod === 'Cash' ? params.cashReceived : undefined,
         change: params.payMethod === 'Cash' ? Math.max(0, (params.cashReceived || 0) - params.totalAmount) : undefined,
-        kitchenStatus: 'Waiting',
-        txStatus: 'Selesai',
+        kitchenStatus: params.overrideKitchenStatus || 'Waiting',
+        txStatus: targetTxStatus,
         cashierId: params.currentUser?.id || '',
         cashierName: params.currentUser?.name || '',
         customerId: params.selectedCustomerId || undefined,
@@ -128,11 +161,44 @@ export class AtomicTransactionEngine {
           params.orderType === 'Dine In' && params.settings.tableFeaturesEnabled
             ? params.tableNumber
             : undefined,
+        tableName: params.tableNumber || undefined,
+        isPending: targetTxStatus === 'Pending',
+        pendingNotes: params.pendingNotes,
+        splitParentId: params.splitParentId,
+        splitIndex: params.splitIndex,
+        totalSplitCount: params.totalSplitCount,
         lifecycleState: 'COMMITTED',
       };
 
       // 4. Commit Local Mutations (COMMITTED)
-      useInventoryStore.getState().deductStock(deductions, `Transaksi #${queueNum}`);
+      if (params.skipStockDeduction) {
+        // Reserved stock sudah menutupi transaksi ini (contoh: sub-bill split dari pesanan pending)
+      } else if (params.reservedDeductions) {
+        // Resume/update/finalize pending: deduksi DELTA antara cart baru vs stok yang sudah di-reserve.
+        // Item baru → potong stok; item yang dihapus → kembalikan stok (revert).
+        const deltaDeduct: Record<string, number> = {};
+        const deltaRevert: Record<string, number> = {};
+        for (const [invId, needed] of Object.entries(deductions)) {
+          const reserved = params.reservedDeductions[invId] || 0;
+          const diff = needed - reserved;
+          if (diff > 0) deltaDeduct[invId] = diff;
+          else if (diff < 0) deltaRevert[invId] = -diff;
+        }
+        // Bahan yang di-reserve tapi tidak lagi dibutuhkan di cart baru → kembalikan seluruhnya
+        for (const [invId, reserved] of Object.entries(params.reservedDeductions)) {
+          if (!(invId in deductions) && reserved > 0) {
+            deltaRevert[invId] = (deltaRevert[invId] || 0) + reserved;
+          }
+        }
+        if (Object.keys(deltaDeduct).length > 0) {
+          useInventoryStore.getState().deductStock(deltaDeduct, `Transaksi #${queueNum} (Delta Pending)`);
+        }
+        if (Object.keys(deltaRevert).length > 0) {
+          useInventoryStore.getState().revertStock(deltaRevert, `Transaksi #${queueNum} (Koreksi Pending)`);
+        }
+      } else {
+        useInventoryStore.getState().deductStock(deductions, `Transaksi #${queueNum}`);
+      }
       useTransactionStore.getState().addTransaction(tx);
 
       if (params.currentUser) {
@@ -207,13 +273,17 @@ export class AtomicTransactionEngine {
     }
 
     // Asynchronous Printing
-    try {
-      if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
-        const receiptData = buildReceiptFromTransaction(tx, params.settings);
-        printReceipt(receiptData, params.settings, 'all', params.preOpenedPrintWindow || undefined);
+    // suppressAutoPrint (v4.1 TO DO 1.5): sub-bill split mengelola print sendiri (printSplitReceipt),
+    // sehingga engine tidak boleh mencetak struk + tiket dapur berulang per sub-bill.
+    if (!params.suppressAutoPrint) {
+      try {
+        if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
+          const receiptData = buildReceiptFromTransaction(tx, params.settings);
+          printReceipt(receiptData, params.settings, 'all', params.preOpenedPrintWindow || undefined);
+        }
+      } catch (printErr) {
+        console.warn('[AtomicEngine] Post-commit printer warning:', printErr);
       }
-    } catch (printErr) {
-      console.warn('[AtomicEngine] Post-commit printer warning:', printErr);
     }
   }
 
@@ -222,10 +292,29 @@ export class AtomicTransactionEngine {
     state: TransactionLifecycleState,
     transaction?: Transaction
   ) {
+    // v4.1 TO DO 2.4: cleanup amortized (tiap 50 panggilan atau saat mendekati batas ukuran)
+    this.cleanupIdempotencyRegistry();
     this.idempotencyRegistry.set(txId, {
       state,
       transaction,
       timestamp: new Date().toISOString(),
     });
+  }
+
+  /**
+   * v4.1 TO DO 2.4 — Bersihkan idempotency registry (TTL 24 jam + batas 1000 entry)
+   * agar memori tidak tumbuh tanpa batas di sesi kasir yang panjang.
+   * Throttle: sweep hanya tiap 50 panggilan, atau saat ukuran MELAMPAUI batas (size > MAX).
+   * Setelah prune, ukuran tepat = MAX sehingga throttle kembali normal (tidak sort tiap panggilan).
+   */
+  private static cleanupIdempotencyRegistry() {
+    this.registerStateCalls++;
+    if (
+      this.registerStateCalls % 50 !== 0 &&
+      this.idempotencyRegistry.size <= MAX_IDEMPOTENCY_ENTRIES
+    ) {
+      return;
+    }
+    pruneIdempotencyEntries(this.idempotencyRegistry, Date.now());
   }
 }

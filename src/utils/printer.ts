@@ -11,6 +11,7 @@
 
 import type { AppSettings, Transaction, CartItem, KitchenPrinterConfig } from '../types';
 import { formatRupiah } from './format';
+import { buildEqualSplitReceipt } from './splitAllocation';
 
 // ============================================================
 // RECEIPT DATA TYPES
@@ -837,13 +838,13 @@ async function printKitchenReceiptBluetooth(data: ReceiptData, items: CartItem[]
 export async function printReceipt(
   data: ReceiptData,
   settings: AppSettings,
-  targetPrinter: 'all' | 'cashier' = 'all',
+  targetPrinter: 'all' | 'cashier' | 'kitchen' = 'all',
   preOpenedWindow?: Window | null
 ): Promise<PrintJobResult[]> {
   const results: PrintJobResult[] = [];
 
-  // 1. Print cashier receipt
-  if (settings.printerEnabled) {
+  // 1. Print cashier receipt (skip saat target 'kitchen' — hanya tiket dapur)
+  if (settings.printerEnabled && targetPrinter !== 'kitchen') {
     try {
       if (settings.printerType === 'bluetooth') {
         await printReceiptBluetooth(data, settings.printerWidth);
@@ -857,8 +858,12 @@ export async function printReceipt(
     }
   }
 
-  // 2. Print kitchen tickets (only when target is 'all')
-  if (targetPrinter === 'all' && settings.kitchenPrinters && settings.kitchenPrinters.length > 0) {
+  // 2. Print kitchen tickets (target 'all' atau 'kitchen')
+  if (
+    (targetPrinter === 'all' || targetPrinter === 'kitchen') &&
+    settings.kitchenPrinters &&
+    settings.kitchenPrinters.length > 0
+  ) {
     const kitchenJobs = settings.kitchenPrinters
       .filter(kp => kp.enabled)
       .map(async (kp): Promise<PrintJobResult> => {
@@ -1144,4 +1149,54 @@ export function getOrderTypeHeaderLines(orderType?: string, tableNumber?: string
     line1: type.toUpperCase(),
     line2: tableNumber ? `MEJA ${tableNumber.replace(/^meja\s*/i, '').toUpperCase()}` : undefined,
   };
+}
+
+export function printProvisionalBill(tx: Transaction, settings: AppSettings) {
+  const receiptData = buildReceiptFromTransaction(tx, settings);
+  receiptData.receiptHeader = `*** BILL SEMENTARA (PRE-PAYMENT) ***\n${receiptData.receiptHeader || ''}`.trim();
+  receiptData.paymentMethod = 'BELUM DIBAYAR (PENDING)';
+  receiptData.cashReceived = undefined;
+  receiptData.change = undefined;
+
+  return printReceipt(receiptData, settings, 'cashier');
+}
+
+export async function printSplitReceipt(
+  subTx: Transaction,
+  parentTx: Transaction | null | undefined,
+  settings: AppSettings,
+  target: 'cashier' | 'all' = 'cashier',
+  allItems?: CartItem[]
+): Promise<PrintJobResult[]> {
+  const receiptData = buildReceiptFromTransaction(subTx, settings);
+  const splitLabel = `[SPLIT BILL ${subTx.splitIndex || 1} OF ${subTx.totalSplitCount || 1}]`;
+  const parentLabel = parentTx ? `Induk Order #${parentTx.queueNumber}\n` : '';
+
+  // v4.1 TO DO 2.3 — Mode Equal (Split Nominal Rata): label bagian eksplisit (menggantikan
+  // splitLabel agar tidak duplikat) + subtotal per item proporsional (Σ item === subtotal bagian),
+  // plus baris ringkasan pesanan asli sebagai konteks. Mode item tidak diubah.
+  const equalSplit = buildEqualSplitReceipt(subTx);
+  if (equalSplit) {
+    const orderTotal = subTx.items.reduce((a, i) => a + i.subtotal, 0);
+    receiptData.receiptHeader =
+      `${equalSplit.header}\nPesanan: ${subTx.items.length} item — Total ${formatRupiah(orderTotal)}\n` +
+      `${parentLabel}${receiptData.receiptHeader || ''}`.trim();
+    receiptData.items = equalSplit.items;
+  } else {
+    receiptData.receiptHeader = `${splitLabel}\n${parentLabel}${receiptData.receiptHeader || ''}`.trim();
+  }
+
+  const results: PrintJobResult[] = [];
+
+  // 1. Struk kasir sub-bill (hanya item sub-bill itu)
+  results.push(...(await printReceipt(receiptData, settings, 'cashier')));
+
+  // 2. Tiket dapur lengkap — hanya saat target 'all' (split fresh, sub-bill pertama):
+  //    dapur belum pernah menerima tiket, cetak semua item cart sekaligus agar tidak ada pesanan yang terlewat.
+  if (target === 'all') {
+    const kitchenData = allItems ? { ...receiptData, items: allItems } : receiptData;
+    results.push(...(await printReceipt(kitchenData, settings, 'kitchen')));
+  }
+
+  return results;
 }

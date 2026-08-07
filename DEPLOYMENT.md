@@ -1,4 +1,4 @@
-# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS v4.2
+# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS v4.4
 
 ## Status: ✅ PRODUCTION LIVE
 - **Hosting**: Vercel (auto-deploy)
@@ -89,6 +89,9 @@ Setiap klien (toko) yang beli aplikasi Anda perlu:
    > -- 1. Pengaturan Pajak & Fitur Meja
    > ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE;
    > ALTER TABLE settings ADD COLUMN IF NOT EXISTS table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}';
+   > -- 1b. Kolom cetak struk (TO DO 2.7) — ditulis syncSettings; wajib ada agar upsert tidak gagal pada DB lama
+   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS receipt_ascii_only BOOLEAN DEFAULT FALSE;
+   > ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_print_receipt BOOLEAN DEFAULT FALSE;
    > 
    > -- 2. Detail Transaksi (Tipe Pesanan, Meja, Pajak)
    > ALTER TABLE transactions ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'Dine In';
@@ -108,14 +111,36 @@ Setiap klien (toko) yang beli aplikasi Anda perlu:
    >   date TIMESTAMPTZ DEFAULT now(),
    >   created_at TIMESTAMPTZ DEFAULT now()
    > );
-   > 
-   > -- 4. Blok Aman untuk Realtime Publication
-   > DO $$
-   > BEGIN
-   >   ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
-   > EXCEPTION WHEN duplicate_object THEN NULL;
-   > END $$;
-   > ```
+   >>   -- 4. Blok Aman untuk Realtime Publication
+>   DO $$
+>   BEGIN
+>     ALTER PUBLICATION supabase_realtime ADD TABLE cash_movements;
+>   EXCEPTION WHEN duplicate_object THEN NULL;
+>   END $$;
+>
+>   -- 5. Fitur Pending Payment & Split Bill (v4.1) — izinkan status 'Pending' & kolom pendukung
+>   DO $$
+>   DECLARE
+>     cname TEXT;
+>   BEGIN
+>     SELECT conname INTO cname
+>     FROM pg_constraint
+>     WHERE conrelid = 'transactions'::regclass
+>       AND contype = 'c'
+>       AND pg_get_constraintdef(oid) LIKE '%tx_status%';
+>     IF cname IS NOT NULL THEN
+>       EXECUTE format('ALTER TABLE transactions DROP CONSTRAINT %I', cname);
+>     END IF;
+>   END $$;
+>   ALTER TABLE transactions ADD CONSTRAINT transactions_tx_status_check CHECK (tx_status IN ('Selesai', 'Cancel', 'Pending', 'Demo'));
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_name TEXT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_pending BOOLEAN DEFAULT FALSE;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS pending_notes TEXT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+>   ```
 
 ---
 
@@ -182,4 +207,4 @@ Butuh bantuan? Hubungi: [WA Anda]
 
 ---
 
-*Dokumen ini diperbarui untuk BerdikariPOS v4.2.*
+*Dokumen ini diperbarui untuk BerdikariPOS v4.4.*

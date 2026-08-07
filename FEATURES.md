@@ -131,6 +131,21 @@ BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk
 - **Restriksi Multi-login Device**: Membatasi user agar hanya login di 1 perangkat aktif saja
 - Audit Log lengkap & dapat di-export ke CSV
 
+### 13. 💾 Backup & Restore Otomatis
+- **3 Mode Backup**: `FULL` (semua data + media), `MASTER_DATA` (settings, menu, inventory, customers, promos), `TRANSACTION` (transaksi, kas, shift, stock opname)
+- **Backup ZIP ber-checksum SHA-256** + validasi integritas sebelum restore
+- **Riwayat Backup** dengan status sukses/gagal & ukuran file
+- **Auto-Backup Terjadwal**: Harian / Mingguan ke Local Download / Supabase Storage / Google Drive
+- **Restore Wizard**: pratinjau isi backup, pemilihan cakupan, konfirmasi sebelum menimpa data
+
+### 14. 🧩 Bundle Menu (Paket Hemat)
+- **Bundle Menu**: menu induk berisi komponen menu lain (mis. Paket Nasi + Ayam + Es Teh)
+- **Bundle Validation Engine**: cegah self-reference, bundle bersarang, & referensi sirkular (A→B→A)
+- **Child items otomatis** di-generate ke cart (harga 0, `isBundleChild`) & diskalakan saat qty bundle berubah
+- **HPP bundle** dihitung dari resep komponen → akurat untuk laporan laba
+- **Snapshot komponen** permanen di transaksi; filtering KDS/cetak dapur mengenali child bundle
+- Repositori terpisah (`bundleRepository`) untuk tabel `menu_components` dengan offline queue & cloud sync
+
 ---
 
-*Fitur lengkap BerdikariPOS v4.2.*
+*Fitur lengkap BerdikariPOS v4.4.*

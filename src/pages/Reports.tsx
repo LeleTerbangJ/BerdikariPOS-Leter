@@ -62,6 +62,9 @@ export default function Reports() {
     const now = new Date();
     return transactions.filter((t) => {
       if (t.txStatus !== 'Selesai') return false;
+      // v4.1 TO DO 1.6: Sub-bill hasil split bill (anak) tidak dihitung lagi — omset sudah tercatat
+      // di transaksi induk (parent). Tanpa ini, omset & HPP terhitung ganda (double accounting).
+      if (t.splitParentId) return false;
       const d = new Date(t.date);
       switch (dateFilterType) {
         case 'today':

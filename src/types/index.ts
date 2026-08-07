@@ -86,7 +86,7 @@ export type Temperature = 'Hangat' | 'Dingin';
 export type SugarLevel = 'Normal' | 'Less' | 'None';
 export type PaymentMethod = 'Cash' | 'QRIS' | 'Transfer';
 export type KitchenStatus = 'Waiting' | 'Processing' | 'Done';
-export type TxStatus = 'Selesai' | 'Cancel' | 'Demo';
+export type TxStatus = 'Selesai' | 'Cancel' | 'Pending' | 'Demo';
 export type OrderType = 'Dine In' | 'Take Away';
 
 export interface RecipeIngredientSnapshot {
@@ -119,6 +119,7 @@ export interface CartItem {
   recipeSnapshot?: RecipeIngredientSnapshot[];
   cogs?: number; // Total HPP / Cost of Goods Sold untuk item ini
   hpp?: number;  // Alias untuk cogs
+  totalCogs?: number; // Alias untuk total hpp
 
   // BUNDLE SUPPORT
   isBundle?: boolean;       // true = Parent Bundle Menu
@@ -163,6 +164,15 @@ export interface Transaction {
   tableNumber?: string; // Fitur nomor meja
   lifecycleState?: TransactionLifecycleState; // Atomic State Machine
   outletId?: string; // Multi-outlet enterprise extension
+
+  // Properti Baru v4.1 (Pending & Split Bill)
+  tableName?: string;            // Nomor Meja (contoh: "Meja 05")
+  isPending?: boolean;           // Flag transaksi gantung
+  pendingNotes?: string;         // Catatan khusus gantung
+  splitParentId?: string;        // ID transaksi induk jika hasil split bill
+  splitIndex?: number;           // Urutan sub-bill (contoh: 1 dari 2)
+  totalSplitCount?: number;      // Total bagian split (contoh: 2)
+  paidAmount?: number;           // Nominal yang sudah dibayar pada partial split
 }
 
 export interface AtomicCheckoutParams {
@@ -181,6 +191,45 @@ export interface AtomicCheckoutParams {
   currentUser?: { id: string; name: string; role: string } | null;
   settings: any;
   preOpenedPrintWindow?: Window | null;
+
+  // v4.1 Extensions for Pending & Split
+  skipStockDeduction?: boolean;  // If true, bypass inventory deduction (prevent double deduction)
+  reservedDeductions?: Record<string, number>; // Stok yang sudah di-reserve dari pesanan pending → deduksi DELTA saat resume/update/finalize
+  bypassIdempotency?: boolean;   // Izinkan re-commit dengan ID transaksi yang sama (resume/update/finalize pending)
+  overrideKitchenStatus?: KitchenStatus; // Pertahankan status dapur (jangan reset ke Waiting) saat finalisasi/update pending
+  overrideTxStatus?: TxStatus;   // 'Pending' or 'Selesai'
+  overrideQueueNumber?: number; // Preserve existing queue number when finalizing pending
+  pendingNotes?: string;
+  splitParentId?: string;
+  splitIndex?: number;
+  totalSplitCount?: number;
+  suppressAutoPrint?: boolean; // Cegah cetak otomatis struk/tiket di post-commit (dipakai sub-bill split yang mengelola print sendiri)
+}
+
+// Split Bill Interfaces
+export type SplitBillMode = 'equal' | 'item';
+
+export interface SubBill {
+  id: string;
+  index: number; // 1, 2, 3...
+  items: CartItem[];
+  subtotal: number;
+  discount: number;
+  tax: number;
+  totalAmount: number;
+  paymentMethod: PaymentMethod;
+  cashReceived?: number;
+  change?: number;
+  isPaid: boolean;
+  paidAt?: string;
+  transactionId?: string; // Linked sub-transaction ID
+}
+
+export interface SplitBillSession {
+  parentTxId: string;
+  mode: SplitBillMode;
+  splitCount: number;
+  bills: SubBill[];
 }
 
 export interface AtomicCheckoutResult {
