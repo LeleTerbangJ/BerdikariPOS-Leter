@@ -14,6 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–3, semuanya selesai) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -25,6 +26,10 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 | `src/lib/offlineQueue.ts` | Offline queue & auto-retry |
 | `src/lib/atomicTransactionEngine.ts` | Atomic Transaction Engine (State Machine, Rollback & Idempotency) |
 | `src/lib/inventoryEngine.ts` | Inventory Engine (Pre-flight validation & Stock Snapshot) |
+| `src/utils/splitAllocation.ts` | Modul murni alokasi rupiah proporsional (Largest Remainder Method) + `buildEqualSplitReceipt` — dipakai SplitBillModal & printer |
+| `src/utils/idempotencyCleanup.ts` | Modul murni TTL/cleanup idempotency registry (24 jam / max 1000 entry) |
+| `src/components/PendingPaymentsModal.tsx` | Modal daftar pesanan gantung (search, print struk sementara, void, resume) |
+| `src/components/SplitBillModal.tsx` | Modal split bill — mode Nominal Rata & Per-Item |
 | `src/store/*.ts` | State management (semua 14 Zustand stores, termasuk `cashMovementStore`) |
 | `src/hooks/usePrinterMonitor.ts` | Background service polling koneksi printer Bluetooth |
 | `vite.config.ts` | Build config + PWA setup |
@@ -49,7 +54,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 Copy-paste prompt ini saat memulai percakapan dengan AI baru:
 
 ```
-Saya memiliki aplikasi POS (Point of Sale) bernama "BerdikariPOS" yang sudah production dan bersifat umum/multi-purpose (v4.2).
+Saya memiliki aplikasi POS (Point of Sale) bernama "BerdikariPOS" yang sudah production dan bersifat umum/multi-purpose (v4.4).
 
 Tech Stack:
 - React 18 + TypeScript + Vite 5
@@ -134,6 +139,8 @@ Tolong pelajari dulu sebelum mulai coding.
 - **Printer Monitor & Status Banner (v4.2)**: Service background (`usePrinterMonitor.ts`) secara berkala (3s) memeriksa koneksi Web Bluetooth printer Kasir & Dapur, serta menampilkan `PrinterStatusBanner.tsx` dengan opsi *Reconnect* 1-klik.
 - **Revert Stok pada Delete Transaksi**: Menghapus transaksi berstatus `Selesai` secara otomatis me-revert stok bahan baku dan akumulasi belanja/visit pelanggan.
 - **Akuntansi P&L & Dashboard**: Formula Laba Kotor menggunakan Net Sales ($\text{subtotal} - \text{diskon}$) dikurang HPP. Pajak PPN dikategorikan sebagai kewajiban (*liability*) dan disajikan secara terpisah.
+- **Backup & Restore**: `BackupService` (`src/lib/backupService.ts`) menghasilkan ZIP ber-checksum SHA-256 (3 mode: FULL/MASTER_DATA/TRANSACTION); `backupStore.ts` mencatat riwayat & konfigurasi auto-backup (Harian/Mingguan ke Local/Supabase Storage/Google Drive); UI di `src/components/backup/*` (AutoBackupSection, BackupHistorySection, BackupRestoreTab, RestoreWizardModal).
+- **Bundle Menu**: `bundleService.ts` (generate/scale child cart items, hitung HPP bundle, filter KDS), `bundleValidation.ts` (cegah self-reference, nested, circular), `bundleRepository.ts` (akses tabel `menu_components` dengan offline queue & cloud sync). Modul ini diuji di `src/test/bundle.test.ts`.
 
 ### Konvensi Kode:
 - **Store pattern**: Zustand + persist + cloud sync di setiap mutasi
@@ -239,6 +246,99 @@ git add . && git commit -m "description" && git push origin main
 - **PRD lengkap**: `PRD.md` di root project
 - **Fitur lengkap**: `FEATURES.md` di root project
 - **Deploy guide**: `DEPLOYMENT.md` di root project
+
+---
+
+## 9. Riwayat Pengerjaan v4.4 — Pending Payment & Split Bill
+
+> Ringkasan seluruh sesi pengerjaan yang telah diselesaikan. Detail per item ada di `TO DO.md` (Prioritas 1–3, semua ✅).
+
+### 9.1 Fitur Baru yang Selesai Diimplementasikan
+
+1. **Pending Payment (Simpan & Gantung Pesanan)** — kasir menyimpan pesanan ke daftar gantung, dapur/KDS langsung menerima, lalu dilunasi saat pelanggan siap:
+   - Simpan pending (potong stok 1×, preserve queue number, cetak tiket dapur) → modal daftar pending (search, print struk sementara, void, resume)
+   - Resume dengan cart collision guard (gabung / kosongkan & muat)
+   - Void pending dari halaman Transaksi → stok reserve dikembalikan (guard transaksi split)
+2. **Split Bill** — pisah tagihan **Nominal Rata** (pembulatan remainder presisi) & **Per-Item** (alokasi diskon/pajak proporsional):
+   - Sub-bill dibayar berurutan (Cash/QRIS/Transfer), struk split N dari M
+   - Semua sub-bill lunas → transaksi induk otomatis `Selesai` dengan `paymentMethod` mayoritas
+   - Split merekam customer (`recordVisit`) & promo (`incrementUsage`) sekali per sesi
+   - Laporan tidak double accounting (hanya transaksi `Selesai` tanpa `splitParentId`)
+
+### 9.2 File Baru
+
+| File | Peran |
+|------|------|
+| `src/components/PendingPaymentsModal.tsx` | Modal daftar pesanan gantung |
+| `src/components/SplitBillModal.tsx` | Modal split bill (equal & per-item) |
+| `src/utils/splitAllocation.ts` | Modul murni: `allocateProportional` (Largest Remainder) + `buildEqualSplitReceipt` |
+| `src/utils/idempotencyCleanup.ts` | Modul murni: `pruneIdempotencyEntries` (TTL 24 jam, max 1000 entry) |
+| `src/test/splitAllocation.test.ts` | Unit test alokasi rupiah & struk equal |
+| `src/test/idempotencyCleanup.test.ts` | Unit test TTL/batas idempotency registry |
+| `src/test/stockCheck.test.ts` | Unit test paritas alias validasi stok |
+
+### 9.3 Perubahan Penting per Modul
+
+| Modul | Perubahan |
+|-------|----------|
+| `src/types/index.ts` | `Transaction` + `tableName`, `customerName`, `isPending`, `pendingNotes`, `splitParentId`, `splitIndex`, `totalSplitCount`, `paidAmount`; `TxStatus` + `'Pending'` |
+| `src/lib/atomicTransactionEngine.ts` | `skipStockDeduction`, `overrideTxStatus`, `overrideQueueNumber`; cleanup idempotency registry (via modul murni) |
+| `src/lib/inventoryEngine.ts` | `validateStockAvailability` = **satu-satunya** sumber kebenaran validasi stok |
+| `src/utils/stockCheck.ts` | Kini compat-shim ke `InventoryEngine.validateStockAvailability` (`@deprecated`) |
+| `src/utils/printer.ts` | + `printProvisionalBill`, `printSplitReceipt` (mode equal: label `BAGIAN N DARI M` + subtotal proporsional), tiket dapur split fresh |
+| `src/store/transactionStore.ts` | + `updateTxMeta(id, partial)`, `cancelPendingTransaction` (revert stok), export `isPendingTransaction(t)`; **hapus** `getPendingTransactions()` & `getPendingCount()` (dead code) |
+| `src/lib/cloudSync.ts` | `runMigrations` + Migration 13 (tax_enabled), 15 (kolom pending/split), 16 (kolom cetak struk); `syncSettings` kini guard kolom yang belum ada di DB (cegah penumpukan offline queue) |
+| `src/pages/POS.tsx` | Tombol Simpan Pending, badge counter, resume order, props customer/promo ke SplitBillModal, selector pending count stabil |
+| `src/pages/Kitchen.tsx` | Filter KDS menerima `txStatus === 'Pending'` |
+| `src/pages/Transactions.tsx` | Void pending + revert stok, badge & filter status Pending, eksklusi split child dari omset |
+| `src/pages/Reports.tsx` / `Dashboard.tsx` | Eksklusi `splitParentId` dari double accounting |
+| `src/components/Layout.tsx` | Badge quick-access pesanan gantung di sidebar |
+
+### 9.4 ⚠️ Perubahan Database yang WAJIB Dijalankan di Supabase SQL Editor
+
+Jika DB belum di-upgrade, jalankan SQL berikut (blok lengkap ada di `DEPLOYMENT.md` → blok upgrade v4.2):
+
+```sql
+-- 1) Izinkan status 'Pending' pada CHECK constraint transaksi
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_tx_status_check;
+ALTER TABLE transactions ADD CONSTRAINT transactions_tx_status_check
+  CHECK (tx_status IN ('Selesai', 'Cancel', 'Pending', 'Demo'));
+
+-- 2) Kolom pendukung pending & split
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS table_number TEXT,
+  ADD COLUMN IF NOT EXISTS customer_name TEXT,
+  ADD COLUMN IF NOT EXISTS is_pending BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS pending_notes TEXT,
+  ADD COLUMN IF NOT EXISTS split_parent_id TEXT,
+  ADD COLUMN IF NOT EXISTS split_index INT,
+  ADD COLUMN IF NOT EXISTS total_split_count INT,
+  ADD COLUMN IF NOT EXISTS paid_amount BIGINT;
+
+-- 3) Kolom settings yang ditulis syncSettings
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS demo_mode BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS receipt_header TEXT,
+  ADD COLUMN IF NOT EXISTS receipt_footer TEXT,
+  ADD COLUMN IF NOT EXISTS receipt_ascii_only BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS auto_print_receipt BOOLEAN DEFAULT TRUE;
+```
+
+> Jika kolom di atas belum ada, `syncSettings`/`syncTransaction` kini **tidak gagal** (guarded migration) — namun kolom wajib ditambahkan agar data tersinkron lintas device. Aplikasi juga mendeteksi otomatis dan mencetak SQL yang diperlukan ke console.
+
+### 9.5 Aturan Bisnis yang Harus Dijaga AI Berikutnya
+
+- **Stok dipotong 1× saat transaksi dibuat** (Pending ataupun langsung `Selesai`). Saat pelunasan pending / split → `skipStockDeduction: true` (jangan potong 2×).
+- **Preservasi queue number**: transaksi pending mempertahankan nomor antrean awalnya saat dilunasi (`overrideQueueNumber`).
+- **Idempotency registry**: anti-double-pay berlaku untuk entry < 24 jam; resume pending re-commit dengan ID transaksi yang sama (aman, tidak double).
+- **Laporan**: hanya menghitung transaksi `Selesai` tanpa `splitParentId` — sub-bill anak tercatat di parent.
+- **Alokasi rupiah**: gunakan `allocateProportional` (Largest Remainder Method) — Σ sub-bill = total induk tanpa selisih Rp 1.
+- **Split bill** merekam customer & promo **sekali per sesi** (ref flag, bukan derive dari jumlah sub-bill yang lunas).
+
+### 9.6 Status Validasi
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **26/26 test lolos** (bundle, splitAllocation, idempotencyCleanup, stockCheck)
+- `npm run build` belum dijalankan ulang pada sesi ini — jalankan sebelum deploy
 
 ---
 

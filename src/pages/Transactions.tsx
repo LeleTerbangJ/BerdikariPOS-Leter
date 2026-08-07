@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useTransactionStore } from '../store/transactionStore';
+import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
 import { useAuthStore } from '../store/authStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useMenuStore } from '../store/menuStore';
@@ -32,6 +32,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Printer,
+  Clock,
 } from 'lucide-react';
 
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
@@ -143,13 +144,17 @@ export default function Transactions() {
 
   // Summary statistics for active filtered view
   const stats = useMemo(() => {
-    const completed = filteredTx.filter((t) => t.txStatus === 'Selesai');
+    // v4.1 TO DO 1.6: Sub-bill hasil split (anak) tidak dihitung omset — sudah tercatat di transaksi induk (parent)
+    const completed = filteredTx.filter((t) => t.txStatus === 'Selesai' && !t.splitParentId);
     const totalOmset = completed.reduce((a, t) => a + t.totalAmount, 0);
     const cancelCount = filteredTx.filter((t) => t.txStatus === 'Cancel').length;
+    // Predicate sama dengan isPendingTransaction() di store agar angka konsisten
+    const pendingCount = filteredTx.filter(isPendingTransaction).length;
     return {
       totalCount: filteredTx.length,
       completedCount: completed.length,
       cancelCount,
+      pendingCount,
       totalOmset,
     };
   }, [filteredTx]);
@@ -175,6 +180,11 @@ export default function Transactions() {
     return calculateItemDeductions(tx.items, menus);
   };
 
+  // v4.1 TO DO 1.6: Transaksi anak hasil split bill, atau transaksi induk yang memiliki anak split,
+  // tidak boleh di-revert/deduct stok otomatis — stok dikelola sesi split (reserve penuh di sub-bill pertama).
+  const hasSplitChildren = (tx: Transaction): boolean =>
+    !!tx.splitParentId || transactions.some((t) => t.splitParentId === tx.id);
+
   // Execute after Manager confirms
   const onConfirmAction = () => {
     if (!confirmAction) return;
@@ -182,16 +192,42 @@ export default function Transactions() {
       const tx = transactions.find((t) => t.id === confirmAction.id);
       if (tx) {
         if (confirmAction.status === 'Cancel' && tx.txStatus === 'Selesai') {
-          const deductions = calculateDeductions(tx);
-          revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
-          if (tx.customerId) {
-            revertVisit(tx.customerId, tx.totalAmount);
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
+            if (tx.customerId) {
+              revertVisit(tx.customerId, tx.totalAmount);
+            }
+          }
+        } else if (confirmAction.status === 'Cancel' && tx.txStatus === 'Pending') {
+          // v4.1 TO DO 1.7: Void pesanan gantung → kembalikan stok reserve (dipotong saat pending dibuat).
+          // Guard hasSplitChildren: pending yang sudah displit dikelola sesi split — jangan revert.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Cancel pesanan gantung #${tx.queueNumber}`);
+          }
+        } else if (confirmAction.status === 'Demo' && tx.txStatus === 'Pending') {
+          // v4.1 TO DO 1.7: Status Demo tidak tercatat sebagai penjualan → stok reserve dikembalikan agar tidak bocor.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Ubah pesanan gantung #${tx.queueNumber} menjadi Demo`);
+          }
+        } else if (confirmAction.status === 'Demo' && tx.txStatus === 'Selesai') {
+          // v4.1 TO DO 1.7 (konsistensi): Selesai → Demo juga tidak tercatat sebagai penjualan → kembalikan stok & kunjungan.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Ubah transaksi #${tx.queueNumber} menjadi Demo`);
+            if (tx.customerId) {
+              revertVisit(tx.customerId, tx.totalAmount);
+            }
           }
         } else if (confirmAction.status === 'Selesai' && tx.txStatus === 'Cancel') {
-          const deductions = calculateDeductions(tx);
-          deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
-          if (tx.customerId) {
-            recordVisit(tx.customerId, tx.totalAmount);
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
+            if (tx.customerId) {
+              recordVisit(tx.customerId, tx.totalAmount);
+            }
           }
         }
       }
@@ -201,8 +237,9 @@ export default function Transactions() {
       }
     } else if (confirmAction.type === 'delete') {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
+      // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
       const tx = transactions.find((t) => t.id === confirmAction.id);
-      if (tx && tx.txStatus === 'Selesai') {
+      if (tx && tx.txStatus === 'Selesai' && !hasSplitChildren(tx)) {
         const deductions = calculateDeductions(tx);
         revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
         if (tx.customerId) {
@@ -223,16 +260,42 @@ export default function Transactions() {
       const tx = transactions.find((t) => t.id === pinAction.id);
       if (tx) {
         if (pinAction.status === 'Cancel' && tx.txStatus === 'Selesai') {
-          const deductions = calculateDeductions(tx);
-          revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
-          if (tx.customerId) {
-            revertVisit(tx.customerId, tx.totalAmount);
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
+            if (tx.customerId) {
+              revertVisit(tx.customerId, tx.totalAmount);
+            }
+          }
+        } else if (pinAction.status === 'Cancel' && tx.txStatus === 'Pending') {
+          // v4.1 TO DO 1.7: Void pesanan gantung → kembalikan stok reserve (dipotong saat pending dibuat).
+          // Guard hasSplitChildren: pending yang sudah displit dikelola sesi split — jangan revert.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Cancel pesanan gantung #${tx.queueNumber}`);
+          }
+        } else if (pinAction.status === 'Demo' && tx.txStatus === 'Pending') {
+          // v4.1 TO DO 1.7: Status Demo tidak tercatat sebagai penjualan → stok reserve dikembalikan agar tidak bocor.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Ubah pesanan gantung #${tx.queueNumber} menjadi Demo`);
+          }
+        } else if (pinAction.status === 'Demo' && tx.txStatus === 'Selesai') {
+          // v4.1 TO DO 1.7 (konsistensi): Selesai → Demo juga tidak tercatat sebagai penjualan → kembalikan stok & kunjungan.
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            revertStock(deductions, `Revert: Ubah transaksi #${tx.queueNumber} menjadi Demo`);
+            if (tx.customerId) {
+              revertVisit(tx.customerId, tx.totalAmount);
+            }
           }
         } else if (pinAction.status === 'Selesai' && tx.txStatus === 'Cancel') {
-          const deductions = calculateDeductions(tx);
-          deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
-          if (tx.customerId) {
-            recordVisit(tx.customerId, tx.totalAmount);
+          if (!hasSplitChildren(tx)) {
+            const deductions = calculateDeductions(tx);
+            deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
+            if (tx.customerId) {
+              recordVisit(tx.customerId, tx.totalAmount);
+            }
           }
         }
       }
@@ -242,8 +305,9 @@ export default function Transactions() {
       }
     } else if (pinAction.type === 'delete') {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
+      // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
       const tx = transactions.find((t) => t.id === pinAction.id);
-      if (tx && tx.txStatus === 'Selesai') {
+      if (tx && tx.txStatus === 'Selesai' && !hasSplitChildren(tx)) {
         const deductions = calculateDeductions(tx);
         revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
         if (tx.customerId) {
@@ -274,6 +338,8 @@ export default function Transactions() {
         return <span className="badge bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300"><Ban size={12} /> Cancel</span>;
       case 'Demo':
         return <span className="badge bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300"><FlaskConical size={12} /> Demo</span>;
+      case 'Pending':
+        return <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"><Clock size={12} /> Pending</span>;
     }
   };
 
@@ -283,7 +349,15 @@ export default function Transactions() {
       return `Hapus transaksi #${confirmAction.queueNumber || '?'} secara permanen? Data tidak bisa dikembalikan.`;
     }
     const statusLabel = confirmAction.status === 'Cancel' ? 'CANCEL (void)' : confirmAction.status;
-    return `Ubah status transaksi #${confirmAction.queueNumber || '?'} menjadi "${statusLabel}"?`;
+    const base = `Ubah status transaksi #${confirmAction.queueNumber || '?'} menjadi "${statusLabel}"?`;
+    // v4.1 TO DO 1.7: informasikan konsekuensi stok pada void pesanan gantung
+    if (confirmAction.status === 'Cancel') {
+      const tx = transactions.find((t) => t.id === confirmAction.id);
+      if (tx?.txStatus === 'Pending') {
+        return `${base} Stok bahan baku yang di-reserve akan dikembalikan.`;
+      }
+    }
+    return base;
   };
 
   return (
@@ -301,7 +375,7 @@ export default function Transactions() {
             </div>
             <div>
               <p className="text-xs text-slate-500 dark:text-slate-400">Total Transaksi</p>
-              <p className="text-lg font-bold">{stats.totalCount} <span className="text-xs font-normal text-slate-400">({stats.completedCount} selesai)</span></p>
+              <p className="text-lg font-bold">{stats.totalCount} <span className="text-xs font-normal text-slate-400">({stats.completedCount} selesai{stats.pendingCount > 0 ? `, ${stats.pendingCount} gantung` : ''})</span></p>
             </div>
           </div>
         </div>
@@ -378,6 +452,7 @@ export default function Transactions() {
             >
               <option value="all">Semua Status</option>
               <option value="Selesai">Selesai</option>
+              <option value="Pending">Pending (Gantung)</option>
               <option value="Cancel">Cancel (Void)</option>
               <option value="Demo">Demo</option>
             </select>

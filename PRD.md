@@ -175,6 +175,20 @@ Sistem menggunakan Role-Based Access Control (RBAC) dengan 4 peran utama:
 - **Pengaturan Tema Warna UI**: Dynamic palette switcher dengan live preview
 - **PIN Manager & User Management**
 
+### 3.13. Modul Backup & Restore
+- **3 mode backup**: `FULL` (data + media), `MASTER_DATA` (settings/menu/inventory/customers/promos), `TRANSACTION` (transaksi/kas/shift/stock opname)
+- Backup ZIP + checksum SHA-256; riwayat backup dengan status & ukuran
+- Auto-backup terjadwal (Harian/Mingguan) ke Local Download / Supabase Storage / Google Drive
+- Restore wizard: pratinjau isi, validasi integritas, konfirmasi sebelum menimpa
+- Implementasi: `src/lib/backupService.ts`, `src/store/backupStore.ts`, `src/components/backup/*`
+
+### 3.14. Modul Bundle Menu
+- Bundle menu induk berisi komponen menu lain (Paket Hemat)
+- Validasi: cegah self-reference, bundle bersarang, referensi sirkular (`bundleValidation.ts`)
+- Child items otomatis di cart (`isBundleChild`, harga 0) & diskalakan saat qty berubah (`bundleService.ts`)
+- HPP bundle dari resep komponen; snapshot komponen permanen di transaksi
+- Repositori `menu_components` dengan offline queue & cloud sync (`bundleRepository.ts`)
+
 ---
 
 ## 4. Database Schema (Supabase PostgreSQL)
@@ -219,4 +233,4 @@ CREATE TABLE IF NOT EXISTS cash_movements (
 
 ---
 
-*PRD BerdikariPOS v4.2.*
+*PRD BerdikariPOS v4.4.*

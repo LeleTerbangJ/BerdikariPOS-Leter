@@ -1,42 +1,26 @@
+import { InventoryEngine, type InventoryValidationResult } from '../lib/inventoryEngine';
 import type { CartItem, Menu, InventoryItem } from '../types';
-import { calculateItemDeductions } from './hpp';
-
-export interface StockWarning {
-  ingredientId: string;
-  ingredientName: string;
-  required: number;
-  available: number;
-  unit: string;
-}
 
 /**
- * Check if there's enough stock for all items in the cart.
- * Returns array of warnings for ingredients that don't have enough stock.
- * BUG-04 fix: Uses calculateItemDeductions to include addon ingredients.
+ * v4.1 TO DO 2.5 — UNIFIKASI VALIDASI STOK.
+ *
+ * File ini kini hanya compat-shim: logika validasi stok TIDAK diduplikasi lagi.
+ * Satu-satunya sumber kebenaran adalah `InventoryEngine.validateStockAvailability`
+ * (dipakai juga oleh AtomicTransactionEngine & SplitBillModal).
+ *
+ * Fungsi `checkStockAvailability` dipertahankan sebagai alias agar pemanggil lama
+ * (POS.tsx) tidak perlu diubah — signature & hasil 100% identik.
+ *
+ * @deprecated Gunakan `InventoryEngine.validateStockAvailability(...).warnings` untuk kode baru.
  */
+// Tipe diturunkan dari engine agar satu sumber kebenaran di level tipe juga
+// (perubahan field di engine tidak bisa divergen dari shim ini).
+export type StockWarning = InventoryValidationResult['warnings'][number];
+
 export function checkStockAvailability(
   cartItems: CartItem[],
   menus: Menu[],
   inventory: InventoryItem[]
 ): StockWarning[] {
-  // Calculate total required per ingredient (menu + addons)
-  const required = calculateItemDeductions(cartItems, menus);
-
-  // Check against available stock
-  const warnings: StockWarning[] = [];
-  for (const [invId, needed] of Object.entries(required)) {
-    const inv = inventory.find((i) => i.id === invId);
-    if (!inv) continue;
-    if (inv.stock < needed) {
-      warnings.push({
-        ingredientId: invId,
-        ingredientName: inv.name,
-        required: needed,
-        available: inv.stock,
-        unit: inv.unit,
-      });
-    }
-  }
-
-  return warnings;
+  return InventoryEngine.validateStockAvailability(cartItems, menus, inventory).warnings;
 }

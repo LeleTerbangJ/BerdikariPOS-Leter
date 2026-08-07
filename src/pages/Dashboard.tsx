@@ -60,7 +60,7 @@ export default function Dashboard() {
 
   const today = new Date();
   const todayTx = transactions.filter(
-    (t) => isSameDay(new Date(t.date), today) && t.txStatus === 'Selesai'
+    (t) => isSameDay(new Date(t.date), today) && t.txStatus === 'Selesai' && !t.splitParentId
   );
 
   const todayGrossRevenue = todayTx.reduce((a, t) => a + t.subtotal, 0);
@@ -110,7 +110,7 @@ export default function Dashboard() {
         const rev = transactions
           .filter((t) => {
             const d = new Date(t.date);
-            return isSameDay(d, today) && d.getHours() === h && t.txStatus === 'Selesai';
+            return isSameDay(d, today) && d.getHours() === h && t.txStatus === 'Selesai' && !t.splitParentId;
           })
           .reduce((a, t) => a + t.totalAmount, 0);
         data.push(rev);
@@ -122,7 +122,7 @@ export default function Dashboard() {
         d.setDate(d.getDate() - i);
         labels.push(days[d.getDay() === 0 ? 6 : d.getDay() - 1]);
         const rev = transactions
-          .filter((t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai')
+          .filter((t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai' && !t.splitParentId)
           .reduce((a, t) => a + t.totalAmount, 0);
         data.push(rev);
       }
@@ -132,7 +132,7 @@ export default function Dashboard() {
         d.setDate(d.getDate() - i);
         labels.push(`${d.getDate()}`);
         const rev = transactions
-          .filter((t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai')
+          .filter((t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai' && !t.splitParentId)
           .reduce((a, t) => a + t.totalAmount, 0);
         data.push(rev);
       }
@@ -143,7 +143,7 @@ export default function Dashboard() {
         const rev = transactions
           .filter((t) => {
             const d = new Date(t.date);
-            return d.getFullYear() === today.getFullYear() && d.getMonth() === m && t.txStatus === 'Selesai';
+            return d.getFullYear() === today.getFullYear() && d.getMonth() === m && t.txStatus === 'Selesai' && !t.splitParentId;
           })
           .reduce((a, t) => a + t.totalAmount, 0);
         data.push(rev);
@@ -180,7 +180,7 @@ export default function Dashboard() {
       labels.push(d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }));
 
       const dailyTxs = transactions.filter(
-        (t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai'
+        (t) => isSameDay(new Date(t.date), d) && t.txStatus === 'Selesai' && !t.splitParentId
       );
       const grossRev = dailyTxs.reduce((a, t) => a + t.subtotal, 0);
       const disc = dailyTxs.reduce((a, t) => a + t.discount, 0);
@@ -226,7 +226,7 @@ export default function Dashboard() {
 
     const relevantTxs = transactions.filter((t) => {
       const d = new Date(t.date);
-      return d >= thirtyDaysAgo && t.txStatus === 'Selesai';
+      return d >= thirtyDaysAgo && t.txStatus === 'Selesai' && !t.splitParentId;
     });
 
     relevantTxs.forEach((t) => {
@@ -275,7 +275,7 @@ export default function Dashboard() {
     thirtyDaysAgo.setDate(today.getDate() - 30);
 
     const filterTxs = transactions.filter(
-      (t) => new Date(t.date) >= thirtyDaysAgo && t.txStatus === 'Selesai'
+      (t) => new Date(t.date) >= thirtyDaysAgo && t.txStatus === 'Selesai' && !t.splitParentId
     );
 
     filterTxs.forEach((t) => {
