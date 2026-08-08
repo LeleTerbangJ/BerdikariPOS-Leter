@@ -83,6 +83,8 @@ export default function Kitchen() {
 
   const activeOrders = transactions.filter((t) => {
     if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
+    // v4.5 Perbaikan KDS Split Bill: Abaikan sub-bill (transaksi anak/split) agar tidak memicu duplikasi antrean di dapur
+    if (t.splitParentId) return false;
     // Only show today's orders
     if (new Date(t.date) < today) return false;
     // Hide Done orders that were cleared

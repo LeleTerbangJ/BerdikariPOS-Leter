@@ -226,6 +226,37 @@
 ### 3.5 `statusBadge` case `'Pending'`
 - **Status**: ✅ SUDAH SELESAI (bagian dari 1.7) — `Transactions.tsx` baris 341-342: case `'Pending'` dengan badge amber + ikon Clock. Diverifikasi ulang.
 
+
+---
+
+## 🔵 PRIORITAS 4 — PERBAIKAN v4.5 (Pending Payment & Split Bill Refinements)
+
+### 4.1 Saran Nominal & Kembalian di Split Bill
+- **Masalah**: Modal Split Bill tidak memiliki tombol cepat untuk nominal pembayaran tunai (quick cash) dan info kembalian.
+- **Aksi**: 
+  - [x] Tambahkan tombol cepat saran nominal di modal Split Bill (mendekati tagihan sub-bill).
+  - [x] Tampilkan selisih kembalian jika nominal pembayaran tunai yang dimasukkan melebihi total sub-bill.
+
+### 4.2 Duplikasi Pesanan di KDS saat Split Bill
+- **Masalah**: Saat terjadi split bill, pesanan KDS terinput kembali (duplikat antrean di dapur).
+- **Aksi**: 
+  - [x] Pastikan sub-bill hasil split tidak memicu atau menduplikasi antrean baru di dapur (cukup tiket dapur dikelola sekali di awal sesi split).
+
+### 4.3 Duplikasi Riwayat Transaksi saat Split Bill
+- **Masalah**: Pesanan hasil split bill (sub-bill) masuk kembali/duplikat di Riwayat Transaksi sehingga mengacaukan riwayat data transaksi.
+- **Aksi**: 
+  - [x] Perbaiki logika pencatatan transaksi split bill di halaman Riwayat Transaksi agar bersih dari data duplikat/tidak perlu.
+
+### 4.4 Penghapusan Pesanan Pending Setelah Lunas / Batal
+- **Masalah**: Pesanan Pending yang telah dilanjutkan pembayarannya (resume) hingga lunas atau dibatalkan (void) tidak otomatis terhapus dari daftar Pesanan Pending.
+- **Aksi**: 
+  - [x] Pastikan status transaksi pending di-update di store/DB sehingga terhapus dari modal "Pending Payments" saat sudah lunas atau dibatalkan.
+
+### 4.5 Penyederhanaan Judul Modal Pending
+- **Masalah**: Judul modal "Daftar Pesanan Gantung (Pending Payment)" terlalu panjang.
+- **Aksi**: 
+  - [x] Ubah judul modal tersebut cukup menjadi "Pending Payments".
+
 ---
 
 ## ✅ YANG SUDAH BENAR (jangan diubah)

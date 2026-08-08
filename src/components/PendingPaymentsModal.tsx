@@ -54,7 +54,7 @@ export default function PendingPaymentsModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Daftar Pesanan Gantung (Pending Payments)" maxWidth="max-w-4xl">
+    <Modal open={open} onClose={onClose} title="Pending Payments" maxWidth="max-w-4xl">
       <div className="flex flex-col md:flex-row gap-4 h-[520px]">
         {/* Left: Pending Orders List */}
         <div className="w-full md:w-5/12 flex flex-col border-r border-slate-100 dark:border-slate-700/50 pr-0 md:pr-4">
@@ -83,11 +83,10 @@ export default function PendingPaymentsModal({
                   <button
                     key={tx.id}
                     onClick={() => setSelectedTxId(tx.id)}
-                    className={`w-full text-left p-3 rounded-xl border transition ${
-                      isSelected
+                    className={`w-full text-left p-3 rounded-xl border transition ${isSelected
                         ? 'border-brand-500 bg-brand-50 dark:bg-brand-950/30'
                         : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-bold text-brand-600 dark:text-brand-400 text-sm">

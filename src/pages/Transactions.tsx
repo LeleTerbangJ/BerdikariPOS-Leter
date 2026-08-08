@@ -79,6 +79,9 @@ export default function Transactions() {
     const now = new Date();
 
     return transactions.filter((t) => {
+      // v4.5 Perbaikan 4.3: Sembunyikan sub-bill (anak split) dari daftar transaksi — cukup tampilkan induk saja
+      if (t.splitParentId) return false;
+
       // 1. Status Filter
       if (statusFilter !== 'all' && t.txStatus !== statusFilter) return false;
 

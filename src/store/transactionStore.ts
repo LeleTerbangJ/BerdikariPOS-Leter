@@ -116,7 +116,7 @@ export const useTransactionStore = create<TransactionState>()(
         syncTransactionTxStatus(id, status); // Cloud sync
         set((s) => ({
           transactions: s.transactions.map((t) =>
-            t.id === id ? { ...t, txStatus: status } : t
+            t.id === id ? { ...t, txStatus: status, isPending: status === 'Pending' } : t
           ),
         }));
       },
