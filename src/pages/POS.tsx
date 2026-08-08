@@ -99,7 +99,7 @@ export default function POS() {
       return;
     }
 
-    const manualDiscount = parseInt(discountInput) || 0;
+    const manualDiscount = getManualDiscountValue();
     const rawTotalDiscount = Math.round(manualDiscount + promoDiscount + loyaltyDiscount);
     const subtotal = Math.round(cart.getSubtotal());
     const totalDiscount = Math.round(Math.min(rawTotalDiscount, subtotal));
@@ -141,6 +141,7 @@ export default function POS() {
       cart.clearCart();
       setShowCheckout(false);
       setDiscountInput('');
+      setDiscountType('rp');
       setVoucherCode('');
       setCashReceived('');
       setSelectedCustomerId(null);
@@ -307,6 +308,15 @@ export default function POS() {
   const [payMethod, setPayMethod] = useState<PaymentMethod>('Cash');
   const [cashReceived, setCashReceived] = useState('');
   const [discountInput, setDiscountInput] = useState('');
+  const [discountType, setDiscountType] = useState<'rp' | 'percent'>('rp');
+
+  const getManualDiscountValue = useCallback(() => {
+    const val = parseInt(discountInput) || 0;
+    if (discountType === 'percent') {
+      return Math.round((cart.getSubtotal() * val) / 100);
+    }
+    return val;
+  }, [discountInput, discountType, cart]);
   const [stockWarnings, setStockWarnings] = useState<StockWarning[]>([]);
   const [showStockWarning, setShowStockWarning] = useState(false);
 
@@ -500,7 +510,7 @@ export default function POS() {
       addToast('Silakan pilih nomor meja terlebih dahulu!', 'warning');
       return;
     }
-    const manualDiscount = parseInt(discountInput) || 0;
+    const manualDiscount = getManualDiscountValue();
     const rawTotalDiscount = Math.round(manualDiscount + promoDiscount + loyaltyDiscount);
     const subtotal = Math.round(cart.getSubtotal());
     // LOGIC-2 & LOGIC-05 fix: Cap total discount to never exceed subtotal & round to whole integer
@@ -584,6 +594,7 @@ export default function POS() {
     cart.clearCart();
     setShowCheckout(false);
     setDiscountInput('');
+    setDiscountType('rp');
     setVoucherCode('');
     setCashReceived('');
     setSelectedCustomerId(null);
@@ -605,7 +616,7 @@ export default function POS() {
   const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
   const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
   // LOGIC-ERR-02 fix: Use same capping formula as finalizeTransaction()
-  const rawPreviewDiscount = (parseInt(discountInput) || 0) + promoDiscount + loyaltyDiscount;
+  const rawPreviewDiscount = getManualDiscountValue() + promoDiscount + loyaltyDiscount;
   const cappedPreviewDiscount = Math.min(rawPreviewDiscount, cart.getSubtotal());
   const netSubtotal = Math.max(0, cart.getSubtotal() - cappedPreviewDiscount);
   const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
@@ -643,7 +654,7 @@ export default function POS() {
               }`}
             >
               <Clock size={15} />
-              <span className="hidden md:inline">Gantung</span>
+              <span className="hidden md:inline">Pending</span>
               <span
                 className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center ${
                   pendingCount > 0
@@ -895,10 +906,47 @@ export default function POS() {
                 <input
                   type="text"
                   value={discountInput}
-                  onChange={(e) => setDiscountInput(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Diskon manual (Rp)"
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '');
+                    if (discountType === 'percent') {
+                      const num = parseInt(val) || 0;
+                      if (num > 100) return;
+                    }
+                    setDiscountInput(val);
+                  }}
+                  placeholder={discountType === 'rp' ? "Diskon manual (Rp)" : "Diskon manual (%)"}
                   className="input text-sm flex-1"
                 />
+                <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountType('rp');
+                      setDiscountInput('');
+                    }}
+                    className={`px-2 py-1 rounded-md transition ${
+                      discountType === 'rp'
+                        ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-100'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    Rp
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountType('percent');
+                      setDiscountInput('');
+                    }}
+                    className={`px-2 py-1 rounded-md transition ${
+                      discountType === 'percent'
+                        ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-100'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    %
+                  </button>
+                </div>
               </div>
               {/* BUG-NEW-06 fix: Show loyalty discount in mobile cart */}
               {loyaltyDiscount > 0 && (
@@ -918,9 +966,30 @@ export default function POS() {
                   {formatRupiah(finalTotal)}
                 </span>
               </div>
-              <button onClick={() => { setMobileCartOpen(false); handleCheckout(); }} className="btn-primary w-full text-base">
-                <CreditCard size={18} /> Bayar
-              </button>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    setMobileCartOpen(false);
+                    handleSavePending();
+                  }}
+                  disabled={cart.items.length === 0}
+                  className="btn-secondary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5"
+                  title="Simpan ke pesanan gantung (Pending)"
+                >
+                  <Clock size={16} />
+                  <span>Simpan Pending</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setMobileCartOpen(false);
+                    handleCheckout();
+                  }}
+                  className="btn-primary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5"
+                >
+                  <CreditCard size={16} />
+                  <span>Bayar</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1115,28 +1184,50 @@ export default function POS() {
                 <input
                   type="text"
                   value={discountInput}
-                  onChange={(e) => setDiscountInput(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Diskon manual (Rp)"
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '');
+                    if (discountType === 'percent') {
+                      const num = parseInt(val) || 0;
+                      if (num > 100) return;
+                    }
+                    setDiscountInput(val);
+                  }}
+                  placeholder={discountType === 'rp' ? "Diskon manual (Rp)" : "Diskon manual (%)"}
                   className="input text-xs flex-1 py-1.5"
                 />
+                <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountType('rp');
+                      setDiscountInput('');
+                    }}
+                    className={`px-2 py-1 rounded-md transition ${
+                      discountType === 'rp'
+                        ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-100'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    Rp
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountType('percent');
+                      setDiscountInput('');
+                    }}
+                    className={`px-2 py-1 rounded-md transition ${
+                      discountType === 'percent'
+                        ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-100'
+                        : 'text-slate-500 dark:text-slate-400'
+                    }`}
+                  >
+                    %
+                  </button>
+                </div>
               </div>
 
-              {/* CRM Customer Selector */}
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500 dark:text-slate-400">Pelanggan CRM:</span>
-                <select
-                  value={selectedCustomerId || ''}
-                  onChange={(e) => setSelectedCustomerId(e.target.value || null)}
-                  className="input text-xs py-1 px-2 w-44"
-                >
-                  <option value="">-- Non-Member --</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.visitCount || 0}x Kunjungan)
-                    </option>
-                  ))}
-                </select>
-              </div>
+
 
               {/* Loyalty Discount Banner */}
               {selectedCustomer && loyaltyDiscount > 0 && (
@@ -1540,6 +1631,7 @@ export default function POS() {
           cart.clearCart();
           setShowCheckout(false);
           setDiscountInput('');
+          setDiscountType('rp');
           setVoucherCode('');
           setCashReceived('');
           setSelectedCustomerId(null);

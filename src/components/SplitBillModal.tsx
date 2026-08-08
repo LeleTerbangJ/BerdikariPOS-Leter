@@ -572,7 +572,7 @@ export default function SplitBillModal({
 
                 {/* Cash Input */}
                 {(paidState[activeBillIdx]?.payMethod || 'Cash') === 'Cash' && (
-                  <div>
+                  <div className="space-y-2">
                     <label className="label text-xs mb-1">Uang Tunai Diterima (Rp)</label>
                     <input
                       type="text"
@@ -589,6 +589,54 @@ export default function SplitBillModal({
                       placeholder={`Minimal ${formatRupiah(activeBills[activeBillIdx].totalAmount)}`}
                       className="input text-sm font-bold"
                     />
+
+                    {/* Quick Cash Suggestions */}
+                    <div className="flex gap-2 flex-wrap mt-1">
+                      {(() => {
+                        const targetAmount = activeBills[activeBillIdx].totalAmount;
+                        const suggestions: number[] = [targetAmount];
+                        const denominators = [5000, 10000, 20000, 50000, 100000];
+                        for (const d of denominators) {
+                          const rounded = Math.ceil(targetAmount / d) * d;
+                          if (rounded > targetAmount && !suggestions.includes(rounded)) {
+                            suggestions.push(rounded);
+                          }
+                        }
+                        return suggestions.slice(0, 3).map((val) => (
+                          <button
+                            key={val}
+                            type="button"
+                            onClick={() => setPaidState({
+                              ...paidState,
+                              [activeBillIdx]: {
+                                ...paidState[activeBillIdx],
+                                isPaid: false,
+                                payMethod: 'Cash',
+                                cash: String(val),
+                              },
+                            })}
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-650 transition"
+                          >
+                            {formatRupiah(val)}
+                          </button>
+                        ));
+                      })()}
+                    </div>
+
+                    {/* Change Display */}
+                    {(() => {
+                      const cashInputVal = parseInt(paidState[activeBillIdx]?.cash || '') || 0;
+                      const change = cashInputVal - activeBills[activeBillIdx].totalAmount;
+                      if (change > 0) {
+                        return (
+                          <div className="p-2 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900/30 rounded-lg text-xs text-green-700 dark:text-green-400 font-bold flex justify-between items-center mt-1">
+                            <span>Kembalian:</span>
+                            <span>{formatRupiah(change)}</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
                 )}
 

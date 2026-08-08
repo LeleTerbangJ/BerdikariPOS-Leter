@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useShiftStore } from '../store/shiftStore';
-import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
+import { useTransactionStore } from '../store/transactionStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
 import { useCloudStatus } from '../hooks/useCloudStatus';
@@ -108,16 +108,9 @@ export default function Layout() {
 
   const location = useLocation();
 
-  // Jumlah pesanan gantung (Pending) — reaktif & hook-safe (sebelum early return)
-  const pendingCount = useTransactionStore((s) => s.transactions.filter(isPendingTransaction).length);
-
   if (!currentUser) return null;
 
   const items = navItems[currentUser.role] || [];
-
-  // Quick access "Pesanan Gantung" hanya aktif saat param openPending=1 (bukan setiap kali di /pos)
-  const pendingNavActive =
-    location.pathname === '/pos' && new URLSearchParams(location.search).get('openPending') === '1';
 
   // Today's transactions for this cashier (for shift summary print)
   const todayTx = useMemo(() => {
@@ -325,43 +318,6 @@ export default function Layout() {
             </NavLink>
           ))}
 
-          {/* Quick access: Pesanan Gantung (Pending Payments) — Kasir & Manager */}
-          {(currentUser.role === 'Manager' || currentUser.role === 'Kasir') && (
-            <NavLink
-              key="pending-payments"
-              to="/pos?openPending=1"
-              onClick={() => setSidebarOpen(false)}
-              title={sidebarCollapsed ? `Pesanan Gantung (${pendingCount})` : undefined}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
-                sidebarCollapsed ? 'justify-center relative' : ''
-              } ${
-                pendingNavActive
-                  ? 'bg-brand-100 dark:bg-brand-900/50 text-brand-700 dark:text-brand-300'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700/50'
-              }`}
-            >
-              <Clock size={18} className="flex-shrink-0" />
-              {!sidebarCollapsed && (
-                <>
-                  <span>Pesanan Gantung</span>
-                  <span
-                    className={`ml-auto px-1.5 py-0.5 text-[10px] font-bold rounded-full ${
-                      pendingCount > 0
-                        ? 'bg-amber-500 text-white animate-pulse'
-                        : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'
-                    }`}
-                  >
-                    {pendingCount}
-                  </span>
-                </>
-              )}
-              {sidebarCollapsed && pendingCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">
-                  {pendingCount > 9 ? '9+' : pendingCount}
-                </span>
-              )}
-            </NavLink>
-          )}
         </nav>
 
         {/* Shift indicator */}
