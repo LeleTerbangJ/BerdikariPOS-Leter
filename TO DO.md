@@ -255,7 +255,7 @@
 ### 4.5 Penyederhanaan Judul Modal Pending
 - **Masalah**: Judul modal "Daftar Pesanan Gantung (Pending Payment)" terlalu panjang.
 - **Aksi**: 
-  - [ ] Ubah judul modal tersebut cukup menjadi "Pending Payments".
+  - [x] Ubah judul modal tersebut cukup menjadi "Pending Payments".
 
 ---
 
