@@ -214,6 +214,7 @@ export async function runMigrations() {
       migrationNeeded.autoPrintReceipt = true;
       migrationNeeded.receiptHeader = true;
       migrationNeeded.receiptFooter = true;
+    }
     // Migration 15: Verify cash_movements table
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
     if (cmError) {
