@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { idbStorage } from '../utils/idbStorage';
+import { capEntries, DEFAULT_AUDIT_LOG_CAP } from '../utils/storagePrune';
 import { v4 as uuid } from 'uuid';
 import type { AuditLogEntry, AuditAction, Role } from '../types';
 import { syncAuditLog, fetchAuditLogsFromCloud } from '../lib/cloudSync';
@@ -32,7 +34,7 @@ export const useAuditLogStore = create<AuditLogState>()(
           timestamp: new Date().toISOString(),
           metadata,
         };
-        set((s) => ({ logs: [entry, ...s.logs].slice(0, 10000) })); // Max 10000 entries
+        set((s) => ({ logs: capEntries([entry, ...s.logs], DEFAULT_AUDIT_LOG_CAP) })); // v4.5 TO DO 6.1: cap lokal dikurangi agar payload localStorage tidak membengkak
         syncAuditLog(entry);
       },
 
@@ -81,11 +83,11 @@ export const useAuditLogStore = create<AuditLogState>()(
             const localOnly = s.logs.filter((l) => !cloudIds.has(l.id));
             const merged = [...cloudLogs, ...localOnly];
             merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            return { logs: merged.slice(0, 10000) };
+            return { logs: capEntries(merged, DEFAULT_AUDIT_LOG_CAP) };
           });
         }
       },
     }),
-    { name: 'rempah-audit-logs' }
+    { name: 'rempah-audit-logs', storage: createJSONStorage(() => idbStorage) } // v4.5 TO DO 6.1 (permanen): IndexedDB — kuota jauh lebih besar
   )
 );

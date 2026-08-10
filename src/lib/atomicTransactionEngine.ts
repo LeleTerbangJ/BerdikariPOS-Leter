@@ -13,7 +13,7 @@ import { useTransactionStore } from '../store/transactionStore';
 import { useMenuStore } from '../store/menuStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
-import { syncTransaction } from './cloudSync';
+import { syncTransaction, deleteTransactionCloud } from './cloudSync';
 import {
   pruneIdempotencyEntries,
   IDEMPOTENCY_TTL_MS,
@@ -130,8 +130,12 @@ export class AtomicTransactionEngine {
       );
 
       const deductions = InventoryEngine.computeDeductions(itemsWithSnapshot, menus);
+      // v4.5 TO DO 5.2: scaleHpp — sub-bill split mode Equal membawa SEMUA item cart sehingga
+      // totalHpp snapshot = HPP penuh per sub-bill. Skala agar Σ hpp sub-bill === HPP induk
+      // (laba kotor & margin tidak ter-inflasi N× di Reports/Dashboard).
+      const scaledHpp = Math.round(totalHpp * (params.scaleHpp ?? 1));
       const netSales = Math.max(0, params.subtotal - params.discount);
-      const grossProfit = netSales - totalHpp;
+      const grossProfit = netSales - scaledHpp;
       const targetTxStatus = params.overrideTxStatus || 'Selesai';
 
       const tx: Transaction = {
@@ -152,9 +156,9 @@ export class AtomicTransactionEngine {
         cashierName: params.currentUser?.name || '',
         customerId: params.selectedCustomerId || undefined,
         customerName: params.selectedCustomerName || undefined,
-        hpp: totalHpp,
-        cogs: totalHpp,
-        totalCogs: totalHpp,
+        hpp: scaledHpp,
+        cogs: scaledHpp,
+        totalCogs: scaledHpp,
         grossProfit: grossProfit,
         orderType: params.orderType,
         tableNumber:
@@ -167,6 +171,9 @@ export class AtomicTransactionEngine {
         splitParentId: params.splitParentId,
         splitIndex: params.splitIndex,
         totalSplitCount: params.totalSplitCount,
+        // v4.5 TO DO 5.5: rekam promo/voucher pada transaksi pending agar bisa di-restore saat resume
+        appliedPromoId: params.appliedPromoId,
+        voucherCode: params.voucherCode,
         lifecycleState: 'COMMITTED',
       };
 
@@ -224,7 +231,7 @@ export class AtomicTransactionEngine {
     } catch (err: any) {
       // ROLLBACK ENGINE
       console.error('[AtomicEngine] Transaction failed during processing, rolling back:', err);
-      this.executeRollback(txId, inventorySnapshot);
+      await this.executeRollback(txId, inventorySnapshot);
       return {
         success: false,
         error: err.message || 'Gagal memproses transaksi. Perubahan telah dibatalkan.',
@@ -234,8 +241,11 @@ export class AtomicTransactionEngine {
 
   /**
    * Rollback local state mutations using inventory snapshot.
+   * v4.5 TO DO 6.5: rollback kini await penghapusan cloud + tombstone lokal (anti ghost) —
+   * sebelumnya deleteTransactionCloud fire-and-forget → baris cloud bisa tersisa → transaksi
+   * yang "gagal" muncul lagi setelah reload / device lain via loadFromCloud.
    */
-  private static executeRollback(txId: string, inventorySnapshot: Map<string, number>) {
+  private static async executeRollback(txId: string, inventorySnapshot: Map<string, number>) {
     try {
       // 1. Restore Inventory
       const inventoryStore = useInventoryStore.getState();
@@ -247,7 +257,15 @@ export class AtomicTransactionEngine {
       const txStore = useTransactionStore.getState();
       const existingTx = txStore.transactions.find((t) => t.id === txId);
       if (existingTx) {
+        // deleteTransaction: hapus lokal + tombstone (anti ghost) + fire cloud delete
         txStore.deleteTransaction(txId);
+        // PASTIKAN penghapusan cloud selesai sebelum rollback dianggap sukses
+        // (jika offline, smartDelete masuk offline queue → ter-flush saat online).
+        try {
+          await deleteTransactionCloud(txId);
+        } catch (e) {
+          console.warn('[AtomicEngine] Gagal menghapus transaksi dari cloud saat rollback (masuk antrean offline):', e);
+        }
       }
 
       this.registerState(txId, 'ROLLED_BACK');

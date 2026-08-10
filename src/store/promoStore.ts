@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import type { Promo, LoyaltySettings } from '../types';
 import { syncPromo, deletePromoCloud, fetchPromosFromCloud, syncLoyaltySettings, fetchLoyaltySettingsFromCloud } from '../lib/cloudSync';
 
@@ -147,6 +148,6 @@ export const usePromoStore = create<PromoState>()(
         }
       },
     }),
-    { name: 'rempah-promos' }
+    { name: 'rempah-promos', storage: createJSONStorage(() => safeStorage) }
   )
 );

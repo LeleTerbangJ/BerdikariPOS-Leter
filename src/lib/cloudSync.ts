@@ -215,7 +215,27 @@ export async function runMigrations() {
       migrationNeeded.receiptHeader = true;
       migrationNeeded.receiptFooter = true;
     }
-    // Migration 15: Verify cash_movements table
+    // Migration 17: Add pending promo columns to transactions table (TO DO 5.5)
+    // syncTransaction menulis applied_promo_id/voucher_code — deteksi agar upsert pada DB lama tidak gagal.
+    const pendingPromoColumns = ['applied_promo_id', 'voucher_code'];
+    const { error: pendingPromoError } = await supabase
+      .from('transactions')
+      .select(pendingPromoColumns.join(','))
+      .limit(1);
+    const pendingPromoMissing =
+      !!pendingPromoError &&
+      pendingPromoColumns.some((c) => pendingPromoError.message?.includes(c));
+    if (pendingPromoMissing) {
+      console.warn('[Migration] Kolom promo pending belum ada di transactions (TO DO 5.5): applied_promo_id / voucher_code.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;');
+      migrationNeeded.appliedPromoId = true;
+      migrationNeeded.voucherCode = true;
+    }
+
+    // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
+    // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
     if (cmError) {
       console.warn('[Migration] Table "cash_movements" missing or inaccessible in Supabase.');
@@ -231,7 +251,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -295,6 +315,13 @@ export async function syncTransaction(tx: Transaction) {
   if (!migrationNeeded.paidAmount) {
     data.paid_amount = tx.paidAmount || null;
   }
+  // v4.5 TO DO 5.5: promo/voucher pending (di-restore saat resume lintas device), guard migrasi
+  if (!migrationNeeded.appliedPromoId) {
+    data.applied_promo_id = tx.appliedPromoId || null;
+  }
+  if (!migrationNeeded.voucherCode) {
+    data.voucher_code = tx.voucherCode || null;
+  }
   await smartUpsert('transactions', data);
 }
 
@@ -305,7 +332,27 @@ export async function syncTransactionStatus(id: string, kitchenStatus: string) {
 
 export async function syncTransactionTxStatus(id: string, txStatus: string) {
   if (!isSupabaseConfigured) return;
-  await smartUpdate('transactions', { tx_status: txStatus }, 'id', id);
+  // v4.5 TO DO 5.10: ikut tulis is_pending (guard migrasi) agar kolom DB tidak stale —
+  // sebelumnya hanya tx_status yang disync → is_pending di DB tetap true untuk order yang
+  // sudah lunas/batal → device lain masih melihatnya sebagai Pending.
+  const data: Record<string, any> = { tx_status: txStatus };
+  if (!migrationNeeded.isPending) {
+    data.is_pending = txStatus === 'Pending';
+  }
+  await smartUpdate('transactions', data, 'id', id);
+}
+
+// v4.5 TO DO 5.8: sync metadata transaksi terpilih ke cloud (saat ini payment_method parent split).
+// Field yang didukung dipetakan eksplisit — field lain diabaikan agar tidak menulis kolom tak dikenal.
+export async function syncTransactionMeta(id: string, partial: Partial<Transaction>) {
+  if (!isSupabaseConfigured) return;
+  const data: Record<string, any> = {};
+  if (partial.paymentMethod !== undefined) {
+    data.payment_method = partial.paymentMethod;
+  }
+  if (Object.keys(data).length > 0) {
+    await smartUpdate('transactions', data, 'id', id);
+  }
 }
 
 export async function deleteTransactionCloud(id: string) {
@@ -345,12 +392,16 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       orderType: row.order_type || undefined,
       tableNumber: row.table_number || row.table_name || undefined,
       tableName: row.table_name || row.table_number || undefined,
-      isPending: row.is_pending || row.tx_status === 'Pending',
+      // v4.5 TO DO 5.10: tx_status adalah otoritatif — kolom is_pending bisa stale (true) untuk
+      // order yang sudah lunas/batal di era sebelum syncTransactionTxStatus menulis is_pending.
+      isPending: row.tx_status === 'Pending',
       pendingNotes: row.pending_notes || undefined,
       splitParentId: row.split_parent_id || undefined,
       splitIndex: row.split_index || undefined,
       totalSplitCount: row.total_split_count || undefined,
       paidAmount: row.paid_amount || undefined,
+      appliedPromoId: row.applied_promo_id || undefined,
+      voucherCode: row.voucher_code || undefined,
     })) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);

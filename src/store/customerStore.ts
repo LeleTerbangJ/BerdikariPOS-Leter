@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import type { Customer } from '../types';
 import { syncCustomer, deleteCustomerCloud, fetchCustomersFromCloud } from '../lib/cloudSync';
 
@@ -107,6 +108,6 @@ export const useCustomerStore = create<CustomerState>()(
         }
       },
     }),
-    { name: 'rempah-customers' }
+    { name: 'rempah-customers', storage: createJSONStorage(() => safeStorage) }
   )
 );

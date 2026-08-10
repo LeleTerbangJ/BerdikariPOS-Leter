@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import Modal from './Modal';
 import { formatRupiah } from '../utils/format';
 import type { CartItem, PaymentMethod, Transaction, AppSettings, OrderType } from '../types';
@@ -15,6 +15,15 @@ import { useCustomerStore } from '../store/customerStore';
 import { usePromoStore } from '../store/promoStore';
 import { printSplitReceipt } from '../utils/printer';
 import { allocateProportional } from '../utils/splitAllocation';
+import {
+  computeCartSignature,
+  createSplitStockSession,
+  accumulatePaidPortion,
+  computeUnpaidPortion,
+  getActiveSplitStockSession,
+  setActiveSplitStockSession,
+  recordPaidBill,
+} from '../utils/splitStockSession';
 import { Scissors, Users, ShoppingBag, CheckCircle, CreditCard, Banknote, QrCode, ArrowRight } from 'lucide-react';
 
 interface SplitBillModalProps {
@@ -49,6 +58,12 @@ interface SubBillDraft {
   paidTx?: Transaction;
 }
 
+// Merekam id parent pending yang sudah mencatat visit/promo (untuk split PENDING — fresh split
+// memakai `session.visitRecorded`). Keyed by id → tidak butuh reset manual saat parent berubah.
+// (Holder sesi reserve aktif ada di modul murni splitStockSession.ts agar POS juga bisa
+// melepaskan reserve saat beralih ke checkout normal — v4.5 TO DO 5.1.)
+let pendingVisitRecordedId: string | null = null;
+
 export default function SplitBillModal({
   open,
   onClose,
@@ -74,27 +89,78 @@ export default function SplitBillModal({
   const { recordVisit } = useCustomerStore();
   const { incrementUsage } = usePromoStore();
 
-  // v4.1 TO DO 1.5 — Manajemen stok split bill:
-  // - Fresh split (tanpa parentTx): stok dipotong SEKALI untuk seluruh item cart saat sub-bill pertama dibayar.
-  //   Sub-bill berikutnya mengirim reservedDeductions = deduksi item sub-bill itu sendiri → engine menghitung delta 0
-  //   sehingga stok tidak terpotong dua kali. Sisa stok yang belum lunas dikembalikan saat modal ditutup.
+  // v4.5 TO DO 5.1 — Manajemen stok split bill:
+  // - Fresh split (tanpa parentTx): stok dipotong SEKALI untuk seluruh item cart saat sub-bill
+  //   pertama sesi dibayar (reserve). Sub-bill berikutnya mengirim reservedDeductions = deduksi
+  //   item sub-bill itu sendiri → engine menghitung delta 0 sehingga stok tidak terpotong dua kali.
+  //   Reserve DI-PERTAHANKAN lintas buka/tutup modal (sesi module-level) agar buka ulang tidak
+  //   memotong ganda. Dilepas saat semua lunas atau saat cart berubah (revert bagian belum lunas).
   // - Split pending (parentTx ada): stok sudah dipotong saat pending dibuat → reservedDeductions per sub-bill (delta 0).
-  const sessionReservedRef = useRef<Record<string, number> | null>(null);
-  const sessionPaidRef = useRef<Record<string, number>>({});
-  // v4.1 TO DO 2.8: flag terpisah — catat visit/promo HANYA sekali per sesi split.
-  // (Jangan di-derive dari sessionPaidRef: sub-bill bisa lunas TANPA deduksi bahan baku,
-  // sehingga map deductions tetap kosong dan kondisi berbasis isi map bisa double-fire.)
-  const sessionVisitRecordedRef = useRef(false);
 
-  // v4.1 TO DO 1.5: Reset state stok sesi setiap kali modal dibuka — mencegah ref stale
-  // dari sesi split sebelumnya (modal tetap ter-mount, open hanya di-toggle).
+  // v4.5 TO DO 5.1: Deteksi perubahan isi cart — jika sesi reserve aktif tapi signature cart
+  // berbeda (kasir clear cart / ganti order / batal), kembalikan stok yang BELUM lunas
+  // (reserved − paid) dan mulai sesi baru. Bagian yang sudah lunas TIDAK di-revert
+  // (stoknya sudah terpakai sah oleh transaksi sub-bill yang tercatat).
   useEffect(() => {
-    if (open) {
-      sessionReservedRef.current = null;
-      sessionPaidRef.current = {};
-      sessionVisitRecordedRef.current = false;
+    if (parentTx) return; // split pending tidak memakai session reserve
+    const sig = computeCartSignature(cartItems);
+    const activeSession = getActiveSplitStockSession();
+    if (activeSession && activeSession.cartSignature !== sig) {
+      const unpaid = computeUnpaidPortion(activeSession);
+      if (Object.keys(unpaid).length > 0) {
+        useInventoryStore
+          .getState()
+          .revertStock(unpaid, 'Split Bill (Cart Berubah — Kembalikan Stok Belum Lunas)');
+      }
+      setActiveSplitStockSession(null);
     }
-  }, [open]);
+  }, [cartItems, parentTx]);
+
+  // v4.5 TO DO 5.7: reset UI saat modal dibuka dengan KONTEKS berbeda (parent berbeda / isi cart
+  // berubah) — cegah progress lama (paidState/mode/equalCount/itemAssignments) tampil untuk order
+  // lain. Reopen konteks SAMA = resume sesi split (5.1) → progress dipertahankan + di-rehydrate
+  // dari session (paidBills/mode/count) agar sub-bill yang sudah lunas tidak bisa dibayar ganda.
+  const lastOpenCtxRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const cartSig = computeCartSignature(cartItems);
+    const ctx = parentTx ? `parent:${parentTx.id}` : `cart:${cartSig}`;
+    if (lastOpenCtxRef.current !== ctx) {
+      lastOpenCtxRef.current = ctx;
+      setMode('equal');
+      setEqualCount(2);
+      setBillCountCustom(2);
+      setActiveBillIdx(0);
+      setItemAssignments({});
+      setPaidState({});
+    }
+    // Rehydrate paidState dari sesi stock (fresh split) jika masih aktif dengan cart yang sama
+    if (!parentTx) {
+      const session = getActiveSplitStockSession();
+      if (session && session.cartSignature === cartSig) {
+        if (session.mode) setMode(session.mode);
+        if (session.count) {
+          if (session.mode === 'item') setBillCountCustom(session.count);
+          else setEqualCount(session.count);
+        }
+        if (session.paidBills && Object.keys(session.paidBills).length > 0) {
+          const rehydrated: Record<number, { isPaid: boolean; payMethod: PaymentMethod; cash: string }> = {};
+          Object.entries(session.paidBills).forEach(([idx, info]) => {
+            rehydrated[Number(idx)] = {
+              isPaid: true,
+              payMethod: info.payMethod,
+              cash: String(info.cash),
+            };
+          });
+          setPaidState((prev) => ({ ...prev, ...rehydrated }));
+        }
+        const totalBills = session.count || (session.mode === 'item' ? billCountCustom : equalCount);
+        const firstUnpaid = Array.from({ length: totalBills }).findIndex((_, i) => !session.paidBills?.[i]);
+        if (firstUnpaid !== -1) setActiveBillIdx(firstUnpaid);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, parentTx?.id, cartItems]);
 
   const computeDeductions = (items: CartItem[]): Record<string, number> => {
     try {
@@ -107,19 +173,9 @@ export default function SplitBillModal({
   };
 
   const handleClose = () => {
-    // Fresh split: jika modal ditutup sebelum semua sub-bill lunas, kembalikan stok item yang belum dibayar
-    if (sessionReservedRef.current) {
-      const remaining: Record<string, number> = {};
-      for (const [invId, fullQty] of Object.entries(sessionReservedRef.current)) {
-        const diff = fullQty - (sessionPaidRef.current[invId] || 0);
-        if (diff > 0) remaining[invId] = diff;
-      }
-      if (Object.keys(remaining).length > 0) {
-        useInventoryStore.getState().revertStock(remaining, 'Split Bill (Dibatalkan — Kembalikan Stok Belum Lunas)');
-      }
-      sessionReservedRef.current = null;
-      sessionPaidRef.current = {};
-    }
+    // v4.5 TO DO 5.1: TIDAK me-revert / meng-clear stok di sini — reserve dipertahankan lintas
+    // buka/tutup modal agar sesi dapat dilanjutkan tanpa double deduction. Sesi dibersihkan saat:
+    // semua sub-bill lunas (di handlePaySubBill) atau isi cart berubah (useEffect di atas).
     onClose();
   };
 
@@ -145,6 +201,17 @@ export default function SplitBillModal({
   const [mode, setMode] = useState<SplitMode>('equal');
   const [equalCount, setEqualCount] = useState<number>(2);
   const [activeBillIdx, setActiveBillIdx] = useState<number>(0);
+
+  // v4.5 TO DO 5.2: HPP penuh cart — dipakai untuk mengalokasikan HPP per sub-bill equal
+  // (Largest Remainder Method) sehingga Σ hpp sub-bill === HPP induk persis (tanpa selisih rupiah).
+  const fullHpp = useMemo(() => {
+    try {
+      return createSnapshotForCartItems(cartItems, menus, inventory).totalHpp;
+    } catch (e) {
+      console.warn('[SplitBillModal] Gagal menghitung HPP penuh:', e);
+      return 0;
+    }
+  }, [cartItems, menus, inventory]);
   const [itemAssignments, setItemAssignments] = useState<Record<string, number>>({}); // lineId -> subBillIndex (0, 1, 2)
   const [billCountCustom, setBillCountCustom] = useState<number>(2);
 
@@ -237,10 +304,13 @@ export default function SplitBillModal({
 
       const allPaid = activeBills.every((_, idx) => idx === billIdx || nextPaidState[idx]?.isPaid);
       if (allPaid) {
+        // v4.5 TO DO 5.1: semua sub-bill lunas → stok seluruhnya terpakai sah, sesi selesai.
+        setActiveSplitStockSession(null);
+        pendingVisitRecordedId = null;
         finalizeSplitParent(nextPaidState);
         addToast('Seluruh Split Bill berhasil dilunasi! 🎉', 'success');
         onCompleteSplit();
-        handleClose(); // via handleClose agar refs stok sesi ikut di-reset
+        handleClose();
       } else {
         const nextUnpaid = activeBills.findIndex((_, idx) => !nextPaidState[idx]?.isPaid);
         if (nextUnpaid !== -1) setActiveBillIdx(nextUnpaid);
@@ -263,12 +333,23 @@ export default function SplitBillModal({
       preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
     }
 
-    // v4.1 TO DO 1.5 — Stok split bill:
+    // v4.1 TO DO 1.5 + v4.5 TO DO 5.1 — Stok split bill:
     // Fresh split: validasi SELURUH cart dulu (sebelum sub-bill mana pun dibayar), lalu stok penuh
     // dipotong SEKALI SETELAH commit sub-bill pertama sukses (reserve). Sub-bill berikutnya mengirim
     // reservedDeductions = deduksi item sub-bill itu sendiri → engine menghitung delta 0 (tidak potong 2x).
+    // Reserve sesi DI-PERTAHANKAN lintas buka/tutup modal (module-level) → buka ulang tidak deduct ganda.
     // Pending split: stok sudah dipotong saat pending dibuat — cukup reservedDeductions per sub-bill (delta 0).
-    if (!parentTx && !sessionReservedRef.current) {
+    const activeSession = getActiveSplitStockSession();
+    // v4.5 TO DO 5.7 (sabuk pengaman review): tolak re-pay sub-bill yang sudah tercatat lunas di
+    // session (kasus rehydrate paidState gagal / sesi lama tanpa paidBills di localStorage) —
+    // mencegah duplikasi revenue walau guard UI lolos.
+    if (!parentTx && activeSession?.paidBills?.[billIdx]) {
+      addToast(`Sub-Bill ${billIdx + 1} sudah lunas pada sesi sebelumnya.`, 'warning');
+      return;
+    }
+    const isFirstPaymentOfSession =
+      !parentTx && (!activeSession || Object.keys(activeSession.reserved).length === 0);
+    if (isFirstPaymentOfSession) {
       const fullValidation = InventoryEngine.validateStockAvailability(cartItems, menus, inventory);
       if (!fullValidation.valid) {
         addToast(
@@ -281,6 +362,17 @@ export default function SplitBillModal({
       }
     }
     const reservedForSubBill = computeDeductions(targetBill.items);
+
+    // v4.5 TO DO 5.2: HPP sub-bill mode Equal dibawa SEMUA item cart → engine menghitung HPP penuh
+    // per sub-bill. Alokasikan HPP induk ke N sub-bill dengan Largest Remainder Method
+    // (scaleHpp_i = allocated_i / fullHpp) → Math.round(fullHpp * scaleHpp_i) = allocated_i,
+    // sehingga Σ hpp sub-bill === HPP induk persis (laba kotor tidak ter-inflasi N×).
+    // Mode item (item disjoint) tidak perlu skala — HPP per sub-bill sudah proporsional alami.
+    let scaleHpp: number | undefined;
+    if (mode === 'equal' && equalCount > 0 && fullHpp > 0) {
+      const allocated = allocateProportional(fullHpp, Array(equalCount).fill(1 / equalCount));
+      scaleHpp = allocated[billIdx] / fullHpp;
+    }
 
     // Execute atomic checkout for this Sub-Bill
     const result = await AtomicTransactionEngine.executeCheckout({
@@ -302,9 +394,14 @@ export default function SplitBillModal({
       reservedDeductions: reservedForSubBill,
       suppressAutoPrint: true,
       overrideTxStatus: 'Selesai',
+      // v4.5 TO DO 5.9: sub-bill split FRESH memakai SATU nomor antrean (dari sub-bill pertama sesi)
+      // — 1 pesanan tidak menghasilkan N nomor antrean. Pending split tidak diubah (parent punya nomornya).
+      overrideQueueNumber: !parentTx ? activeSession?.queueNumber || undefined : undefined,
       splitParentId: parentTx?.id,
       splitIndex: billIdx + 1,
       totalSplitCount: activeBills.length,
+      // v4.5 TO DO 5.2: skala HPP sub-bill equal (Σ hpp sub-bill === HPP induk)
+      scaleHpp,
       // v4.1 TO DO 2.8: rekam customer terpilih ke setiap sub-bill (CRM & laporan per-customer akurat)
       selectedCustomerId: selectedCustomerId || undefined,
       selectedCustomerName: selectedCustomerName || undefined,
@@ -318,37 +415,67 @@ export default function SplitBillModal({
 
     const subTx = result.transaction!;
 
-    // v4.1 TO DO 1.5: Reserve stok penuh HANYA pada sub-bill pertama yang BERHASIL di split fresh
-    // (dihitung setelah commit sukses — jika attempt pertama gagal, retry tetap dianggap sub-bill pertama).
-    const isFirstSuccessfulPayment = !parentTx && !sessionReservedRef.current;
-    if (isFirstSuccessfulPayment) {
+    // v4.1 TO DO 1.5 + v4.5 TO DO 5.1: Reserve stok penuh HANYA pada pembayaran pertama SESI split
+    // fresh (dihitung setelah commit sukses). Sesi module-level dipertahankan lintas buka/tutup modal
+    // → sub-bill yang dibayar di sesi sebelumnya TIDAK di-reserve ulang (mencegah double deduction).
+    if (isFirstPaymentOfSession) {
       const fullDeductions = computeDeductions(cartItems);
       useInventoryStore.getState().deductStock(fullDeductions, 'Split Bill (Reserve Stok Semua Item)');
-      sessionReservedRef.current = fullDeductions;
+      let session = getActiveSplitStockSession();
+      if (!session) {
+        session = createSplitStockSession(computeCartSignature(cartItems), {});
+      }
+      session.reserved = fullDeductions;
+      setActiveSplitStockSession(session);
     }
 
-    // v4.1 TO DO 2.8: rekam kunjungan customer & usage promo SEKALI pada sub-bill pertama yang lunas
-    // (paralel dengan finalizeTransaction di checkout normal — split tidak boleh melewatkannya).
-    if (!sessionVisitRecordedRef.current) {
-      sessionVisitRecordedRef.current = true;
-      if (selectedCustomerId) {
-        recordVisit(selectedCustomerId, totalAmount);
+    // v4.1 TO DO 2.8: rekam kunjungan customer & usage promo SEKALI per sesi split.
+    // Fresh split → flag di session (bertahan lintas buka/tutup); pending split → keyed by parent id.
+    if (!parentTx) {
+      const session = getActiveSplitStockSession();
+      if (session && !session.visitRecorded) {
+        session.visitRecorded = true;
+        setActiveSplitStockSession(session);
+        if (selectedCustomerId) {
+          recordVisit(selectedCustomerId, totalAmount);
+        }
+        if (appliedPromoId) {
+          incrementUsage(appliedPromoId);
+        }
       }
-      if (appliedPromoId) {
-        incrementUsage(appliedPromoId);
+    } else {
+      if (pendingVisitRecordedId !== parentTx.id) {
+        pendingVisitRecordedId = parentTx.id;
+        if (selectedCustomerId) {
+          recordVisit(selectedCustomerId, totalAmount);
+        }
+        if (appliedPromoId) {
+          incrementUsage(appliedPromoId);
+        }
       }
     }
 
-    // Akumulasi stok sub-bill yang sudah lunas (dipakai untuk revert sisa stok
-    // saat modal ditutup sebelum semua sub-bill dibayar).
-    for (const [invId, qty] of Object.entries(reservedForSubBill)) {
-      sessionPaidRef.current[invId] = (sessionPaidRef.current[invId] || 0) + qty;
+    // v4.5 TO DO 5.1: Akumulasi stok sub-bill yang lunas ke sesi, di-CAP pada nilai reserve.
+    // Tanpa cap, mode Equal (semua sub-bill membawa semua item) mengakumulasi deduksi penuh
+    // berulang → reserved − paid ≤ 0 → revert tidak pernah benar → stok bocor ganda.
+    if (!parentTx) {
+      const session = getActiveSplitStockSession();
+      if (session) {
+        accumulatePaidPortion(session, reservedForSubBill);
+        // v4.5 TO DO 5.7: catat sub-bill lunas + konfigurasi sesi (rehydrate UI saat reopen)
+        recordPaidBill(session, billIdx, payMethod, cash);
+        session.mode = mode;
+        session.count = mode === 'equal' ? equalCount : billCountCustom;
+        // v4.5 TO DO 5.9: kunci SATU nomor antrean untuk seluruh sub-bill fresh (yang pertama menang)
+        if (!session.queueNumber) session.queueNumber = subTx.queueNumber;
+        setActiveSplitStockSession(session);
+      }
     }
 
     // Cetak struk sub-bill. Saat split fresh sub-bill pertama, cetak juga tiket dapur LENGKAP sekali
     // (dapur belum pernah menerima tiket). Split pending tidak mencetak ulang tiket (sudah saat pending dibuat).
     if (settings.printerEnabled || settings.autoPrintOnCheckout) {
-      if (isFirstSuccessfulPayment) {
+      if (isFirstPaymentOfSession) {
         printSplitReceipt(subTx, null, settings, 'all', cartItems).catch(() => {});
       } else {
         printSplitReceipt(subTx, parentTx, settings, 'cashier').catch(() => {});
@@ -366,10 +493,13 @@ export default function SplitBillModal({
     // Check if ALL sub-bills are now paid
     const allPaid = activeBills.every((_, idx) => idx === billIdx || nextPaidState[idx]?.isPaid);
     if (allPaid) {
+      // v4.5 TO DO 5.1: semua sub-bill lunas → stok seluruhnya terpakai sah, sesi selesai.
+      setActiveSplitStockSession(null);
+      pendingVisitRecordedId = null;
       finalizeSplitParent(nextPaidState);
       addToast(`Seluruh Split Bill berhasil dilunasi! 🎉`, 'success');
       onCompleteSplit();
-      handleClose(); // via handleClose agar refs stok sesi ikut di-reset
+      handleClose();
     } else {
       // Move to next unpaid bill
       const nextUnpaid = activeBills.findIndex((_, idx) => !nextPaidState[idx]?.isPaid);

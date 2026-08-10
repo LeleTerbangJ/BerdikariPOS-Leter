@@ -3,6 +3,7 @@ import { useTransactionStore } from '../store/transactionStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useAuthStore } from '../store/authStore';
 import { formatRupiah, formatTime } from '../utils/format';
+import { isSplitSubBill } from '../utils/splitAllocation';
 import { playNewOrderSound, playAlertSound } from '../utils/sound';
 import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -83,8 +84,11 @@ export default function Kitchen() {
 
   const activeOrders = transactions.filter((t) => {
     if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
-    // v4.5 Perbaikan KDS Split Bill: Abaikan sub-bill (transaksi anak/split) agar tidak memicu duplikasi antrean di dapur
-    if (t.splitParentId) return false;
+    // v4.5 TO DO 5.10 (lanjutan 4.2): Abaikan SEMUA sub-bill split — anak (splitParentId) maupun
+    // sub-bill split FRESH (splitIndex terisi tanpa parent, membawa semua item cart dengan kitchenStatus
+    // 'Waiting') agar tidak memicu duplikasi antrean di dapur. Tiket dapur split fresh sudah dicetak
+    // sekali saat sub-bill pertama sesi dibayar.
+    if (isSplitSubBill(t)) return false;
     // Only show today's orders
     if (new Date(t.date) < today) return false;
     // Hide Done orders that were cleared

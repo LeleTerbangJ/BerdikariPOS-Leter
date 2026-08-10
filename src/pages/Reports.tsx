@@ -7,6 +7,7 @@ import { useMenuStore } from '../store/menuStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { formatRupiah, formatDate } from '../utils/format';
+import { splitContributionDivisor } from '../utils/splitAllocation';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
 import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF } from '../utils/pdfExport';
@@ -175,18 +176,21 @@ export default function Reports() {
   }, [filteredTx]);
 
   // Category sales
+  // v4.5 TO DO 5.11: sub-bill split equal membawa semua item di tiap bagian → revenue/qty
+  // per kategori ter-inflasi N×. Bagi kontribusi dengan totalSplitCount (deteksi isEqualSplitSubBill).
   const categorySales = useMemo(() => {
     const map: Record<string, { revenue: number; qty: number }> = {};
-    filteredTx.forEach((t) =>
+    filteredTx.forEach((t) => {
+      const div = splitContributionDivisor(t);
       t.items.forEach((item) => {
         if (item.isBundleChild) return; // Child bundle items are operational records only
         const menu = menus.find((m) => m.id === item.menuId);
         const cat = menu?.category || 'Lainnya';
         if (!map[cat]) map[cat] = { revenue: 0, qty: 0 };
-        map[cat].revenue += item.subtotal;
-        map[cat].qty += item.quantity;
-      })
-    );
+        map[cat].revenue += item.subtotal / div;
+        map[cat].qty += item.quantity / div;
+      });
+    });
     return Object.entries(map).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [filteredTx, menus]);
 
@@ -837,7 +841,9 @@ export default function Reports() {
                   <div key={cat} className="flex items-center justify-between">
                     <div>
                       <p className="font-medium text-sm">{cat}</p>
-                      <p className="text-xs text-slate-400">{data.qty} item terjual</p>
+                      <p className="text-xs text-slate-400">
+                        {Number.isInteger(data.qty) ? data.qty : data.qty.toFixed(1)} item terjual
+                      </p>
                     </div>
                     <span className="font-bold text-sm text-brand-700">{formatRupiah(data.revenue)}</span>
                   </div>

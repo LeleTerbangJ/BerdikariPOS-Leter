@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import bcrypt from 'bcryptjs';
 import type { User, Role } from '../types';
 import { seedUsers } from '../utils/seed';
@@ -203,6 +204,6 @@ export const useAuthStore = create<AuthState>()(
         }
       },
     }),
-    { name: 'rempah-auth' }
+    { name: 'rempah-auth', storage: createJSONStorage(() => safeStorage) }
   )
 );

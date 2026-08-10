@@ -38,7 +38,13 @@ function getQueue(): QueueOperation[] {
 }
 
 function saveQueue(queue: QueueOperation[]) {
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+  try {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+  } catch (e) {
+    // v4.5 TO DO 6.1: jangan lempar QuotaExceededError ke pemanggil (smartUpsert/sync)
+    // — antrean tetap hidup di memory; operasi cloud akan di-flush ulang saat online.
+    console.warn('[OfflineQueue] Gagal menyimpan antrean ke localStorage (kemungkinan kuota penuh):', e);
+  }
 }
 
 export function addToQueue(op: Omit<QueueOperation, 'id' | 'timestamp' | 'retries'>) {
