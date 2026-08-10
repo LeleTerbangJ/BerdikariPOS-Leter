@@ -6,6 +6,7 @@ import { useCustomerStore } from '../store/customerStore';
 import { useStockLogStore } from '../store/stockLogStore';
 import { formatRupiah, isSameDay } from '../utils/format';
 import { calculateMenuHPP } from '../utils/hpp';
+import { splitContributionDivisor } from '../utils/splitAllocation';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -72,14 +73,17 @@ export default function Dashboard() {
   const todayCount = todayTx.length;
 
   // Best seller
+  // v4.5 TO DO 5.11: sub-bill split equal membawa semua item di setiap bagian → qty per menu
+  // ter-inflasi N×. Bagi kontribusinya dengan totalSplitCount (deteksi via isEqualSplitSubBill).
   const menuSales = useMemo(() => {
     const map: Record<string, { name: string; qty: number }> = {};
-    todayTx.forEach((t) =>
+    todayTx.forEach((t) => {
+      const div = splitContributionDivisor(t);
       t.items.forEach((i) => {
         if (!map[i.menuId]) map[i.menuId] = { name: i.name, qty: 0 };
-        map[i.menuId].qty += i.quantity;
-      })
-    );
+        map[i.menuId].qty += i.quantity / div;
+      });
+    });
     return Object.values(map).sort((a, b) => b.qty - a.qty);
   }, [todayTx]);
 
@@ -279,6 +283,9 @@ export default function Dashboard() {
     );
 
     filterTxs.forEach((t) => {
+      // v4.5 TO DO 5.11: sub-bill split equal membawa semua item cart di tiap bagian dengan
+      // subtotal/hpp penuh → qty/revenue/hpp per menu ter-inflasi N×. Bagi dengan totalSplitCount.
+      const div = splitContributionDivisor(t);
       t.items.forEach((item) => {
         if (!map[item.menuId]) {
           map[item.menuId] = { name: item.name, qty: 0, revenue: 0, hpp: 0 };
@@ -294,9 +301,9 @@ export default function Dashboard() {
           itemHpp = baseHpp * item.quantity;
         }
 
-        map[item.menuId].qty += item.quantity;
-        map[item.menuId].revenue += item.subtotal;
-        map[item.menuId].hpp += itemHpp;
+        map[item.menuId].qty += item.quantity / div;
+        map[item.menuId].revenue += item.subtotal / div;
+        map[item.menuId].hpp += itemHpp / div;
       });
     });
 
@@ -487,7 +494,9 @@ export default function Dashboard() {
                       {i + 1}
                     </span>
                     <span className="flex-1 text-sm truncate text-slate-700 dark:text-slate-200">{m.name}</span>
-                    <span className="text-sm font-semibold text-slate-600 dark:text-slate-400">{m.qty}x</span>
+                    <span className="text-sm font-semibold text-slate-600 dark:text-slate-400">
+                      {Number.isInteger(m.qty) ? m.qty : m.qty.toFixed(1)}x
+                    </span>
                   </div>
                 ))}
                 {menuSales.length === 0 && (
@@ -752,7 +761,9 @@ export default function Dashboard() {
                           <td className="py-2.5 px-2 font-medium text-slate-700 dark:text-slate-200 truncate max-w-[120px]" title={menu.name}>
                             {menu.name}
                           </td>
-                          <td className="py-2.5 px-2 text-center font-bold text-slate-600 dark:text-slate-305">{menu.qty}x</td>
+                          <td className="py-2.5 px-2 text-center font-bold text-slate-600 dark:text-slate-305">
+                            {Number.isInteger(menu.qty) ? menu.qty : menu.qty.toFixed(1)}x
+                          </td>
                           <td className="py-2.5 px-2 text-right text-slate-500 dark:text-slate-400">{formatRupiah(menu.revenue)}</td>
                           <td className="py-2.5 px-2 text-right font-bold text-green-700 dark:text-green-450">{formatRupiah(menu.profit)}</td>
                           <td className="py-2.5 px-2 text-center">

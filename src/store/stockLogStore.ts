@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
+import { capEntries, DEFAULT_STOCK_LOG_CAP } from '../utils/storagePrune';
 import { syncStockLog, fetchStockLogsFromCloud } from '../lib/cloudSync';
 
 export type StockLogType = 'deduct' | 'add' | 'adjust' | 'import';
@@ -31,7 +33,7 @@ export const useStockLogStore = create<StockLogState>()(
       logs: [],
 
       addLog: (entry) => {
-        set((s) => ({ logs: [entry, ...s.logs].slice(0, 5000) })); // Keep max 5000 entries
+        set((s) => ({ logs: capEntries([entry, ...s.logs], DEFAULT_STOCK_LOG_CAP) })); // v4.5 TO DO 6.1: cap lokal 500 (selaras limit fetch cloud 500)
         // BUG-C4 fix: Sync stock logs to cloud
         syncStockLog(entry);
       },
@@ -54,11 +56,11 @@ export const useStockLogStore = create<StockLogState>()(
             const localOnly = s.logs.filter((l) => !cloudIds.has(l.id));
             const merged = [...cloudLogs, ...localOnly];
             merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            return { logs: merged.slice(0, 5000) };
+            return { logs: capEntries(merged, DEFAULT_STOCK_LOG_CAP) };
           });
         }
       },
     }),
-    { name: 'rempah-stock-logs' }
+    { name: 'rempah-stock-logs', storage: createJSONStorage(() => safeStorage) }
   )
 );

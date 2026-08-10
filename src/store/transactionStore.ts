@@ -1,19 +1,32 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { idbStorage } from '../utils/idbStorage';
+import { pruneTransactionsForStorage, filterTombstoned, pruneConfirmedTombstones } from '../utils/storagePrune';
 import type { Transaction, KitchenStatus, TxStatus } from '../types';
 
 // v4.1 TO DO 3.1/3.2: predicate tunggal pesanan pending — satu sumber kebenaran agar
 // angka konsisten di POS, Layout, PendingPaymentsModal & Transactions (paritas angka).
 export const isPendingTransaction = (t: Transaction): boolean =>
   t.txStatus === 'Pending' || t.isPending === true;
-import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, deleteTransactionCloud } from '../lib/cloudSync';
+
+// v4.5 TO DO 5.3: predicate transaksi induk yang memiliki anak split (transaksi lain dengan
+// splitParentId === id). Dipakai guard stok di cancelPendingTransaction — stok pending yang
+// sudah displit dikelola sesi split (anak-anak 'Selesai' & stoknya terpakai sah) → jangan revert.
+export const hasPendingSplitChildren = (allTxs: Transaction[], parentId: string): boolean =>
+  allTxs.some((t) => t.splitParentId === parentId);
+import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud } from '../lib/cloudSync';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { calculateItemDeductions } from '../utils/hpp';
+import { useMenuStore } from './menuStore';
+import { useInventoryStore } from './inventoryStore';
 
 interface TransactionState {
   transactions: Transaction[];
   nextQueueNumber: number;
   lastQueueDate: string | null;
   lastKdsClearTime: string | null;
+  // v4.5 TO DO 6.5: tombstone ID transaksi yang dihapus/rollback lokal — cegah re-hidrasi dari cloud (ghost)
+  deletedLocalIds: string[];
   addTransaction: (tx: Transaction) => void;
   updateKitchenStatus: (id: string, status: KitchenStatus) => void;
   updateTxStatus: (id: string, status: TxStatus) => void;
@@ -44,6 +57,7 @@ export const useTransactionStore = create<TransactionState>()(
       nextQueueNumber: 1,
       lastQueueDate: null,
       lastKdsClearTime: null,
+      deletedLocalIds: [],
 
       getNextQueueNumber: async () => {
         const today = getTodayDateStr();
@@ -99,6 +113,8 @@ export const useTransactionStore = create<TransactionState>()(
             transactions: nextList,
             nextQueueNumber: maxQueue + 1,
             lastQueueDate: today,
+            // v4.5 TO DO 6.5: re-commit ID yang sama (resume pending) membatalkan tombstone
+            deletedLocalIds: s.deletedLocalIds.filter((d) => d !== tx.id),
           };
         });
       },
@@ -121,8 +137,11 @@ export const useTransactionStore = create<TransactionState>()(
         }));
       },
 
-      // v4.1 TO DO 2.8: update metadata lokal (paymentMethod parent split, dst.) — status tetap via updateTxStatus
+      // v4.1 TO DO 2.8 + v4.5 TO DO 5.8: update metadata (paymentMethod parent split, dst.) — status
+      // tetap via updateTxStatus. Kini ikut sync cloud (payment_method) agar device lain melihat
+      // distribusi pembayaran yang benar lintas device.
       updateTxMeta: (id, partial) => {
+        syncTransactionMeta(id, partial); // Cloud sync (field terpilih saja)
         set((s) => ({
           transactions: s.transactions.map((t) =>
             t.id === id ? { ...t, ...partial } : t
@@ -134,6 +153,10 @@ export const useTransactionStore = create<TransactionState>()(
         deleteTransactionCloud(id); // Cloud sync
         set((s) => ({
           transactions: s.transactions.filter((t) => t.id !== id),
+          // v4.5 TO DO 6.5: tombstone anti-ghost — cegah re-hidrasi dari cloud selama
+          // penghapusan cloud belum dikonfirmasi (offline/queue). Cap 200 agar tidak membengkak;
+          // tombstones dibersihkan otomatis di loadFromCloud saat id sudah hilang dari cloud.
+          deletedLocalIds: [...s.deletedLocalIds, id].slice(-200),
         }));
       },
 
@@ -153,25 +176,23 @@ export const useTransactionStore = create<TransactionState>()(
 
       cancelPendingTransaction: (id) => {
         const tx = get().transactions.find((t) => t.id === id);
-        if (tx) {
-          get().updateTxStatus(id, 'Cancel');
-          // Revert reserved stock if transaction had items
-          if (tx.items && tx.items.length > 0) {
-            import('../utils/hpp').then(({ createSnapshotForCartItems }) => {
-              import('../store/menuStore').then(({ useMenuStore }) => {
-                import('../store/inventoryStore').then(({ useInventoryStore }) => {
-                  import('../lib/inventoryEngine').then(({ InventoryEngine }) => {
-                    const menus = useMenuStore.getState().menus;
-                    const inventory = useInventoryStore.getState().items;
-                    const { itemsWithSnapshot } = createSnapshotForCartItems(tx.items, menus, inventory);
-                    const deductions = InventoryEngine.computeDeductions(itemsWithSnapshot, menus);
-                    useInventoryStore.getState().revertStock(deductions, `Void Pending #${tx.queueNumber}`);
-                  });
-                });
-              });
-            });
-          }
-        }
+        if (!tx) return;
+        get().updateTxStatus(id, 'Cancel');
+
+        // v4.5 TO DO 5.3: pending yang sudah di-resume lalu displit → anak-anak (splitParentId === id)
+        // sudah 'Selesai' & stoknya terpakai sah (dikelola sesi split) — JANGAN revert stok di sini
+        // (guard paritas dengan Transactions.tsx onConfirmAction/onPinSuccess).
+        if (hasPendingSplitChildren(get().transactions, id)) return;
+        if (!tx.items || tx.items.length === 0) return;
+
+        // v4.5 TO DO 5.4 (menuntaskan TO DO 2.1): hitung deduksi dari recipeSnapshot TERSIMPAN
+        // via calculateItemDeductions — bukan re-snapshot dari menu/inventori SAAT INI
+        // (createSnapshotForCartItems) yang bisa revert 0/salah jika resep berubah atau
+        // menu dihapus setelah pending dibuat. Fallback menu.ingredients hanya untuk transaksi lama.
+        const menus = useMenuStore.getState().menus;
+        const deductions = calculateItemDeductions(tx.items, menus);
+        if (Object.keys(deductions).length === 0) return;
+        useInventoryStore.getState().revertStock(deductions, `Void Pending #${tx.queueNumber}`);
       },
 
       getActiveKitchenOrders: () => {
@@ -186,26 +207,38 @@ export const useTransactionStore = create<TransactionState>()(
 
       loadFromCloud: (cloudTransactions: Transaction[], fullSync = false) => {
         set((s) => {
-          const cloudIds = new Set(cloudTransactions.map((t: Transaction) => t.id));
+          // v4.5 TO DO 6.5: transaksi yang dihapus/rollback lokal tidak boleh re-hidrasi dari cloud (anti ghost)
+          const cloudAllIds = new Set(cloudTransactions.map((t) => t.id));
+          const cloudTxFiltered = filterTombstoned(cloudTransactions, s.deletedLocalIds || []);
+          // Tombstone yang id-nya SUDAH tidak ada di cloud → penghapusan cloud dikonfirmasi → bersihkan
+          const remainingTombstones = pruneConfirmedTombstones(s.deletedLocalIds || [], cloudAllIds);
+
+          const cloudIds = new Set(cloudTxFiltered.map((t: Transaction) => t.id));
           
           // Find the oldest transaction date from the cloud list to establish the sync window boundary
           let oldestCloudTime = 0;
-          if (cloudTransactions.length > 0) {
+          if (cloudTxFiltered.length > 0) {
             // Since it's sorted descending, the last element is the oldest
-            const oldestTx = cloudTransactions[cloudTransactions.length - 1];
+            const oldestTx = cloudTxFiltered[cloudTxFiltered.length - 1];
             oldestCloudTime = new Date(oldestTx.date).getTime();
           }
 
           let localOnly: Transaction[];
           if (fullSync) {
-            // Full sync mode (real-time or explicit cloud refresh): cloud is authoritative within the window.
-            // Any local transaction newer than or equal to oldestCloudTime that is NOT in cloudIds was deleted on another device.
-            localOnly = s.transactions.filter((t) => {
-              if (cloudIds.has(t.id)) return false;
-              const txTime = new Date(t.date).getTime();
-              if (txTime >= oldestCloudTime) return false; // Deleted on cloud
-              return true; // Keep older transactions outside the fetched window
-            });
+            if (cloudTxFiltered.length === 0) {
+              // v4.5 TO DO 6.5 guard: tanpa window otoritatif (fetch kosong / semua tertombstone),
+              // JANGAN wipe lokal (oldestCloudTime = 0 akan membuang semua transaksi lokal).
+              localOnly = s.transactions;
+            } else {
+              // Full sync mode (real-time or explicit cloud refresh): cloud is authoritative within the window.
+              // Any local transaction newer than or equal to oldestCloudTime that is NOT in cloudIds was deleted on another device.
+              localOnly = s.transactions.filter((t) => {
+                if (cloudIds.has(t.id)) return false;
+                const txTime = new Date(t.date).getTime();
+                if (txTime >= oldestCloudTime) return false; // Deleted on cloud
+                return true; // Keep older transactions outside the fetched window
+              });
+            }
           } else {
             localOnly = s.transactions.filter((t) => {
               if (cloudIds.has(t.id)) return false;
@@ -214,8 +247,8 @@ export const useTransactionStore = create<TransactionState>()(
             });
           }
 
-          // Merge: cloud data + local-only data
-          const merged = [...cloudTransactions, ...localOnly];
+          // Merge: cloud data (tanpa tombstoned) + local-only data
+          const merged = [...cloudTxFiltered, ...localOnly];
           // Sort by date descending (newest first)
           merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -230,10 +263,25 @@ export const useTransactionStore = create<TransactionState>()(
             transactions: merged,
             nextQueueNumber: newNextQueue,
             lastQueueDate: today,
+            deletedLocalIds: remainingTombstones,
           };
         });
       },
     }),
-    { name: 'rempah-transactions' }
+    {
+      name: 'rempah-transactions',
+      // v4.5 TO DO 6.1 (permanen): IndexedDB — kuota jauh lebih besar dari localStorage.
+      // safeStorage tetap di-import untuk partialize/prune yang dipakai storage async ini.
+      storage: createJSONStorage(() => idbStorage),
+      // v4.5 TO DO 6.1: batasi payload tersimpan lokal (±300 transaksi terbaru / 90 hari, pending selalu dipertahankan)
+      // agar localStorage tidak melebihi kuota — data lama tetap aman di cloud & di-merge ulang oleh loadFromCloud.
+      partialize: (s) => ({
+        transactions: pruneTransactionsForStorage(s.transactions),
+        nextQueueNumber: s.nextQueueNumber,
+        lastQueueDate: s.lastQueueDate,
+        lastKdsClearTime: s.lastKdsClearTime,
+        deletedLocalIds: s.deletedLocalIds,
+      }),
+    }
   )
 );

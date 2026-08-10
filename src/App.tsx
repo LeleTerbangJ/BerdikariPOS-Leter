@@ -64,6 +64,21 @@ function ShiftGuard({ children }: { children: React.ReactNode }) {
   );
 }
 
+// v4.5 TO DO 6.1 (permanen): storage transactions & audit-logs kini IndexedDB (ASYNC hydrasi).
+// Middleware persist melakukan set(stateFromStorage, true) SETELAH promise getItem resolve —
+// jika loadFromCloud (network) selesai lebih dulu, hasil merge cloud bisa TERTIMPA snapshot persist.
+// Helper ini menunggu hydrasi selesai sebelum load cloud dijalankan (deterministik, tidak ada race).
+function whenHydrated<S>(
+  store: { persist?: { hasHydrated: () => boolean; onFinishHydration: (cb: (s?: S) => void) => () => void } }
+): Promise<void> {
+  const p = store.persist;
+  if (!p) return Promise.resolve();
+  if (p.hasHydrated()) return Promise.resolve();
+  return new Promise((resolve) => {
+    p.onFinishHydration(() => resolve());
+  });
+}
+
 export default function App() {
   const { currentUser, migratePasswords } = useAuthStore();
   const { settings } = useSettingsStore();
@@ -123,8 +138,12 @@ export default function App() {
     useShiftStore.getState().loadFromCloud();
     useStockOpnameStore.getState().loadFromCloud();
     useCashMovementStore.getState().loadFromCloud(true);
-    fetchTransactionsFromCloud().then((txs) => {
-      if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
+    // v4.5 TO DO 6.1 (permanen): tunggu hydrasi IndexedDB selesai sebelum merge cloud,
+    // agar snapshot persist tidak menimpa transaksi cloud yang baru di-fetch (race async).
+    whenHydrated(useTransactionStore).then(() => {
+      fetchTransactionsFromCloud().then((txs) => {
+        if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
+      });
     });
 
     const txChannel = subscribeToTransactions((payload: any) => {
@@ -141,8 +160,12 @@ export default function App() {
     // BUG-C4 fix: Load stock logs and audit logs from cloud
     useStockLogStore.getState().clearOldLogs(30);
     useStockLogStore.getState().loadFromCloud();
-    useAuditLogStore.getState().clearOldLogs(90);
-    useAuditLogStore.getState().loadFromCloud();
+    // v4.5 TO DO 6.1 (permanen): audit-logs kini IndexedDB (async) — clear/load cloud
+    // dijalankan setelah hydrasi selesai agar tidak tertimpa snapshot persist.
+    whenHydrated(useAuditLogStore).then(() => {
+      useAuditLogStore.getState().clearOldLogs(90);
+      useAuditLogStore.getState().loadFromCloud();
+    });
 
     return () => {
       if (txChannel) unsubscribeChannel(txChannel);

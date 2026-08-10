@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import { v4 as uuid } from 'uuid';
 import type { CashMovement, CashMovementType } from '../types';
 import { fetchCashMovementsFromCloud, deleteCashMovementCloud } from '../lib/cloudSync';
@@ -215,6 +216,6 @@ export const useCashMovementStore = create<CashMovementState>()(
         // If cloudMovements is null (fetch failed / offline), keep existing local state intact
       },
     }),
-    { name: 'rempah-cash-movements' }
+    { name: 'rempah-cash-movements', storage: createJSONStorage(() => safeStorage) }
   )
 );

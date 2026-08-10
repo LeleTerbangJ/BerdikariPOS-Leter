@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–3, semuanya selesai) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–6, semuanya ✅ — ringkasan v4.5 di §10) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -28,6 +28,10 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 | `src/lib/inventoryEngine.ts` | Inventory Engine (Pre-flight validation & Stock Snapshot) |
 | `src/utils/splitAllocation.ts` | Modul murni alokasi rupiah proporsional (Largest Remainder Method) + `buildEqualSplitReceipt` — dipakai SplitBillModal & printer |
 | `src/utils/idempotencyCleanup.ts` | Modul murni TTL/cleanup idempotency registry (24 jam / max 1000 entry) |
+| `src/utils/splitStockSession.ts` | Sesi stok split persisten lintas buka/tutup modal (reserve, paidBills, mode/count, queueNumber, computeCartSignature) |
+| `src/utils/safeStorage.ts` | Storage wrapper anti-QuotaExceededError (fallback semua store persist) |
+| `src/utils/storagePrune.ts` | Prune partialize transaksi (300/90-hari), capEntries audit/stock log, filterTombstoned |
+| `src/utils/idbStorage.ts` | Adapter Storage over IndexedDB untuk `rempah-transactions` & `rempah-audit-logs` |
 | `src/components/PendingPaymentsModal.tsx` | Modal daftar pesanan gantung (search, print struk sementara, void, resume) |
 | `src/components/SplitBillModal.tsx` | Modal split bill — mode Nominal Rata & Per-Item |
 | `src/store/*.ts` | State management (semua 14 Zustand stores, termasuk `cashMovementStore`) |
@@ -59,7 +63,7 @@ Saya memiliki aplikasi POS (Point of Sale) bernama "BerdikariPOS" yang sudah pro
 Tech Stack:
 - React 18 + TypeScript + Vite 5
 - TailwindCSS 3.4
-- Zustand (state management + localStorage persist)
+- Zustand (state management + persist; `transactions`/`audit-logs` → IndexedDB via `idbStorage.ts`, sisanya localStorage via `safeStorage.ts`)
 - Supabase (PostgreSQL + Real-time subscriptions)
 - Chart.js, jsPDF, bcryptjs
 - PWA (vite-plugin-pwa)
@@ -251,7 +255,7 @@ git add . && git commit -m "description" && git push origin main
 
 ## 9. Riwayat Pengerjaan v4.4 — Pending Payment & Split Bill
 
-> Ringkasan seluruh sesi pengerjaan yang telah diselesaikan. Detail per item ada di `TO DO.md` (Prioritas 1–3, semua ✅).
+> Ringkasan seluruh sesi pengerjaan yang telah diselesaikan. Detail per item ada di `TO DO.md` — Prioritas 1–4 di bawah, Prioritas 5 & 6 di §10 (semua ✅).
 
 ### 9.1 Fitur Baru yang Selesai Diimplementasikan
 
@@ -337,8 +341,84 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** (bundle, splitAllocation, idempotencyCleanup, stockCheck)
-- `npm run build` belum dijalankan ulang pada sesi ini — jalankan sebelum deploy
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7)
+- `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB
+
+---
+
+## 10. Riwayat Pengerjaan v4.5 — Audit End-to-End Pending & Split + Kuota Storage
+
+> Sesi lanjutan setelah v4.4. Seluruh Prioritas 1–6 di `TO DO.md` sudah ✅. Ringkasan Prioritas 5 (audit end-to-end pending/split) & Prioritas 6 (kuota localStorage), plus status final semua item di bawah.
+
+### 10.1 Prioritas 5 — Audit End-to-End Pending & Split (5.1–5.11, semua ✅)
+
+| Item | Inti perbaikan |
+|------|----------------|
+| 5.1 | **Sesi stok split persisten** — modul murni `splitStockSession.ts`: reserve stok dipertahankan lintas buka/tutup modal (sebelumnya double-deduction saat modal ditutup di tengah sesi); paid portion di-cap per inventoryId; persist localStorage (recovery lintas reload PWA) |
+| 5.2 | **HPP split equal ter-inflasi N×** — param `scaleHpp` di engine; HPP dialokasikan per sub-bill via Largest Remainder → Σ hpp sub-bill = HPP induk persis |
+| 5.3 | **Void pending ber-anak split** — guard `hasPendingSplitChildren` di `cancelPendingTransaction` (stok TIDAK di-revert bila anak split sudah Selesai) |
+| 5.4 | **Void pakai recipeSnapshot** — `cancelPendingTransaction` kini `calculateItemDeductions(tx.items, menus)` (prioritas snapshot tersimpan, bukan re-snapshot dari resep saat ini) |
+| 5.5 | **Promo pending lintas device** — `appliedPromoId`/`voucherCode` disimpan di tx + kolom DB (Migration 17); `clearPromo()` di blok sukses save pending (promo tidak bocor ke order berikutnya) |
+| 5.6 | **Signature suhu/gula** — `pendingItemsChanged` memakai `computeCartSignature` (menuId:qty:addons:temperature:sugar) → ubah suhu/gula me-reset KDS ke Waiting |
+| 5.7 | **Reset UI modal berbasis konteks** — reset hanya saat konteks berbeda; sesi sama di-rehydrate dari `session.paidBills` (sub-bill lunas tetap tampil lunas) + guard anti re-pay |
+| 5.8 | **`updateTxMeta` sync cloud** — `syncTransactionMeta` baru (paymentMethod parent split kini lintas device) |
+| 5.9 | **Satu nomor antrean per sesi split fresh** — `overrideQueueNumber` dikunci dari sub-bill pertama sesi |
+| 5.10 | **KDS bebas sub-bill** — `isSplitSubBill` (`splitParentId || splitIndex !== undefined`) di filter Kitchen; mapping `is_pending` otoritatif dari `tx_status` + `syncTransactionTxStatus` ikut tulis `is_pending` |
+| 5.11 | **Agregasi per-menu/kategori tidak N×** — `splitContributionDivisor(tx)` (totalSplitCount untuk sub-bill equal) di Dashboard Top Menu/Profitabilitas & Reports kategori |
+
+### 10.2 Prioritas 6 — Kuota localStorage (6.1–6.5, semua ✅)
+
+| Item | Inti perbaikan |
+|------|----------------|
+| 6.1 | **Root cause kuota** — safe-storage wrapper (`safeStorage.ts`, tidak melempar QuotaExceededError, dipakai 14 store), `partialize` transaksi (300 terbaru / 90 hari + Pending selalu), cap audit log 2.000 & stock log 500, hardening offline queue, dan **migrasi IndexedDB permanen** (`idbStorage.ts` — detail §10.3) |
+| 6.2 | Simpan Pending gagal (toast kuota) — **tertutup oleh 6.1** (persist tidak lagi melempar); try/catch eksplisit tidak lagi dibutuhkan |
+| 6.3 | Popup confirm berulang saat resume — **akibat lanjutan 6.2** (cart tersisa dari sesi gagal); hilang setelah cart konsisten. Opsional: ganti `window.confirm` dengan dialog aplikasi |
+| 6.4 | **Deadlock tutup shift** — `handleCloseShift` 4 langkah terisolasi + escape path wajib (modal non-dismissible tidak bisa mengunci kasir lagi) |
+| 6.5 | **Transaksi ghost** — rollback kini `await deleteTransactionCloud(txId)` + tombstone `deletedLocalIds` (cap 200) disaring di `loadFromCloud` |
+
+### 10.3 Migrasi IndexedDB (item permanen 6.1) — detail
+
+- **Adapter**: `src/utils/idbStorage.ts` — object store `kv` (DB `berdikari-pos`, lazy-open sekali per sesi); cache in-memory sinkron (getItem hangat tanpa menunggu IDB); **migrasi one-time** data lama dari localStorage → IDB (localStorage dihapus hanya bila tulis IDB sukses); fallback aman ke `safeStorage` (private mode/blocked/SSR) — **tidak pernah melempar ke alur bisnis**.
+- **Penerapan**: `transactionStore` & `auditLogStore` → `storage: createJSONStorage(() => idbStorage)` (partialize/cap tetap berlaku). Store lain tetap localStorage via safeStorage.
+- **Race async hydrasi ditutup**: hydrasi zustand kini async (getItem IDB); `App.tsx` menunggu `persist.hasHydrated`/`onFinishHydration` (`whenHydrated`) sebelum `loadFromCloud` transactions & audit-logs — mencegah `set(stateFromStorage, true)` menimpa hasil merge cloud.
+- **Perilaku retry**: `onblocked` bersifat transient → op berikutnya retry ke IDB (tidak disable sesi); `onerror`/SSR → disable sesi.
+- **Verifikasi runtime**: DB `berdikari-pos` aktif di browser, `rempah-transactions`/`rempah-audit-logs` sudah tidak ada di localStorage, console bersih.
+
+### 10.4 Perubahan Database v4.5 (wajib untuk deploy)
+
+Di `runMigrations()` (deteksi + guard `migrationNeeded`) & blok ALTER di `supabase/schema.sql` / `DEPLOYMENT.md`:
+
+- **Migration 16**: deteksi 4 kolom cetak struk settings — `receipt_ascii_only`, `auto_print_receipt`, `receipt_header`, `receipt_footer`.
+- **Migration 17**: deteksi 2 kolom promo transaksi — `applied_promo_id`, `voucher_code`.
+
+```sql
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT,
+  ADD COLUMN IF NOT EXISTS voucher_code TEXT;
+```
+
+> Seperti migrasi lain: ALTER TABLE manual tetap diperlukan di Supabase SQL Editor untuk DB existing (anon key tidak punya hak DDL); `runMigrations()` hanya mendeteksi & mencetak SQL. Jalur sync yang belum di-ALTER kini **guarded** (tidak menumpuk offline queue).
+
+### 10.5 Aturan Bisnis Tambahan (v4.5) yang Harus Dijaga
+
+- **Sesi split = satu unit stok**: reserve penuh 1× saat sub-bill pertama lunas; tutup modal TIDAK me-revert (sesi berlanjut); reserve dilepas hanya saat semua lunas / cart berubah / `releaseSplitReserveForCart` (POS beralih ke checkout normal dari cart yang sama).
+- **`scaleHpp`**: hanya sub-bill split yang membawa SEMUA item cart (mode equal) yang diskalakan 1/N — mode item & transaksi normal `scaleHpp = 1`.
+- **Promo tersimpan di tx** (`appliedPromoId`/`voucherCode`) — resume pending memakai promo yang sama; diskon manual tidak dipersist (residual); promo expired saat resume → total bisa beda (wajar, kasir memilih ulang).
+- **Void**: pending ber-anak split → status Cancel tanpa revert stok; `Selesai → Demo` ikut revert stok + visit (konsistensi 1.7).
+- **Laporan**: eksklusi `splitParentId` + agregasi per-menu dibagi `totalSplitCount` untuk sub-bill equal (`isEqualSplitSubBill`).
+
+### 10.6 Residual Terdokumentasi (di TO DO.md, bukan bug aktif)
+
+- 5.1: abandon split ber-porsi-lunas → checkout NORMAL penuh dari cart sama masih double-deduct porsi lunas (jalur bisnis ganda, perlu konfirmasi kasir); reserve bisa tertahan tanpa tombol "Batalkan Sesi Split" eksplisit.
+- 5.7: sesi lama pra-5.7 tanpa `paidBills` bisa di-re-pay sekali setelah upgrade (guard untuk sesi baru); dua order identik beruntun bisa mewarisi paidBills (sempit).
+- 5.11: transaksi Rp 1 dibagi 2 → over-count ≤ 0,5 rupiah (patologis, diabaikan untuk pelaporan).
+
+### 10.7 Status Final & Validasi
+
+- **Status TO DO**: Prioritas 1 (1.1–1.7) ✅ · Prioritas 2 (2.1–2.8) ✅ · Prioritas 3 (3.1–3.5) ✅ · Prioritas 4 (4.1–4.6) ✅ · Prioritas 5 (5.1–5.11) ✅ · Prioritas 6 (6.1–6.5) ✅ — **semua item tuntas**. Catatan: checkbox 6.2/6.3 di TO DO.md masih `[ ]` karena digantikan/tertutup oleh 6.1 — status de facto selesai.
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **87/87 test lolos** (9 file: bundle, splitAllocation, idempotencyCleanup, stockCheck, splitStockSession, storagePrune, idbStorage, cloudSyncMapping, pendingVoid)
+- `npm run build` → **sukses** (tsc + vite build, PWA generateSW 50 precache entries) — diverifikasi setelah migrasi IndexedDB
+- Sisa terbuka di daftar: pemantauan produksi (opsional).
 
 ---
 

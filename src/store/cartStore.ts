@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import type { CartItem } from '../types';
 
 interface CartState {
@@ -93,6 +94,6 @@ export const useCartStore = create<CartState>()(
         return Math.max(0, sub - get().discount);
       },
     }),
-    { name: 'rempah-cart' }
+    { name: 'rempah-cart', storage: createJSONStorage(() => safeStorage) }
   )
 );

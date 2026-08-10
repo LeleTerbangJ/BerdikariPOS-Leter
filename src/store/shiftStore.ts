@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import { v4 as uuid } from 'uuid';
 import type { CashierShift } from '../types';
 import { syncShift, fetchShiftsFromCloud } from '../lib/cloudSync';
@@ -110,6 +111,6 @@ export const useShiftStore = create<ShiftState>()(
         }
       },
     }),
-    { name: 'rempah-shifts' }
+    { name: 'rempah-shifts', storage: createJSONStorage(() => safeStorage) }
   )
 );
