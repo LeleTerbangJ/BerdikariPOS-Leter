@@ -173,6 +173,11 @@ export interface Transaction {
   splitIndex?: number;           // Urutan sub-bill (contoh: 1 dari 2)
   totalSplitCount?: number;      // Total bagian split (contoh: 2)
   paidAmount?: number;           // Nominal yang sudah dibayar pada partial split
+
+  // v4.5 TO DO 5.5: promo/voucher yang dipakai saat pending disimpan — di-restore saat resume
+  // agar totalAmount final konsisten dengan nominal pending (lintas restart / device).
+  appliedPromoId?: string;       // ID promo yang diterapkan
+  voucherCode?: string;          // Kode voucher (untuk ditampilkan ulang saat resume)
 }
 
 export interface AtomicCheckoutParams {
@@ -204,6 +209,13 @@ export interface AtomicCheckoutParams {
   splitIndex?: number;
   totalSplitCount?: number;
   suppressAutoPrint?: boolean; // Cegah cetak otomatis struk/tiket di post-commit (dipakai sub-bill split yang mengelola print sendiri)
+  // v4.5 TO DO 5.2: Skala HPP transaksi (mis. 1/N untuk sub-bill split mode Equal yang membawa
+  // SEMUA item cart). Tanpa ini, Σ hpp sub-bill equal ter-inflasi N× di laporan Laba Kotor.
+  // Engine: tx.hpp = Math.round(totalHpp * scaleHpp).
+  scaleHpp?: number;
+  // v4.5 TO DO 5.5: rekam promo/voucher pada transaksi PENDING (di-restore saat resume)
+  appliedPromoId?: string;
+  voucherCode?: string;
 }
 
 // Split Bill Interfaces

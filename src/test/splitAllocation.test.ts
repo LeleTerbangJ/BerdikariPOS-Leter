@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { allocateProportional, buildEqualSplitReceipt } from '../utils/splitAllocation';
+import {
+  allocateProportional,
+  buildEqualSplitReceipt,
+  isEqualSplitSubBill,
+  isSplitSubBill,
+  splitContributionDivisor,
+} from '../utils/splitAllocation';
 import type { CartItem, Transaction } from '../types';
 
 function makeItem(name: string, subtotal: number): CartItem {
@@ -74,6 +80,80 @@ describe('allocateProportional (TO DO 2.2 — Largest Remainder Method)', () => 
   it('total 0 atau array kosong → semua 0 / kosong', () => {
     expect(allocateProportional(0, [0.3, 0.7])).toEqual([0, 0]);
     expect(allocateProportional(100, [])).toEqual([]);
+  });
+});
+
+describe('isEqualSplitSubBill & splitContributionDivisor (TO DO 5.11 — normalisasi agregasi per-menu)', () => {
+  it('sub-bill equal: splitIndex + totalSplitCount terisi & Σ item ≠ subtotal → terdeteksi, divisor N', () => {
+    // Total pesanan 100.000 dibagi rata 3 → sub-bill 33.333 membawa semua item (subtotal penuh)
+    const tx = makeTx(
+      [makeItem('Nasi Goreng', 50000), makeItem('Kopi Susu', 30000), makeItem('Es Teh', 20000)],
+      33333,
+      1,
+      3
+    );
+    expect(isEqualSplitSubBill(tx)).toBe(true);
+    expect(splitContributionDivisor(tx)).toBe(3);
+  });
+
+  it('sub-bill item mode (Σ item === subtotal bill) → bukan equal, divisor 1', () => {
+    const tx = makeTx([makeItem('Nasi Goreng', 50000)], 50000, 1, 2);
+    expect(isEqualSplitSubBill(tx)).toBe(false);
+    expect(splitContributionDivisor(tx)).toBe(1);
+  });
+
+  it('transaksi normal tanpa splitIndex → divisor 1', () => {
+    const tx = makeTx([makeItem('Nasi Goreng', 50000)], 50000);
+    expect(isEqualSplitSubBill(tx)).toBe(false);
+    expect(splitContributionDivisor(tx)).toBe(1);
+  });
+
+  it('totalSplitCount 1 atau undefined → bukan equal (guard)', () => {
+    expect(isEqualSplitSubBill(makeTx([makeItem('A', 10000)], 5000, 1, 1))).toBe(false);
+    expect(isEqualSplitSubBill(makeTx([makeItem('A', 10000)], 5000, 1, undefined))).toBe(false);
+  });
+
+  it('edge kasir kecil: subtotal 2 dibagi 2 → selisih 1 tetap terdeteksi (bukan hanya > 1)', () => {
+    const tx = makeTx([makeItem('A', 2)], 1, 1, 2);
+    expect(isEqualSplitSubBill(tx)).toBe(true);
+    expect(splitContributionDivisor(tx)).toBe(2);
+  });
+
+  it('agregasi per-menu lintas N sub-bill equal pulih ke qty/revenue/hpp sebenarnya', () => {
+    // Satu pesanan: 2x Nasi Goreng @ 50.000 (HPP 30.000) split rata 2 orang.
+    // Setiap sub-bill mencatat item penuh (qty 2, subtotal 100.000, hpp 30.000) dengan subtotal bill 50.000.
+    const fullItem = { ...makeItem('Nasi Goreng', 100000), quantity: 2, cogs: 30000, hpp: 30000 };
+    const subBills = [
+      makeTx([fullItem], 50000, 1, 2),
+      makeTx([fullItem], 50000, 2, 2),
+    ];
+
+    let qty = 0;
+    let revenue = 0;
+    let hpp = 0;
+    subBills.forEach((t) => {
+      const div = splitContributionDivisor(t);
+      t.items.forEach((i) => {
+        qty += i.quantity / div;
+        revenue += i.subtotal / div;
+        hpp += (i.cogs ?? i.hpp ?? 0) / div;
+      });
+    });
+
+    expect(qty).toBe(2); // bukan 4
+    expect(revenue).toBe(100000); // bukan 200.000
+    expect(hpp).toBe(30000); // bukan 60.000 → laba tidak ter-inflasi
+  });
+});
+
+describe('isSplitSubBill (TO DO 5.10 — filter KDS)', () => {
+  it('anak split (splitParentId) & sub-bill fresh (splitIndex) terdeteksi; transaksi normal tidak', () => {
+    expect(isSplitSubBill({ splitParentId: 'p1' })).toBe(true);
+    expect(isSplitSubBill({ splitIndex: 1 })).toBe(true);
+    expect(isSplitSubBill({ splitIndex: 1, splitParentId: 'p1' })).toBe(true);
+    expect(isSplitSubBill({})).toBe(false);
+    expect(isSplitSubBill({ splitIndex: undefined })).toBe(false);
+    expect(isSplitSubBill({ splitParentId: undefined })).toBe(false);
   });
 });
 

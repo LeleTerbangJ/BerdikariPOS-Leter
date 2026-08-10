@@ -140,6 +140,9 @@ Setiap klien (toko) yang beli aplikasi Anda perlu:
 >   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
 >   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
 >   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+>   -- 6. Promo Pending (v4.5 TO DO 5.5) — di-restore saat resume agar total konsisten lintas device
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT;
+>   ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;
 >   ```
 
 ---

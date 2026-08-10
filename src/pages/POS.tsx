@@ -15,6 +15,7 @@ import { AtomicTransactionEngine } from '../lib/atomicTransactionEngine';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
+import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
@@ -80,15 +81,12 @@ export default function POS() {
   // Deteksi perubahan item cart vs pesanan pending yang sedang dimuat.
   // Dipakai untuk keputusan status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang,
   // item sama → pertahankan status dapur (tidak mengganggu proses memasak / alarm).
+  // v4.5 TO DO 5.6: pakai computeCartSignature (splitStockSession) — satu sumber kebenaran signature
+  // yang menyertakan suhu & level gula. Sebelumnya hanya menuId:quantity:addons → ubah suhu/gula
+  // tidak terdeteksi → status dapur dipertahankan padahal spesifikasi masak berbeda.
   const pendingItemsChanged = useMemo(() => {
     if (!currentPendingTx) return true;
-    const sig = (items: CartItem[]) =>
-      JSON.stringify(
-        items
-          .map((i) => `${i.menuId}:${i.quantity}:${i.addons.map((a) => a.name).join(',')}`)
-          .sort()
-      );
-    return sig(cart.items) !== sig(currentPendingTx.items);
+    return computeCartSignature(cart.items) !== computeCartSignature(currentPendingTx.items);
   }, [cart.items, currentPendingTx]);
 
   // Save Cart as Pending Transaction
@@ -109,6 +107,17 @@ export default function POS() {
     const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
     const total = Math.round(netSubtotal + taxAmount);
 
+    // v4.5 TO DO 5.1: jika kasir menutup modal Split di tengah lalu menyimpan Pending / checkout
+    // normal dari cart yang sama, lepaskan reserve sesi split (kembalikan sisa belum lunas) agar
+    // engine tidak memotong stok penuh di atas reserve yang masih di-hold (double deduction).
+    const releasedUnpaid = releaseSplitReserveForCart(cart.items);
+    if (releasedUnpaid && Object.keys(releasedUnpaid).length > 0) {
+      useInventoryStore
+        .getState()
+        .revertStock(releasedUnpaid, 'Split Bill (Beralih ke Simpan Pending — Kembalikan Sisa Reserve)');
+      addToast('Sesi Split Bill yang belum selesai dibatalkan — sisa stok reserve dikembalikan.', 'info');
+    }
+
     const result = await AtomicTransactionEngine.executeCheckout({
       transactionId: currentPendingTx ? currentPendingTx.id : checkoutTxId,
       overrideQueueNumber: currentPendingTx ? currentPendingTx.queueNumber : undefined,
@@ -126,6 +135,9 @@ export default function POS() {
       settings,
       overrideTxStatus: 'Pending',
       pendingNotes: 'Pesanan Gantung POS',
+      // v4.5 TO DO 5.5: rekam promo/voucher agar total resume konsisten lintas device
+      appliedPromoId: appliedPromoId || undefined,
+      voucherCode: voucherCode || undefined,
       // v4.1 FIX (TO DO 1.3 & 1.4): izinkan update ulang dengan ID sama (bypass idempotency),
       // deduksi stok DELTA (hanya item baru yang dipotong, item dihapus dikembalikan).
       // Status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang; item sama → pertahankan.
@@ -142,7 +154,8 @@ export default function POS() {
       setShowCheckout(false);
       setDiscountInput('');
       setDiscountType('rp');
-      setVoucherCode('');
+      // v4.5 TO DO 5.5: promo tidak boleh bocor ke keranjang berikutnya (clearPromo = id + kode + error)
+      clearPromo();
       setCashReceived('');
       setSelectedCustomerId(null);
       setTableNumber('');
@@ -166,6 +179,16 @@ export default function POS() {
     setOrderType(tx.orderType || 'Dine In'); // Restore tipe pesanan (Take Away tidak boleh jadi Dine In)
     setTableNumber(tx.tableName || tx.tableNumber || '');
     if (tx.customerId) setSelectedCustomerId(tx.customerId);
+    // v4.5 TO DO 5.5: restore promo/voucher yang tersimpan di pending → total yang dihitung ulang
+    // konsisten dengan nominal saat disimpan (lintas restart / device). Jika pending tanpa promo,
+    // bersihkan promo stale agar tidak bocor ke pesanan yang di-resume.
+    if (tx.appliedPromoId) {
+      setAppliedPromoId(tx.appliedPromoId);
+      setVoucherCode(tx.voucherCode || '');
+      setPromoError('');
+    } else {
+      clearPromo();
+    }
     setCurrentPendingTx(tx);
     setCheckoutTxId(tx.id);
     addToast(`Pesanan gantung #${tx.queueNumber} dimuat ke keranjang.`, 'info');
@@ -524,6 +547,21 @@ export default function POS() {
     const total = Math.round(netSubtotal + taxAmount);
     const cash = parseInt(cashReceived) || 0;
 
+    // v4.5 TO DO 5.1: jika kasir menutup modal Split di tengah lalu checkout NORMAL dari cart yang
+    // sama, lepaskan reserve sesi split (kembalikan sisa belum lunas) agar engine tidak memotong
+    // stok penuh di atas reserve yang masih di-hold (double deduction).
+    // ⚠️ Residual (dokumentasi): jika sesi split sudah punya sub-bill LUNAS (paid > 0) lalu kasir
+    // checkout normal penuh, engine memotong full lagi di atas porsi yang sudah terpakai → porsi
+    // yang lunas terpotong dua kali di stok. Ini jalur bisnis ganda (customer dibayar 2x) yang
+    // seharusnya dikonfirmasi kasir; di luar lingkup 5.1, didokumentasikan di TO DO.
+    const releasedUnpaid = releaseSplitReserveForCart(cart.items);
+    if (releasedUnpaid && Object.keys(releasedUnpaid).length > 0) {
+      useInventoryStore
+        .getState()
+        .revertStock(releasedUnpaid, 'Split Bill (Beralih ke Checkout Normal — Kembalikan Sisa Reserve)');
+      addToast('Sesi Split Bill yang belum selesai dibatalkan — sisa stok reserve dikembalikan.', 'info');
+    }
+
     // Safety guard: Cash payment must have sufficient funds
     if (payMethod === 'Cash' && cash < total) return;
 
@@ -562,6 +600,10 @@ export default function POS() {
       currentUser,
       settings,
       preOpenedPrintWindow,
+      // v4.5 TO DO 5.5: pertahankan atribusi promo pada tx final (termasuk hasil resume pending)
+      // agar laporan promo/transaksi tidak kehilangan metadata yang tersimpan saat save pending.
+      appliedPromoId: appliedPromoId || undefined,
+      voucherCode: voucherCode || undefined,
       ...pendingFinalizeParams,
     });
 

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import type { StockOpname } from '../types';
 import { syncStockOpname, fetchStockOpnamesFromCloud } from '../lib/cloudSync';
 
@@ -39,6 +40,6 @@ export const useStockOpnameStore = create<StockOpnameState>()(
         }
       },
     }),
-    { name: 'rempah-stock-opnames' }
+    { name: 'rempah-stock-opnames', storage: createJSONStorage(() => safeStorage) }
   )
 );

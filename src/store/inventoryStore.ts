@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import { v4 as uuid } from 'uuid';
 import type { InventoryItem } from '../types';
 import { seedInventory } from '../utils/seed';
@@ -154,6 +155,6 @@ export const useInventoryStore = create<InventoryState>()(
         }
       },
     }),
-    { name: 'rempah-inventory' }
+    { name: 'rempah-inventory', storage: createJSONStorage(() => safeStorage) }
   )
 );

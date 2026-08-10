@@ -5,6 +5,7 @@ import { useShiftStore } from '../store/shiftStore';
 import { useTransactionStore } from '../store/transactionStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
+import { useToastStore } from '../store/toastStore';
 import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
@@ -70,6 +71,7 @@ export default function Layout() {
   const { activeShift, closeShift } = useShiftStore();
   const { transactions, clearKdsDoneOrders } = useTransactionStore();
   const { addLog } = useAuditLogStore();
+  const { addToast } = useToastStore();
   const cloudStatus = useCloudStatus();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -220,12 +222,19 @@ export default function Layout() {
     navigate('/');
   };
 
+  // v4.5 TO DO 6.4: TIDAK ADA langkah yang boleh menggagalkan tutup shift.
+  // Audit log & cetak bersifat best-effort; closeShift + keluar SELALU dijalankan,
+  // sehingga kasir tidak bisa terkunci di modal (deadlock kuota/Gambar 4).
   const handleCloseShift = async () => {
     const closingCash = parseInt(closingCashInput) || 0;
 
-    // Audit log
-    if (currentUser) {
-      addLog(currentUser.id, currentUser.name, currentUser.role, 'close_shift', `Tutup shift - Kas aktual: ${formatRupiah(closingCash)}, Expected: ${formatRupiah(shiftStats.expectedCash)}`, { closingCash, expectedCash: shiftStats.expectedCash, totalSales: shiftStats.totalSales, totalTx: shiftStats.totalTx });
+    // 1. Audit log — best-effort (kegagalan persist/log tidak boleh menggagalkan tutup shift)
+    try {
+      if (currentUser) {
+        addLog(currentUser.id, currentUser.name, currentUser.role, 'close_shift', `Tutup shift - Kas aktual: ${formatRupiah(closingCash)}, Expected: ${formatRupiah(shiftStats.expectedCash)}`, { closingCash, expectedCash: shiftStats.expectedCash, totalSales: shiftStats.totalSales, totalTx: shiftStats.totalTx });
+      }
+    } catch (e) {
+      console.warn('[Shift] Gagal mencatat audit log saat tutup shift (dilewati):', e);
     }
 
     // ITEM-4 fix: Explicit breakdown & explanation of Expected Cash vs Kas Aktual
@@ -256,11 +265,25 @@ export default function Layout() {
       ``,
       `===========================`,
     ];
-    await printTextRaw(lines, settings);
 
-    // BUG-UI-STACKED-MODAL fix: Close shift AFTER printing finishes to prevent OpenShiftModal peeking
-    closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
+    // 2. Cetak ringkasan — best-effort (kegagalan printer TIDAK menggagalkan tutup shift)
+    try {
+      await printTextRaw(lines, settings);
+    } catch (e) {
+      console.warn('[Shift] Gagal mencetak ringkasan (shift tetap ditutup):', e);
+    }
 
+    // 3. Tutup shift — selalu dicoba; BUG-UI-STACKED-MODAL fix: setelah printing selesai
+    try {
+      closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
+    } catch (e) {
+      // Bahkan jika store gagal (kuota persist), kasir TETAP bisa keluar — shift bisa ditutup
+      // ulang / dikoreksi via data shift yang masih ada di cloud.
+      console.error('[Shift] Gagal menutup shift di store (kasir tetap dilepas):', e);
+      addToast('Gagal menyimpan penutupan shift — coba tutup shift lagi.', 'error');
+    }
+
+    // 4. Escape path — modal non-dismissible tidak boleh mengunci kasir
     setShowCloseShift(false);
     logout();
     navigate('/');

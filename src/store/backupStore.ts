@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import { v4 as uuid } from 'uuid';
 
 export type BackupType = 'FULL' | 'MASTER_DATA' | 'TRANSACTION';
@@ -66,6 +67,7 @@ export const useBackupStore = create<BackupState>()(
     }),
     {
       name: 'berdikari_backup_store',
+      storage: createJSONStorage(() => safeStorage),
     }
   )
 );

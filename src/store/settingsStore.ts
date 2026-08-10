@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { safeStorage } from '../utils/safeStorage';
 import bcrypt from 'bcryptjs';
 import type { AppSettings } from '../types';
 import { seedSettings } from '../utils/seed';
@@ -91,6 +92,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'rempah-settings',
+      storage: createJSONStorage(() => safeStorage),
       merge: (persistedState: any, currentState: any) => {
         return {
           ...currentState,

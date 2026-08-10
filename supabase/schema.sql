@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   split_index INT,
   total_split_count INT,
   paid_amount FLOAT,
+  -- Promo pending (v4.5 TO DO 5.5) — di-restore saat resume agar total konsisten lintas device
+  applied_promo_id TEXT,
+  voucher_code TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -102,6 +105,9 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+-- v4.5 TO DO 5.5: kolom promo pending
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;
 
 -- Safe migration: izinkan status 'Pending' pada tx_status (di-drop lalu di-add ulang dengan nilai yang sama, aman dijalankan berulang)
 DO $$
@@ -427,6 +433,9 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_parent_id TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_index INT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS total_split_count INT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
+-- v4.5 TO DO 5.5: kolom promo pending (di-restore saat resume)
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;
 
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS kitchen_printers JSONB DEFAULT '[]';
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS theme_color TEXT;
