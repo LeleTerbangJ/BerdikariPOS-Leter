@@ -460,6 +460,20 @@
   - [x] `deleteTransactionLocal` (event DELETE realtime di App.tsx) tidak di-tombstone — benar, karena cloud sudah menghapusnya.
   - ✅ Validasi: tsc 0 error + **42/42 test lolos**.
 
+### 6.6 Rekap Kas (Kas Masuk/Kas Keluar) tidak pernah tersinkron antar device — RLS aktif tanpa policy
+- **File**: `supabase/schema.sql`, `src/lib/cloudSync.ts` (`runMigrations`), `src/utils/cashMovementPolicy.ts` (baru), `src/store/cashMovementStore.ts` (`directSyncToCloud`)
+- **Masalah**: RLS aktif di `cash_movements` **tanpa policy** → anon key diblokir diam-diam (SELECT kosong tanpa error, INSERT ditolak "new row violates row-level security policy") → movement hanya di localStorage device pembuat; laporan Shift Manager selalu menampilkan Kas Masuk/Keluar 0 meski kasir sudah mencatat. **Terkonfirmasi di produksi**: `relrowsecurity = true` + `pg_policies` kosong; setelah `CREATE POLICY "Allow all for anon"` dijalankan, data langsung mengalir ke laporan.
+- **Status**: ✅ SELESAI
+- **Aksi (dieksekusi)**:
+  - [x] **schema.sql bagian aktif**: `ALTER TABLE cash_movements ENABLE ROW LEVEL SECURITY;` + `CREATE POLICY "Allow all for anon" ON cash_movements FOR ALL USING (true) WITH CHECK (true);` — sebelumnya hanya ada di blok migrasi yang dikomentari, sehingga DB baru rawan kena kasus yang sama.
+  - [x] **`runMigrations` Migration 18**: deteksi RLS-tanpa-policy via **probe INSERT** yang sengaja melanggar CHECK `type` (`'PROBE'`) — Postgres mengevaluasi RLS SEBELUM constraint, jadi error membedakan RLS vs tabel sehat **tanpa pernah membuat baris**; bila RLS terdeteksi → `console.warn` mencetak `CASH_MOVEMENTS_POLICY_SQL` (DO block cek `pg_policies` + `CREATE POLICY` + `ENABLE RLS`) untuk dijalankan sekali di SQL Editor (anon key tidak bisa eksekusi DDL). Logika diagnosis dipisah ke helper murni `diagnoseCashMovementWriteError` di `src/utils/cashMovementPolicy.ts` (8 test baru: 7 kasus error + validasi isi SQL).
+  - [x] SQL warning "tabel hilang" diselaraskan: `id UUID` + CHECK `type` + policy bernama `"Allow all for anon"` (sebelumnya `"Allow all"` tanpa `WITH CHECK` — inkonsisten dengan schema).
+  - [x] **Fix #3 — jalur tulis via offline queue + badge "Belum Sync"** (`cashMovementStore.ts`, `cloudSync.ts`, `CashMovements.tsx`):
+    - `syncCashMovement` kini mengirim nilai mentah (tanpa sanitasi `isValidUuid` yang membuang data non-UUID — kolom schema TEXT) via **`smartUpsert` (offline queue)**: online langsung, offline/gagal antre + flush otomatis saat online (retry berkelanjutan). Return `Promise<boolean>`.
+    - `addMovement`/`updateMovement`: jalur utama queue, **fallback `directSyncToCloud`** (self-healing strip kolom/nullify UUID) bila tidak langsung sukses.
+    - Set module `confirmedSyncedIds` diganti state reaktif **`confirmedSyncIds: string[]`** (tidak dipersist via `partialize` — dibangun ulang dari cloud tiap boot). Badge **`⏳ Belum Sync`** di baris Riwayat Pencatatan Kas + hitung "⚠️ N belum sync" di header + listener `online` → `loadFromCloud(true)` (retry otomatis saat koneksi pulih). `loadFromCloud` juga mengkonfirmasi semua id cloud + mendorong ulang entri lokal belum-sync via queue (dedup otomatis).
+  - ✅ Validasi: tsc 0 error + **99/99 test lolos** (12 baru: 8 `cashMovementPolicy` + 4 `cashMovementStore`).
+
 ---
 
 ## ✅ YANG SUDAH BENAR (jangan diubah)

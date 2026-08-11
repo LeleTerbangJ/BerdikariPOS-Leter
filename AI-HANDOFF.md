@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.4
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.6
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–6, semuanya ✅ — ringkasan v4.5 di §10) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–6 termasuk 6.6 Rekap Kas, semuanya ✅ — ringkasan v4.5 di §10, v4.6 di §11) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB
 
 ---
@@ -416,9 +416,51 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT,
 
 - **Status TO DO**: Prioritas 1 (1.1–1.7) ✅ · Prioritas 2 (2.1–2.8) ✅ · Prioritas 3 (3.1–3.5) ✅ · Prioritas 4 (4.1–4.6) ✅ · Prioritas 5 (5.1–5.11) ✅ · Prioritas 6 (6.1–6.5) ✅ — **semua item tuntas**. Catatan: checkbox 6.2/6.3 di TO DO.md masih `[ ]` karena digantikan/tertutup oleh 6.1 — status de facto selesai.
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **87/87 test lolos** (9 file: bundle, splitAllocation, idempotencyCleanup, stockCheck, splitStockSession, storagePrune, idbStorage, cloudSyncMapping, pendingVoid)
+- `npx vitest run` → **87/87 test lolos** (9 file: bundle, splitAllocation, idempotencyCleanup, stockCheck, splitStockSession, storagePrune, idbStorage, cloudSyncMapping, pendingVoid) → **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW 50 precache entries) — diverifikasi setelah migrasi IndexedDB
 - Sisa terbuka di daftar: pemantauan produksi (opsional).
+
+---
+
+## 11. Riwayat Pengerjaan v4.6 — Rekap Kas: Investigasi & Fix RLS + Sync
+
+> Sesi lanjutan setelah v4.5. Bug produksi nyata: **Kas Masuk 50.000 yang dicatat Kasir 1 tidak muncul di Rekap Laci Kas laporan Shift Manager**. Investigasi tuntas via SQL diagnostik; akar masalah = **RLS aktif tanpa policy** di tabel `cash_movements`. Fix 3 lapis (6.6 di `TO DO.md`), semua ✅.
+
+### 11.1 Kronologi Investigasi (diagnosis berbasis data, bukan asumsi)
+
+1. **Hipotesis awal gugur**: `shifts.user_id` di DB = UUID valid (`e4cdc043-...`), `users` semua ber-UUID → dugaan "`syncShift` memotong user_id non-UUID" terbantah untuk deployment ini.
+2. `cash_movements` query (`date >= '2026-08-11'`) → **"Success. No rows returned"** → movement 50.000 TIDAK ADA di cloud (hanya di localStorage HP kasir).
+3. `relrowsecurity` = **true** + daftar `pg_policies` kosong → RLS aktif TANPA policy.
+4. INSERT test dari SQL Editor **berhasil** — TAPI tidak membuktikan anon bisa menulis: SQL Editor jalan sebagai role `postgres` yang melewati RLS.
+5. **Konfirmasi**: `CREATE POLICY "Allow all for anon" ...` dijalankan → data langsung mengalir, Kas Masuk 50.000 muncul di laporan Shift Manager. Movement asli tidak hilang (ter-push dari HP begitu akses terbuka).
+
+### 11.2 Akar Masalah
+
+- **RLS aktif tanpa policy** pada `cash_movements` membuat anon key diblokir **diam-diam**: SELECT mengembalikan baris kosong TANPA error, INSERT ditolak ("new row violates row-level security policy"). Gejala khas: Rekap Kas tidak pernah tersinkron antar device; laporan Shift Manager selalu Kas Masuk/Keluar 0.
+- Sisi kode memperparah: `directSyncToCloud` mem-bypass offline queue (retry 1×/5 dtk, gagal diam-diam tanpa indikator UI), dan bagian aktif `schema.sql` tidak mencantumkan RLS+policy untuk `cash_movements` (hanya ada di blok migrasi terkomentari).
+
+### 11.3 Fix #1 — `supabase/schema.sql` (bagian aktif)
+
+- `ALTER TABLE cash_movements ENABLE ROW LEVEL SECURITY;` + `CREATE POLICY "Allow all for anon" ON cash_movements FOR ALL USING (true) WITH CHECK (true);` — selaras dengan 11 tabel lain; DB baru tidak akan kena kasus yang sama.
+
+### 11.4 Fix #2 — Deteksi RLS via `runMigrations` (Migration 18)
+
+- anon key tidak bisa membaca `pg_policies` atau eksekusi DDL, dan SELECT tidak bisa mendeteksi RLS (diam-diam kosong) → deteksi via **probe INSERT** yang sengaja melanggar CHECK `type` (`'PROBE'`): Postgres mengevaluasi RLS **sebelum** constraint, jadi error membedakan RLS vs tabel sehat **tanpa pernah membuat baris**.
+- Bila RLS terdeteksi → `console.warn` mencetak `CASH_MOVEMENTS_POLICY_SQL` (DO block cek `pg_policies` + `CREATE POLICY` + `ENABLE RLS`) untuk dijalankan sekali di SQL Editor.
+- File baru **`src/utils/cashMovementPolicy.ts`**: helper murni `diagnoseCashMovementWriteError` (7 kasus error) + konstanta SQL (8 test baru).
+
+### 11.5 Fix #3 — Jalur tulis via offline queue + badge "Belum Sync"
+
+- `syncCashMovement` kini mengirim nilai **mentah** (sanitasi `isValidUuid` lama dibuang — kolom TEXT) via **`smartUpsert` (offline queue)**: online langsung, offline/gagal antre + flush otomatis saat online. Return `Promise<boolean>`.
+- `addMovement`/`updateMovement`: jalur utama queue, **fallback `directSyncToCloud`** (self-healing strip kolom/nullify UUID).
+- Set module `confirmedSyncedIds` → state reaktif **`confirmedSyncIds`** (tidak dipersist — dibangun ulang dari cloud tiap boot). Badge **`⏳ Belum Sync`** per baris + hitung "⚠️ N belum sync" + listener `online` → `loadFromCloud(true)` (retry otomatis). `loadFromCloud` mengkonfirmasi semua id cloud + mendorong ulang entri lokal belum-sync via queue (dedup otomatis).
+
+### 11.6 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **99/99 test lolos** (11 file: bundle, splitAllocation, idempotencyCleanup, stockCheck, splitStockSession, storagePrune, idbStorage, cloudSyncMapping, pendingVoid, **cashMovementPolicy** (8), **cashMovementStore** (4))
+- `npm run build` → sukses (belum diverifikasi ulang setelah v4.6 — disarankan jalankan sekali)
+- **DB produksi**: sudah diperbaiki manual (policy dibuat) — data 50.000 dipulihkan. Untuk deployment lain: schema.sql sudah benar; DB lama yang bernasib sama akan terdeteksi Migration 18 saat app dibuka.
 
 ---
 

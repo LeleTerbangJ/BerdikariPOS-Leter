@@ -42,12 +42,12 @@ const CATEGORIES_OUT = [
 type DateFilterType = 'today' | 'week' | 'month' | 'all';
 
 export default function CashMovements() {
-  const { movements, addMovement, updateMovement, deleteMovement, loadFromCloud } = useCashMovementStore();
+  const { movements, confirmedSyncIds, addMovement, updateMovement, deleteMovement, loadFromCloud } = useCashMovementStore();
   const { currentUser } = useAuthStore();
   const { activeShift } = useShiftStore();
   const { addLog } = useAuditLogStore();
 
-  // Real-time sync for cash movements
+  // Real-time sync for cash movements + retry otomatis saat kembali online (v4.6 fix #3)
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     loadFromCloud(true);
@@ -58,7 +58,16 @@ export default function CashMovements() {
         loadFromCloud(true);
       })
       .subscribe();
-    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
+    // v4.6 fix #3: saat koneksi pulih, tarik ulang dari cloud — entri "Belum Sync"
+    // didorong ke cloud (via offline queue/loadFromCloud) dan badge otomatis hilang.
+    const handleOnline = () => {
+      loadFromCloud(true);
+    };
+    window.addEventListener('online', handleOnline);
+    return () => {
+      try { supabase.removeChannel(channel); } catch (e) {}
+      window.removeEventListener('online', handleOnline);
+    };
   }, []);
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
@@ -114,6 +123,12 @@ export default function CashMovements() {
       return matchesDate && matchesSearch && matchesCat;
     });
   }, [movements, dateFilter, searchQuery, categoryFilter]);
+
+  // v4.6 fix #3: hitung entri yang belum terkonfirmasi tersinkron ke cloud (badge "Belum Sync")
+  const unsyncedCount = useMemo(
+    () => filteredMovements.filter((m) => !confirmedSyncIds.includes(m.id)).length,
+    [filteredMovements, confirmedSyncIds]
+  );
 
   // Compute KPI totals
   const totals = useMemo(() => {
@@ -392,7 +407,12 @@ export default function CashMovements() {
       <div className="card overflow-hidden">
         <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
           <h3 className="font-bold text-sm">Riwayat Pencatatan Kas</h3>
-          <span className="text-xs text-slate-400">{filteredMovements.length} entri</span>
+          <span className="text-xs text-slate-400 flex items-center gap-2">
+            {unsyncedCount > 0 && (
+              <span className="text-amber-600 dark:text-amber-400 font-semibold">⚠️ {unsyncedCount} belum sync</span>
+            )}
+            {filteredMovements.length} entri
+          </span>
         </div>
 
         {filteredMovements.length === 0 ? (
@@ -431,6 +451,14 @@ export default function CashMovements() {
                       ) : (
                         <span className="badge bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300 font-semibold">
                           - Kas Keluar
+                        </span>
+                      )}
+                      {!confirmedSyncIds.includes(m.id) && (
+                        <span
+                          className="badge bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300 font-semibold ml-1.5"
+                          title="Belum tersinkron ke cloud — akan dikirim otomatis saat perangkat online"
+                        >
+                          ⏳ Belum Sync
                         </span>
                       )}
                     </td>
