@@ -17,6 +17,7 @@ import type {
   StockOpname, CashMovement
 } from '../types';
 import type { StockLogEntry } from '../store/stockLogStore';
+import { diagnoseCashMovementWriteError, CASH_MOVEMENTS_POLICY_SQL } from '../utils/cashMovementPolicy';
 
 // ============================================================
 // DATABASE MIGRATIONS — run once on app startup
@@ -239,11 +240,45 @@ export async function runMigrations() {
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
     if (cmError) {
       console.warn('[Migration] Table "cash_movements" missing or inaccessible in Supabase.');
-      console.warn('[Migration] Please run SQL in Supabase SQL Editor to create table & enable Realtime:');
-      console.warn('  CREATE TABLE IF NOT EXISTS public.cash_movements (id TEXT PRIMARY KEY, shift_id TEXT, type TEXT NOT NULL, amount NUMERIC NOT NULL DEFAULT 0, category TEXT NOT NULL, notes TEXT, cashier_id TEXT, cashier_name TEXT NOT NULL, date TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());');
+      console.warn('[Migration] Please run SQL in Supabase SQL Editor to create table, RLS policy & enable Realtime:');
+      console.warn('  CREATE TABLE IF NOT EXISTS public.cash_movements (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), shift_id TEXT, type TEXT NOT NULL CHECK (type IN (\'in\', \'out\')), amount NUMERIC NOT NULL DEFAULT 0, category TEXT NOT NULL, notes TEXT, cashier_id TEXT, cashier_name TEXT NOT NULL, date TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());');
       console.warn('  ALTER TABLE public.cash_movements ENABLE ROW LEVEL SECURITY;');
-      console.warn('  CREATE POLICY "Allow all" ON public.cash_movements FOR ALL USING (true);');
+      console.warn('  CREATE POLICY "Allow all for anon" ON public.cash_movements FOR ALL USING (true) WITH CHECK (true);');
       console.warn('  ALTER PUBLICATION supabase_realtime ADD TABLE public.cash_movements;');
+    } else {
+      // Migration 18 (v4.6): Deteksi RLS aktif TANPA policy pada cash_movements.
+      // Gejala: Kas Masuk/Kas Keluar tidak pernah tersinkron antar device; SELECT anon diam-diam
+      // kosong sehingga cek SELECT di atas tidak bisa menangkapnya. Probe INSERT sengaja melanggar
+      // CHECK type ('PROBE') — baris TIDAK pernah dibuat; urutan evaluasi Postgres menjalankan
+      // RLS SEBELUM constraint, jadi error-nya membedakan RLS vs tabel sehat.
+      try {
+        const probeId = crypto.randomUUID();
+        const probeResult = await supabase.from('cash_movements').insert({
+          id: probeId,
+          type: 'PROBE', // melanggar CHECK type IN ('in','out') — ditolak di level constraint
+          amount: 0,
+          category: 'MIGRATION-PROBE',
+          notes: 'migration-probe',
+          cashier_id: 'migration-probe',
+          cashier_name: 'MIGRATION-PROBE',
+          date: new Date().toISOString(),
+        });
+        if (!probeResult.error) {
+          // Varian tabel lama tanpa CHECK type — baris probe terlanjur masuk; hapus segera.
+          await supabase.from('cash_movements').delete().eq('id', probeId);
+        } else {
+          const diagnosis = diagnoseCashMovementWriteError(probeResult.error.message);
+          if (diagnosis === 'rls-missing-policy') {
+            console.warn('[Migration] cash_movements: RLS aktif tanpa policy — anon key diblokir, Rekap Kas tidak pernah tersinkron antar device.');
+            console.warn('[Migration] Jalankan SQL berikut SEKALI di Supabase SQL Editor agar Rekap Kas berfungsi lintas device:');
+            console.warn(CASH_MOVEMENTS_POLICY_SQL);
+            migrationNeeded.cashMovementPolicy = true;
+          }
+          // 'ok' (ditolak CHECK) = sehat; 'unknown'/'table-missing' = skip tanpa menyesatkan.
+        }
+      } catch (e) {
+        // Probe gagal karena offline/network — jangan salah diagnosa.
+      }
     }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
@@ -251,7 +286,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -1160,16 +1195,19 @@ export async function fetchStockOpnamesFromCloud(): Promise<StockOpname[] | null
 // CASH MOVEMENTS (Rekap Kas: Kas Masuk & Kas Keluar)
 // ============================================================
 
-export async function syncCashMovement(movement: CashMovement) {
-  if (!isSupabaseConfigured) return;
-  await smartUpsert('cash_movements', {
+export async function syncCashMovement(movement: CashMovement): Promise<boolean> {
+  if (!isSupabaseConfigured) return false;
+  // v4.6 fix #3: kolom shift_id/cashier_id di schema adalah TEXT — kirim nilai apa adanya
+  // (sanitasi isValidUuid lama justru membuang data non-UUID). Via smartUpsert (offline queue):
+  // online → langsung; offline/gagal → antre + flush otomatis saat online (retry berkelanjutan).
+  return smartUpsert('cash_movements', {
     id: movement.id,
-    shift_id: isValidUuid(movement.shiftId) ? movement.shiftId : null,
+    shift_id: movement.shiftId || null,
     type: movement.type,
     amount: movement.amount,
     category: movement.category,
     notes: movement.notes || null,
-    cashier_id: isValidUuid(movement.cashierId) ? movement.cashierId : null,
+    cashier_id: movement.cashierId || null,
     cashier_name: movement.cashierName,
     date: movement.date,
     created_at: movement.createdAt,

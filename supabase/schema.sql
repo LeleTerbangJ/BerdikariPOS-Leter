@@ -351,6 +351,9 @@ ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_opnames ENABLE ROW LEVEL SECURITY;
+-- v4.6 fix (Kas Masuk tidak tersinkron): RLS cash_movements aktif TANPA policy membuat
+-- anon key diblokir diam-diam (SELECT kosong, INSERT ditolak) — Rekap Kas tidak pernah sync.
+ALTER TABLE cash_movements ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all for anon" ON users FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON inventory FOR ALL USING (true) WITH CHECK (true);
@@ -363,6 +366,7 @@ CREATE POLICY "Allow all for anon" ON audit_logs FOR ALL USING (true) WITH CHECK
 CREATE POLICY "Allow all for anon" ON stock_logs FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON settings FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON stock_opnames FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all for anon" ON cash_movements FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================================
 -- Seed Data
