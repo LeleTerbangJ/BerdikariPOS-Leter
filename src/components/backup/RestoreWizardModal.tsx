@@ -38,6 +38,8 @@ export default function RestoreWizardModal({ isOpen, onClose, onSuccess }: Resto
   const [validationResult, setValidationResult] = useState<BackupValidationResult | null>(null);
   const [managerPin, setManagerPin] = useState('');
   const [pinError, setPinError] = useState('');
+  // 7.2: mode restore — merge (tambah/perbarui) vs replace (snapshot penuh)
+  const [restoreMode, setRestoreMode] = useState<'merge' | 'replace'>('merge');
 
   // Restore Execution Progress
   const [isRestoring, setIsRestoring] = useState(false);
@@ -53,6 +55,7 @@ export default function RestoreWizardModal({ isOpen, onClose, onSuccess }: Resto
     setValidationResult(null);
     setManagerPin('');
     setPinError('');
+    setRestoreMode('merge');
     setIsRestoring(false);
     setRestoreProgress(0);
     setRestoreStepText('');
@@ -116,7 +119,8 @@ export default function RestoreWizardModal({ isOpen, onClose, onSuccess }: Resto
       (text, percent) => {
         setRestoreStepText(text);
         setRestoreProgress(percent);
-      }
+      },
+      restoreMode
     );
 
     setIsRestoring(false);
@@ -285,6 +289,55 @@ export default function RestoreWizardModal({ isOpen, onClose, onSuccess }: Resto
                   <span className="font-bold text-sm text-slate-900 dark:text-white">{validationResult.entityCounts?.customers || 0}</span>
                 </div>
               </div>
+            </div>
+
+            {/* Restore Mode Selection (7.2) */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-800 dark:text-slate-200">Mode Restorasi:</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRestoreMode('merge')}
+                  className={`p-3.5 rounded-xl border-2 text-left transition ${
+                    restoreMode === 'merge'
+                      ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <p className="text-sm font-bold text-slate-900 dark:text-white">Merge</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Tambahkan/perbarui data dari backup. Data lain di cloud tetap dipertahankan.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRestoreMode('replace')}
+                  className={`p-3.5 rounded-xl border-2 text-left transition ${
+                    restoreMode === 'replace'
+                      ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <p className="text-sm font-bold text-rose-600 dark:text-rose-400">Replace (Snapshot)</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Samakan cloud dengan isi backup — entitas yang tidak ada di backup akan dihapus permanen.
+                  </p>
+                </button>
+              </div>
+              {restoreMode === 'replace' && (
+                <div className="p-3 bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40 rounded-xl flex items-start gap-2">
+                  <AlertTriangle size={16} className="text-rose-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-rose-700 dark:text-rose-400">
+                    <strong>Peringatan:</strong> Semua data di cloud yang tidak ada di file backup akan <strong>DIHAPUS</strong> (termasuk
+                    {validationResult.manifest.backupType === 'MASTER_DATA'
+                      ? ' transaksi & riwayat kas yang ada saat ini tidak ikut dihapus — hanya data master).'
+                      : validationResult.manifest.backupType === 'TRANSACTION'
+                        ? ' data master (menu/inventory/user) — hanya riwayat transaksi & kas yang disamakan).'
+                        : ' transaksi, menu, inventory, hingga user yang tidak tercakup backup).'}
+                    Membutuhkan koneksi online ke cloud. Tindakan ini permanen.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Manager PIN Confirmation */}

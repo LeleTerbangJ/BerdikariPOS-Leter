@@ -16,6 +16,7 @@ import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
 import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToTransactions, unsubscribeChannel } from './lib/cloudSync';
+import { startAutoBackupScheduler, stopAutoBackupScheduler } from './lib/autoBackupScheduler';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
 import ToastContainer from './components/ToastContainer';
@@ -117,6 +118,8 @@ export default function App() {
     // to prevent cloud plain-text passwords from overwriting local hashed ones
     migratePasswords();
     initOfflineQueue();
+    // v4.7 TO DO 7.6: scheduler auto backup (guard frequency/targetTime/online di dalam modul)
+    startAutoBackupScheduler();
 
     // Load all shared data from cloud (fullSync=true: cloud is authoritative at boot)
     useSettingsStore.getState().loadFromCloud().then(() => {
@@ -169,6 +172,7 @@ export default function App() {
 
     return () => {
       if (txChannel) unsubscribeChannel(txChannel);
+      stopAutoBackupScheduler();
     };
   }, []);
 
