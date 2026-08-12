@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Download, Database, Shield, CheckCircle2, AlertCircle, FileArchive, Check } from 'lucide-react';
-import { BackupService, formatBytes } from '../../lib/backupService';
+import { BackupService, formatBytes, downloadBlob } from '../../lib/backupService';
 import type { BackupType } from '../../store/backupStore';
 import { useToastStore } from '../../store/toastStore';
 
@@ -20,13 +20,8 @@ export default function BackupSection() {
       const result = await BackupService.createBackup(selectedType, { includeAuditLogs });
       setBackupProgress(90);
 
-      // Trigger file download
-      const url = URL.createObjectURL(result.blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = result.filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Trigger file download (v4.7 TO DO 7.6: shared helper, dipakai juga oleh scheduler auto backup)
+      downloadBlob(result.blob, result.filename);
 
       setBackupProgress(100);
       addToast(`Backup (${selectedType}) berhasil diunduh! (${formatBytes(result.sizeBytes)})`, 'success');

@@ -5,7 +5,7 @@ import { useToastStore } from '../../store/toastStore';
 
 export default function AutoBackupSection() {
   const { addToast } = useToastStore();
-  const { autoBackupConfig, updateAutoBackupConfig } = useBackupStore();
+  const { autoBackupConfig, updateAutoBackupConfig, lastAutoBackupAt } = useBackupStore();
 
   const [frequency, setFrequency] = useState(autoBackupConfig.frequency);
   const [destination, setDestination] = useState(autoBackupConfig.destination);
@@ -31,13 +31,24 @@ export default function AutoBackupSection() {
               <CalendarClock size={20} className="text-brand-600 dark:text-brand-400" />
               Pengaturan Auto Backup Otomatis
             </h2>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 uppercase tracking-wider">
-              UI Config (Pengembangan)
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                autoBackupConfig.frequency !== 'OFF'
+                  ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+              }`}
+            >
+              {autoBackupConfig.frequency !== 'OFF' ? '● Otomatis Aktif' : 'Nonaktif'}
             </span>
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             Konfigurasi penjadwalan otomatis untuk pencadangan berkala tanpa intervensi manual.
           </p>
+          {lastAutoBackupAt && (
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+              Terakhir backup otomatis: {new Date(lastAutoBackupAt).toLocaleString('id-ID')}
+            </p>
+          )}
         </div>
       </div>
 

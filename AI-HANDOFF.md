@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.6
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.7
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–6 termasuk 6.6 Rekap Kas, semuanya ✅ — ringkasan v4.5 di §10, v4.6 di §11) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–7 semuanya ✅, termasuk 6.6 Rekap Kas & 7.1–7.8 Backup/Restore — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB
 
 ---
@@ -461,6 +461,48 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT,
 - `npx vitest run` → **99/99 test lolos** (11 file: bundle, splitAllocation, idempotencyCleanup, stockCheck, splitStockSession, storagePrune, idbStorage, cloudSyncMapping, pendingVoid, **cashMovementPolicy** (8), **cashMovementStore** (4))
 - `npm run build` → sukses (belum diverifikasi ulang setelah v4.6 — disarankan jalankan sekali)
 - **DB produksi**: sudah diperbaiki manual (policy dibuat) — data 50.000 dipulihkan. Untuk deployment lain: schema.sql sudah benar; DB lama yang bernasib sama akan terdeteksi Migration 18 saat app dibuka.
+
+---
+
+## 12. Riwayat Pengerjaan v4.7 — Prioritas 7: Backup & Restore (7.1–7.8, semua ✅)
+
+> Sesi lanjutan setelah v4.6. Menuntaskan **Prioritas 7 di `TO DO.md`** — audit fitur Backup & Restore (`backupService.ts`, ZIP + SHA-256, 3 mode, restore berurutan). Seluruh 8 temuan (3 KRITIS, 3 TINGGI, 3 SEDANG) diperbaiki. Backup kini aman, restorable penuh (snapshot), dan auto backup berjalan otomatis.
+
+### 12.1 Temuan KRITIS — 7.1, 7.2, 7.3 ✅
+
+- **7.1 Checksum berbasis isi**: SHA-256 kini dihitung dari **ISI seluruh file** (JSON + media teks base64, urutan nama deterministik), bukan count entitas. Tamper isi (ubah harga/logo tanpa ubah jumlah) **terdeteksi & ditolak**. Backup v1.0 lama tetap valid via jalur legacy count-based. `schemaVersion` → `2.0`.
+- **7.2 Mode Replace (Snapshot)**: `restoreBackup` menerima `mode: 'merge' | 'replace'`; replace = **wipe cloud** (scope per backupType, anak dihapus dulu) sebelum insert → hasil restore konsisten lintas device (data zombie tidak kembali). Wizard restore (Step 3) menawarkan **Merge vs Replace (Snapshot)** dengan peringatan hapus permanen.
+- **7.3 Media di-restore**: folder `media/` diparse → `data.media`; `resolveMediaUrl` menulis ulang `menus[].image` & `settings.storeLogo` dari backup sebelum sync. Foto menu & logo tidak hilang lagi setelah restore.
+
+### 12.2 Temuan TINGGI — 7.4, 7.5 ✅
+
+- **7.4 Bundle/add-on**: `menu_components.json` (file tersendiri) dibackup untuk FULL/MASTER_DATA (ikut di-hash); di-restore ke state + loop `syncComponentToCloud` (setelah menus — referensi parent id). Backup tanpa file ini tetap valid (opsional).
+- **7.5 Stock Logs**: blok `data.stock.stockLogs` kini ikut **`syncStockLog` ke cloud** saat restore (sebelumnya hanya lokal).
+
+### 12.3 Temuan SEDANG — 7.6, 7.7, 7.8 ✅
+
+- **7.6 Auto Backup (scheduler + Supabase Storage)**:
+  - Modul baru **`src/lib/autoBackupScheduler.ts`**: `isAutoBackupDue` (pure) + `runAutoBackupNow` + `start/stopAutoBackupScheduler` (cek tiap 1 menit; guard `frequency`/`targetTime`; destinasi cloud butuh online; retry 5 menit setelah gagal; `lastAutoBackupAt` dicatat hanya saat sukses).
+  - `uploadBackupToSupabase` (bucket `backups`, upsert) + `downloadBlob` shared (BackupSection ikut memakainya). `backupStore` + `lastAutoBackupAt` (persist). `App.tsx` start/stop scheduler. UI: badge **"● Otomatis Aktif"/"Nonaktif"** + "Terakhir backup otomatis".
+- **7.7 Manifest versioning**: `CURRENT_APP_VERSION` → **`'4.7.0'`**; `SUPPORTED_SCHEMA_VERSIONS = ['1.0','2.0']` — schemaVersion tak dikenal **ditolak eksplisit**; `MANIFEST_MIGRATIONS` (tabel versi → transformasi) diterapkan di `validateBackup`.
+- **7.8 `currentUser` setelah restore**: ada di backup → re-resolve + `activeSessionId` dipertahankan; tidak ada → `logout()`. `passwordsHashed: false` setelah restore → password plaintext backup lama di-re-hash saat boot.
+
+### 12.4 Langkah Manual (sekali) — Supabase Storage bucket
+
+Untuk auto backup destinasi **Supabase Cloud Storage**, buat bucket + policy sekali di SQL Editor (SQL idempoten juga tercetak di console app saat upload pertama gagal):
+
+```sql
+INSERT INTO storage.buckets (id, name, public) VALUES ('backups', 'backups', false) ON CONFLICT (id) DO NOTHING;
+CREATE POLICY "Allow anon upload backups" ON storage.objects FOR INSERT TO anon WITH CHECK (bucket_id = 'backups');
+CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon USING (bucket_id = 'backups');
+```
+
+### 12.5 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **125/125 test lolos** (13 file; baru: `backupService.test.ts` 14 kasus — checksum isi/tamper/media/bundle/versioning/currentUser; `autoBackupScheduler.test.ts` 12 kasus — OFF/Daily/Weekly/boundary/targetTime)
+- `npm run build` → belum diverifikasi ulang setelah v4.7 (disarankan jalankan sekali sebelum deploy)
+- **TO DO.md**: Prioritas 7 tuntas (7.1–7.8 ✅). Sisa prioritas yang belum dieksekusi: **8.1–8.2** (bocor stok `Demo → Selesai` & hapus Pending tanpa revert — KRITIS), 8.3–8.4, 9.1–9.4, 10.1–10.5.
 
 ---
 

@@ -28,9 +28,13 @@ export interface AutoBackupConfig {
 interface BackupState {
   history: BackupHistoryEntry[];
   autoBackupConfig: AutoBackupConfig;
+  // v4.7 TO DO 7.6: penanda kapan auto backup terakhir SUKSES (persist) — scheduler
+  // menggunakannya agar tidak mengeksekusi ulang dalam periode yang sama (Daily/Weekly).
+  lastAutoBackupAt?: string;
   addHistoryEntry: (entry: Omit<BackupHistoryEntry, 'id'>) => void;
   clearHistory: () => void;
   updateAutoBackupConfig: (config: Partial<AutoBackupConfig>) => void;
+  setLastAutoBackupAt: (date: string) => void;
 }
 
 export const useBackupStore = create<BackupState>()(
@@ -63,6 +67,10 @@ export const useBackupStore = create<BackupState>()(
             ...config,
           },
         }));
+      },
+
+      setLastAutoBackupAt: (date) => {
+        set({ lastAutoBackupAt: date });
       },
     }),
     {

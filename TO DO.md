@@ -476,6 +476,195 @@
 
 ---
 
+## 🟤 PRIORITAS 7 — BACKUP & RESTORE DATABASE (Audit, v4.6)
+
+> Sumber: audit fitur Backup & Restore — `src/lib/backupService.ts` (ZIP + SHA-256, 3 mode, restore berurutan), `src/store/backupStore.ts` (history cap 100 + autoBackupConfig), `src/components/backup/*` (5 komponen). Status: **7.1–7.8 SELESAI (v4.7) — Prioritas 7 tuntas**.
+
+### 7.1 (KRITIS) Checksum tidak melindungi isi data
+- **File**: `src/lib/backupService.ts` (`calculateChecksum`, `createBackup`, `validateBackup`)
+- **Masalah**: Checksum dihitung dari `JSON.stringify({ settings, usersCount, menusCount, inventoryCount, txCount, shiftsCount })` — hanya JUMLAH entitas, bukan isi. Mengubah isi file JSON (harga menu, jumlah transaksi, data pelanggan) TANPA mengubah count tidak terdeteksi → file backup bisa dimodifikasi/dirusak sebagian tanpa ketahuan.
+- **Status**: ✅ **SELESAI (v4.7)** — checksum kini SHA-256 berbasis ISI seluruh file (JSON + media teks base64), deterministik (nama diurutkan); legacy v1.0 count-based tetap divalidasi agar backup lama tidak ditolak.
+- **Aksi (tereksekusi)**:
+  - [x] `createBackup`: kumpulkan `{nama, isi}` tiap file JSON + media → `buildChecksumPayload` → SHA-256 (schemaVersion dinaikkan `2.0`).
+  - [x] `validateBackup`: verifikasi ulang berbasis isi (raw content sebelum parse); v1.0 → jalur legacy count-based.
+  - [x] Test: tamper isi JSON tanpa ubah count → INVALID; tamper media → INVALID; v2 valid; legacy v1 valid (`src/test/backupService.test.ts`).
+
+### 7.2 (KRITIS) Restore tidak "reset" cloud — data zombie kembali lintas device
+- **File**: `src/lib/backupService.ts` (`restoreBackup`)
+- **Masalah**: Restore menimpa state lokal + upsert data backup, tapi TIDAK menghapus entitas cloud yang tidak ada di backup (transaksi lama, menu yang dihapus, user lama, dll). Setelah reload/device lain/`loadFromCloud`, data itu "hidup lagi" → hasil restore inkonsisten antar device; backup tidak berfungsi sebagai snapshot penuh.
+- **Status**: ✅ **SELESAI (v4.7)** — `restoreBackup` menerima parameter `mode: 'merge' | 'replace'`; mode replace = wipe cloud (scope per backupType, anak dihapus dulu) sebelum insert → hasil restore konsisten lintas device.
+- **Aksi (tereksekusi)**:
+  - [x] `REPLACE_SCOPE` per `BackupType` (FULL/MASTER_DATA/TRANSACTION) — urutan hapus anak (transactions/cash/stock/audit) sebelum induk (users/menus/inventory).
+  - [x] `wipeCloudTables`: `supabase.from(t).delete().neq('id','')` per tabel, gagal satu tabel tidak menghentikan proses.
+  - [x] `RestoreWizardModal` Step 3: pilihan **Merge vs Replace (Snapshot)** + peringatan hapus permanen (teks menyesuaikan backupType); mode diteruskan ke `restoreBackup`.
+
+### 7.3 (KRITIS) Media (foto menu & logo) dibackup tapi tidak pernah di-restore
+- **File**: `src/lib/backupService.ts` (`createBackup` — `extractMedia` menulis folder `media/`; `validateBackup` & `restoreBackup` tidak membaca folder)
+- **Masalah**: Gambar ditulis ke `media/` di ZIP saat backup, tapi `validateBackup` hanya mem-parse file JSON dan `restoreBackup` tidak menangani `data.media`. Setelah restore, foto menu & logo hilang (field image menunjuk `media/menu-xxx.png` yang tidak pernah dimuat ulang).
+- **Status**: ✅ **SELESAI (v4.7)** — folder `media/` kini diparse dan foto menu & logo di-resolve ulang saat restore.
+- **Aksi (tereksekusi)**:
+  - [x] `createBackup`: media disimpan sebagai teks base64 (bukan biner) → deterministik untuk checksum & restore.
+  - [x] `validateBackup`: parse folder `media/` → `data.media: Record<filename, base64>` (khusus schemaVersion ≥ 2.0; v1.0 tetap diabaikan).
+  - [x] `restoreBackup`: `resolveMediaUrl` menulis ulang `menus[].image` & `settings.storeLogo` dari `data.media` sebelum `setState` + sync.
+  - [x] `resolveMediaUrl` diekspor + di-test (referensi media → data URL; non-media & undefined aman).
+
+### 7.4 (TINGGI) Struktur bundle/add-on (`menu_components`) tidak di-sync saat restore
+- **File**: `src/store/menuStore.ts` (`menuComponents`), `src/lib/cloudSync.ts` (`syncMenu` tanpa `menu_components`), `src/lib/backupService.ts`
+- **Masalah**: `menus.json` hanya membawa field `components` denormalized di objek menu; state `menuComponents` dan tabel cloud `menu_components` TIDAK dibackup/di-restore/di-sync. Bundle bisa rusak/inkonsisten setelah restore lintas device.
+- **Status**: ✅ **SELESAI (v4.7)** — struktur bundle kini dibackup/di-restore/di-sync penuh.
+- **Aksi (tereksekusi)**:
+  - [x] `createBackup`: `menu_components.json` (file sendiri) untuk tipe FULL & MASTER_DATA — ikut di-hash checksum berbasis isi.
+  - [x] `validateBackup`: parse `menu_components.json` → `data.menuComponents` + `entityCounts.menuComponents` (opsional — backup lama tanpa file tetap valid).
+  - [x] `restoreBackup`: setState `menuComponents` + loop `syncComponentToCloud` (urutan setelah menus karena referensi parent id).
+  - [x] Test end-to-end: create → validasi checksum lolos + menu_components ter-parse; zip tanpa file → undefined (tidak crash).
+
+### 7.5 (TINGGI) Stock Logs hanya restore lokal, tidak di-sync cloud
+- **File**: `src/lib/backupService.ts` (`restoreBackup` — blok `data.stock.stockLogs` hanya `setState`)
+- **Masalah**: Semua entitas lain di-sync ke cloud saat restore; `stockLogs` tidak (import `syncStockLog` tidak dipakai) → device lain tidak melihat riwayat stok hasil restore.
+- **Status**: ✅ **SELESAI (v4.7)** — Stock Logs kini ikut di-sync ke cloud saat restore.
+- **Aksi (tereksekusi)**: [x] Loop `syncStockLog` di blok `data.stock.stockLogs` (import `syncStockLog` dari cloudSync) — konsisten dengan entitas lain.
+
+### 7.6 (SEDANG) Auto Backup = UI stub (tidak ada scheduler; Supabase Storage tidak diimplementasi)
+- **File**: `src/store/backupStore.ts` (`autoBackupConfig`), `src/components/backup/AutoBackupSection.tsx` (badge "UI Config (Pengembangan)"), `src/components/backup/BackupSection.tsx` (satu-satunya pemanggil `createBackup`)
+- **Masalah**: Konfigurasi tersimpan tapi tidak ada scheduler (cek `targetTime`/`frequency`/`navigator.onLine`); `createBackup` hanya dipanggil manual. Destinasi "Supabase Storage" bisa dipilih tapi tidak ada implementasi upload; Google Drive dikunci "Masa Depan".
+- **Status**: ✅ **SELESAI (v4.7)** — scheduler aktif + upload ke Supabase Storage berfungsi.
+- **Aksi (tereksekusi)**:
+  - [x] Modul baru `src/lib/autoBackupScheduler.ts`: `isAutoBackupDue` (pure, testable) + `runAutoBackupNow` + `start/stopAutoBackupScheduler` (cek tiap 1 menit; guard `frequency`/`targetTime`; destinasi cloud butuh online + retry 5 menit setelah gagal; `lastAutoBackupAt` dicatat HANYA saat sukses).
+  - [x] `backupService.ts`: `uploadBackupToSupabase` (bucket `backups`, upsert) + `downloadBlob` shared; `BackupSection` memakai `downloadBlob`.
+  - [x] `backupStore.ts`: state `lastAutoBackupAt` (persist) + `setLastAutoBackupAt`.
+  - [x] `App.tsx`: `startAutoBackupScheduler()` saat boot + `stopAutoBackupScheduler()` saat unmount.
+  - [x] `AutoBackupSection.tsx`: badge "● Otomatis Aktif"/"Nonaktif" (bukan lagi UI Config) + tampilan "Terakhir backup otomatis".
+  - [x] Test `src/test/autoBackupScheduler.test.ts` (12 kasus: OFF, Daily, Weekly, boundary minggu, targetTime default/rusak, lastRunAt invalid).
+  - [ ] (Sisi server) Buat bucket `backups` + policy anon — SQL idempoten dicetak ke console saat upload pertama gagal (anon key tidak bisa buat bucket).
+
+### 7.7 (SEDANG) Manifest versioning usang & tanpa migrasi backup lama
+- **File**: `src/lib/backupService.ts` (`CURRENT_APP_VERSION = '4.4.0'`, `CURRENT_SCHEMA_VERSION = '1.0'`)
+- **Masalah**: Versi app tidak sinkron (sekarang v4.6); `schemaVersion` statis; restore backup versi lama tidak punya jalur migrasi → field baru hilang diam-diam (self-heal strip kolom) atau gagal.
+- **Status**: ✅ **SELESAI (v4.7)**
+- **Aksi (tereksekusi)**:
+  - [x] `CURRENT_APP_VERSION = '4.7.0'` (sinkron dengan versi fitur aktual; sebelumnya usang '4.4.0').
+  - [x] `SUPPORTED_SCHEMA_VERSIONS = ['1.0', '2.0']` — schemaVersion TIDAK dikenal → backup DITOLAK eksplisit dengan pesan jelas (bukan restore dengan field hilang diam-diam).
+  - [x] `MANIFEST_MIGRATIONS` (tabel versi → transformasi data; 1.0 & 2.0 passthrough saat ini, entri baru ditambahkan tiap format berubah) + diterapkan di `validateBackup` sebelum restore.
+  - [x] Test: konstanta sinkron; schema 3.0 ditolak dengan pesan jelas.
+
+### 7.8 (SEDANG) `currentUser` tidak diperbarui setelah restore users
+- **File**: `src/lib/backupService.ts` (`restoreBackup` — `useAuthStore.setState({ users })` tanpa update `currentUser`)
+- **Masalah**: User yang sedang login bisa tidak ada di daftar user hasil restore → sesi berperilaku aneh (otorisasi PIN/role diambil dari objek lama).
+- **Status**: ✅ **SELESAI (v4.7)**
+- **Aksi (tereksekusi)**:
+  - [x] User login ADA di backup → `currentUser` re-resolve dari daftar baru + `activeSessionId` lokal dipertahankan (tidak ter-logout paksa lintas device).
+  - [x] User login TIDAK ada di backup → `logout()` (tidak ada sesi "hantu" dengan role/PIN dari objek lama).
+  - [x] `passwordsHashed: false` setelah restore → password plaintext dari backup lama di-re-hash otomatis saat boot berikutnya (aman untuk BUG-K2).
+  - [x] Test: found → data baru + session dipertahankan; not-found → currentUser null.
+
+---
+
+## 🟤 PRIORITAS 8 — PERGERAKAN STOK: TRANSAKSI vs CANCEL/DEMO (Audit, v4.6)
+
+> Sumber: audit pergerakan stok bahan baku — jalur checkout (`atomicTransactionEngine`), status change & delete (`Transactions.tsx`), `inventoryStore` (deductStock/revertStock), `hpp.ts` (calculateItemDeductions via recipeSnapshot). Status: **dokumentasi temuan — belum dieksekusi**.
+
+### 8.1 (KRITIS) Demo → Selesai (re-enable) tidak memotong stok — penjualan tercatat tanpa bahan baku
+- **File**: `src/pages/Transactions.tsx` (`onConfirmAction` & `onPinSuccess`, baris ~227/295)
+- **Masalah**: Tombol "Selesai" tampil untuk semua baris `txStatus !== 'Selesai'` — termasuk transaksi **Demo** (baris ~624–630). Handler hanya menangani `status === 'Selesai' && tx.txStatus === 'Cancel'` (re-enable BUG-K3); `Demo → Selesai` tidak memicu `deductStock`. Padahal saat menjadi Demo stok sudah direvert → transaksi jadi Selesai (tercatat penjualan) TANPA bahan baku terpotong → **stok bocor**. Pola identik BUG-K3 yang sudah difix untuk Cancel, kasus Demo terlewat.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Tambah branch `status === 'Selesai' && tx.txStatus === 'Demo'` → `deductStock` (via `calculateDeductions`) + `recordVisit` di `onConfirmAction` & `onPinSuccess`.
+
+### 8.2 (KRITIS) Hapus transaksi Pending dari halaman Transaksi tidak me-revert stok reserve — bocor
+- **File**: `src/pages/Transactions.tsx` (blok delete `onConfirmAction`/`onPinSuccess`, baris ~245/313)
+- **Masalah**: Tombol "Hapus" tampil tanpa syarat status (baris ~648). Blok delete hanya `revertStock` bila `tx.txStatus === 'Selesai'`; menghapus **Pending** → `deleteTransaction` langsung tanpa revert → stok yang di-reserve saat simpan pending tidak pernah dikembalikan. (Jalur PendingPaymentsModal sudah aman via `cancelPendingTransaction` — yang bocor jalur halaman Transaksi.)
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Pada blok delete, tambah `tx.txStatus === 'Pending'` (dengan guard `hasSplitChildren`) → `revertStock` sebelum `deleteTransaction`.
+
+### 8.3 (SEDANG) Inkonsistensi jalur sync cloud stok: deduct bulk vs revert per-item
+- **File**: `src/store/inventoryStore.ts` (`deductStock` → `syncInventoryDeduction` bulk; `revertStock` → loop `syncInventoryItem`)
+- **Masalah**: Dua jalur berbeda; pada revert banyak bahan, tiap item di-upsert terpisah (lebih banyak request). Fungsional, tapi tidak konsisten dan boros request saat void massal.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Seragamkan (mis. `syncInventoryDeduction` untuk delta, atau satu helper bulk untuk revert).
+
+### 8.4 (SEDANG) Stok negatif pasca-deduksi tidak diperiksa (hanya pre-flight)
+- **File**: `src/lib/atomicTransactionEngine.ts`, `src/lib/inventoryEngine.ts` (LOGIC-5 izinkan negatif)
+- **Masalah**: Validasi hanya pre-flight (`validateStockAvailability`); race 2 device checkout bahan terakhir bersamaan bisa menghasilkan stok negatif tanpa peringatan setelah kejadian. Diterima sebagai trade-off (kasir tidak diblokir), tapi perlu dipantau.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Opsional: warning low/negatif stock di UI setelah deduksi (bukan blokir).
+
+---
+
+## 🟤 PRIORITAS 9 — AUDIT STOK: OPNAME & ADJUSTMENT MANUAL (v4.6)
+
+> Sumber: audit pergerakan stok pada Stock Opname (`StockOpname.tsx` doSubmit), Adjustment manual (`Inventory.tsx` edit/CSV import), `stockLogStore`, `inventoryStore.updateItem` (auto-log). Jalur utama sudah benar & tersync — temuan di bawah adalah celah pelabelan & race. Status: **dokumentasi temuan — belum dieksekusi**.
+
+### 9.1 (SEDANG) Tipe log `'import'` mati — CSV import tidak bisa dibedakan dari adjustment manual
+- **File**: `src/store/stockLogStore.ts` (`StockLogType = 'deduct' | 'add' | 'adjust' | 'import'`), `src/pages/Inventory.tsx` (CSV import → `updateItem` auto-log)
+- **Masalah**: Tipe `'import'` didefinisikan tapi TIDAK pernah dipakai. CSV import untuk item yang sudah ada jatuh ke auto-log `updateItem` → `'adjust'` dengan reason generik `"Adjustment manual"`; item baru hasil import (`addItem`) tidak dicatat sama sekali. Riwayat stok tidak menunjukkan asal perubahan (import vs penyesuaian manual).
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Saat CSV import: untuk item existing dengan stok berubah → log tipe `'import'` (reason `Import CSV`); item baru → log `'import'` juga (stok awal).
+  - [ ] Opsional: tampilkan badge tipe di riwayat stok per item.
+
+### 9.2 (SEDANG) Stock Opname menulis stok ABSOLUT → race lintas device (lost update)
+- **File**: `src/pages/StockOpname.tsx` (form menangkap `systemStock` saat dibuka, baris ~41–44; `updateItem(id, { stock: actualStock })` baris 140)
+- **Masalah**: Bila perangkat lain menjual/merubah stok antara form dibuka dan submit, `updateItem` menimpa hasil perubahan itu (lost update) — log opname mencatat `stockBefore/stockAfter` dari snapshot lama, jadi selisihnya tidak terlihat. Contoh: form buka `susu=100`, device lain jual 5 (stok 95), opname submit 100 → 5 unit "dihidupkan" tanpa jejak.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Saat submit, bandingkan `systemStock` snapshot vs stok saat ini: jika berbeda → tampilkan peringatan selisih (konfirmasi kasir) sebelum commit.
+  - [ ] Opsional: tulis opname sebagai delta (actual − stok saat ini) alih-alih absolut, dengan guard stok tidak negatif.
+
+### 9.3 (MINOR) Auto-log edit memakai nama lama saat rename bersamaan
+- **File**: `src/store/inventoryStore.ts` (`updateItem` auto-log memakai `current.name`)
+- **Masalah**: Edit yang sekaligus mengganti nama bahan → log stok menampilkan nama lama (kosmetik, menyulitkan pencarian riwayat).
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Log memakai nama baru bila `data.name` ada, fallback nama lama.
+
+### 9.4 (MINOR) Banyak request cloud per item pada opname/import
+- **File**: `src/pages/StockOpname.tsx` (loop `updateItem` → `syncInventoryItem` per item), `src/pages/Inventory.tsx` (CSV import loop)
+- **Masalah**: Opname/import dengan banyak item → 1 request cloud per item. Fungsional tapi boros request (terkait 8.3 — seragamkan jalur bulk).
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Batch sync inventory (mis. satu `syncInventoryDeduction`-style bulk atau batasi ke item yang berubah).
+
+---
+
+## 🟤 PRIORITAS 10 — AUDIT MODE BLIND STOCK OPNAME & OTORISASI PIN (v4.6)
+
+> Sumber: audit alur mode blind opname untuk Staf Gudang (`StockOpname.tsx`), otorisasi PIN (`PinModal.tsx`, `settingsStore.verifyPin`), akses halaman (`App.tsx`/`Inventory.tsx`). Masking kolom & akses role sudah benar; temuan di bawah = kebocoran informasi mode buta & kelemahan otorisasi PIN. Status: **dokumentasi temuan — belum dieksekusi**.
+
+### 10.1 (KRITIS) Mode buta bocor: banner "Selisih Besar" + judul modal PIN menampilkan info selisih untuk Staf Gudang
+- **File**: `src/pages/StockOpname.tsx` (banner baris ~312 tidak di-guard `isWarehouseStaff`; judul `PinModal` baris ~408 `"Verifikasi PIN Manager — Selisih Besar"`)
+- **Masalah**: Banner peringatan selisih ≥10% dan judul modal PIN tampil untuk SEMUA role termasuk Staf Gudang. Staff bisa memakai banner sebagai oracle: input fisik → banner muncul = selisih ≥10%, tidak muncul = dalam ±10% → dengan iterasi, stok sistem terbaca dengan presisi 10% — persis manipulasi yang ingin dicegah mode buta (PRD 2.4). Perbedaan jalur PIN modal vs ConfirmDialog juga mengungkap batas 10% walau banner disembunyikan.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Sembunyikan banner "Selisih Besar Terdeteksi" untuk `isWarehouseStaff`.
+  - [ ] Judul modal PIN generik ("Otorisasi Manager") tanpa frasa "Selisih Besar".
+  - [ ] (Opsional — menutup oracle sepenuhnya) Untuk Staf Gudang: jalur PIN seragam tanpa banner/ConfirmDialog diferensial.
+
+### 10.2 (TINGGI) Otorisasi PIN tidak terikat role & tidak ada identitas approver
+- **File**: `src/store/settingsStore.ts` (`verifyPin` — hanya membandingkan PIN global `managerPin` bcrypt), `src/pages/StockOpname.tsx` (`pinVerified: true` boolean), `src/components/PinModal.tsx`
+- **Masalah**: Siapa pun yang tahu PIN Manager (termasuk Staf Gudang) bisa menyetujui selisih besar; tidak ada cek role user yang mengetik. Audit hanya menyimpan boolean `pinVerified` — tanpa identitas approver maupun timestamp, jadi tidak ada jejak siapa yang menyetujui. Catatan: karena PIN bersifat shared dan biasanya diketik di perangkat staff (manager mengetik PIN-nya), mencatat `currentUser` akan salah identitas.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**:
+  - [ ] Role-gate: hanya Manager/Owner yang dapat membuka modal PIN otorisasi (atau catat identitas approver via flow login cepat).
+  - [ ] Minimal: tambahkan timestamp + penanda perangkat pada record opname & audit log saat PIN diverifikasi.
+
+### 10.3 (TINGGI) Alasan selisih tidak wajib untuk Staf Gudang → audit penyebab kerugian lemah
+- **File**: `src/pages/StockOpname.tsx` (baris ~105–112 — validasi alasan di-skip untuk staff; record menyimpan `reason: '-'`)
+- **Masalah**: Staf Gudang bisa mencatat kerugian besar (mis. stok 100 → 0, `Basi`) tanpa alasan apa pun, asalkan PIN disetujui. Namun staff memang tidak tahu item mana yang berselisih (mode buta) — mewajibkan alasan per-item tidak praktis.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Setelah PIN manager disetujui, tampilkan rangkuman selisih + wajibkan alasan sebelum eksekusi (dual-control sekaligus memperkuat jejak audit).
+
+### 10.4 (SEDANG) Stok aktual negatif/NaN bisa masuk ke inventory
+- **File**: `src/pages/StockOpname.tsx` (baris ~86: `parseFloat(r.actualStock) || 0`; input `type="number" min="0"` tidak mencegah mengetik `-5`)
+- **Masalah**: `parseFloat("-5") = -5` → `updateItem(id, { stock: -5 })` → stok inventory jadi negatif tanpa validasi.
+- **Status**: 🔲 BELUM
+- **Aksi (rencana)**: [ ] Clamp `Math.max(0, parseFloat(...) || 0)` sebelum masuk store.
+
+### 10.5 (MINOR) Ambang PIN ketat untuk stok rendah — catatan desain
+- **File**: `src/pages/StockOpname.tsx` (baris ~78–83: `Math.max(systemStock × 0.1, 1)`)
+- **Masalah**: Untuk item dengan stok sistem < 10, selisih ≥ 1 unit (mis. stok 5, selisih 1 = 20%) langsung memicu PIN — ketat tapi sah; catatan agar perilaku ini tidak mengejutkan saat muncul.
+- **Status**: 🔵 Catatan desain — tidak perlu diubah
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -493,6 +682,10 @@
 2. **Alur pending inti** (1.1, 1.3, 1.4) — akses UI + finalize yang benar.
 3. **Alur split** (1.5, 1.6, 1.7) — stok & akuntansi.
 4. **Pemolesan** (2.x, 3.x).
+5. **Prioritas 7 (Backup & Restore)**: **7.1–7.8 SELESAI (v4.7) — tuntas**; backup kini aman (checksum isi), restore snapshot (Replace), media & bundle utuh, auto backup berjalan.
+6. **Prioritas 8 (Stok vs Cancel/Demo)**: kerjakan 8.1–8.2 (kritis — bocor stok) dulu, 8.3–8.4 menyusul.
+7. **Prioritas 9 (Opname & Adjustment)**: kerjakan 9.1–9.2 (sedang) dulu, 9.3–9.4 menyusul.
+8. **Prioritas 10 (Mode Blind Opname & PIN)**: kerjakan 10.1 (kritis — kebocoran mode buta) dulu, lalu 10.2–10.3 (tinggi), 10.4 menyusul (10.5 catatan desain).
 
 ---
 
