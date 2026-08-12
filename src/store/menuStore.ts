@@ -19,6 +19,7 @@ interface MenuState {
   getCategories: () => string[];
   addCategory: (cat: string) => void;
   deleteCategory: (cat: string) => void;
+  reorderCategories: (ordered: string[]) => void;
   addComponent: (component: MenuComponent) => void;
   updateComponent: (id: string, data: Partial<MenuComponent>) => void;
   deleteComponent: (id: string) => void;
@@ -92,6 +93,21 @@ export const useMenuStore = create<MenuState>()(
           const updated = s.customCategories.filter((c) => c !== cat);
           syncCustomCategories(updated); // GAP-1 fix: sync to cloud
           return { customCategories: updated };
+        });
+      },
+
+      // v4.7 (TO DO 11 — fitur baru): atur urutan badge kategori di POS.
+      // Urutan penuh disimpan ke customCategories (urutan = posisi tab) & di-sync ke cloud
+      // lewat syncCustomCategories (settings id=1) sehingga konsisten lintas device.
+      reorderCategories: (ordered) => {
+        set((s) => {
+          const deduped = Array.from(new Set(ordered));
+          const merged = [
+            ...deduped,
+            ...s.customCategories.filter((c) => !deduped.includes(c)),
+          ];
+          syncCustomCategories(merged);
+          return { customCategories: merged };
         });
       },
 

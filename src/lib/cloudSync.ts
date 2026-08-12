@@ -258,6 +258,43 @@ export async function runMigrations() {
       migrationNeeded.opnameApprover = true;
     }
 
+    // Migration 20 (v4.7 TO DO 11.2 / P0.2): kolom refund transaksi.
+    // updateTxMeta menulis refunded/refunded_at/refunded_amount/refund_note/refunded_by_id/
+    // refunded_by_name — deteksi agar smartUpdate pada DB lama tidak gagal.
+    const refundColumns = ['refunded', 'refunded_at', 'refunded_amount', 'refund_note', 'refunded_by_id', 'refunded_by_name'];
+    const { error: refundColError } = await supabase
+      .from('transactions')
+      .select(refundColumns.join(','))
+      .limit(1);
+    const refundColumnsMissing =
+      !!refundColError &&
+      refundColumns.some((c) => refundColError.message?.includes(c));
+    if (refundColumnsMissing) {
+      console.warn('[Migration] Kolom refund transaksi belum ada di transactions (TO DO 11.2 / P0.2): refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded BOOLEAN DEFAULT FALSE;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_amount FLOAT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refund_note TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_id TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_name TEXT;');
+      migrationNeeded.refunded = true;
+    }
+
+    // Migration 21 (v4.7 TO DO 11.2 / P0.4): kolom auto_send_digital_receipt di settings.
+    // syncSettings menulis kolom ini — deteksi agar upsert pada DB lama tidak gagal (mencegah
+    // penumpukan offline queue), konsisten dengan pola Migration 16 (kolom cetak struk).
+    const { error: autoSendColError } = await supabase
+      .from('settings')
+      .select('auto_send_digital_receipt')
+      .limit(1);
+    if (autoSendColError && autoSendColError.message?.includes('auto_send_digital_receipt')) {
+      console.warn('[Migration] Kolom auto_send_digital_receipt belum ada di settings (TO DO 11.2 / P0.4).');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;');
+      migrationNeeded.autoSendDigitalReceipt = true;
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -309,7 +346,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -400,13 +437,22 @@ export async function syncTransactionTxStatus(id: string, txStatus: string) {
   await smartUpdate('transactions', data, 'id', id);
 }
 
-// v4.5 TO DO 5.8: sync metadata transaksi terpilih ke cloud (saat ini payment_method parent split).
-// Field yang didukung dipetakan eksplisit — field lain diabaikan agar tidak menulis kolom tak dikenal.
+// v4.5 TO DO 5.8: sync metadata transaksi terpilih ke cloud (payment_method parent split).
+// v4.7 TO DO 11.2 (P0.2): + kolom refund. Field yang didukung dipetakan eksplisit — field lain
+// diabaikan agar tidak menulis kolom tak dikenal (mencegah penumpukan offline queue).
 export async function syncTransactionMeta(id: string, partial: Partial<Transaction>) {
   if (!isSupabaseConfigured) return;
   const data: Record<string, any> = {};
   if (partial.paymentMethod !== undefined) {
     data.payment_method = partial.paymentMethod;
+  }
+  if (!migrationNeeded.refunded) {
+    if (partial.refunded !== undefined) data.refunded = partial.refunded;
+    if (partial.refundedAt !== undefined) data.refunded_at = partial.refundedAt;
+    if (partial.refundedAmount !== undefined) data.refunded_amount = partial.refundedAmount;
+    if (partial.refundNote !== undefined) data.refund_note = partial.refundNote;
+    if (partial.refundedById !== undefined) data.refunded_by_id = partial.refundedById;
+    if (partial.refundedByName !== undefined) data.refunded_by_name = partial.refundedByName;
   }
   if (Object.keys(data).length > 0) {
     await smartUpdate('transactions', data, 'id', id);
@@ -453,6 +499,13 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       // v4.5 TO DO 5.10: tx_status adalah otoritatif — kolom is_pending bisa stale (true) untuk
       // order yang sudah lunas/batal di era sebelum syncTransactionTxStatus menulis is_pending.
       isPending: row.tx_status === 'Pending',
+      // v4.7 TO DO 11.2 (P0.2): baca balik status refund lintas device
+      refunded: row.refunded || false,
+      refundedAt: row.refunded_at || undefined,
+      refundedAmount: row.refunded_amount || undefined,
+      refundNote: row.refund_note || undefined,
+      refundedById: row.refunded_by_id || undefined,
+      refundedByName: row.refunded_by_name || undefined,
       pendingNotes: row.pending_notes || undefined,
       splitParentId: row.split_parent_id || undefined,
       splitIndex: row.split_index || undefined,
@@ -816,6 +869,10 @@ export async function syncSettings(settings: AppSettings) {
   if (!migrationNeeded.taxEnabled) {
     data.tax_enabled = settings.taxEnabled ?? false;
   }
+  // v4.7 TO DO 11.2 (P0.4): auto-kirim struk digital — hanya ditulis jika kolom sudah ada di DB
+  if (!migrationNeeded.autoSendDigitalReceipt) {
+    data.auto_send_digital_receipt = settings.autoSendDigitalReceipt ?? false;
+  }
   await smartUpsert('settings', data);
 }
 
@@ -847,6 +904,7 @@ export async function fetchSettingsFromCloud(): Promise<AppSettings | null> {
       receiptFooter: data.receipt_footer || undefined,
       receiptAsciiOnly: data.receipt_ascii_only || false,
       autoPrintReceipt: data.auto_print_receipt || false,
+      autoSendDigitalReceipt: data.auto_send_digital_receipt || false,
     };
   } catch (e) {
     console.warn('[CloudSync] Fetch settings failed:', e);

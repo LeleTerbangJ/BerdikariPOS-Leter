@@ -688,6 +688,54 @@
 
 ---
 
+## 🟤 PRIORITAS 11 — CELAH SPESIFIKASI & ARAH KOMERSIALISASI (Analisa Fitur, v4.7)
+
+> Sumber: analisa fitur POS (PRD.md §3, FEATURES.md, ROADMAP.md vs kode v4.7). Baseline 14 modul PRD ~92% terimplementasi (Prioritas 1–10 tuntas); sisanya = 6 celah spesifikasi (11.1) + rekomendasi P0/P1/P2 (11.2–11.4). Status: **dokumentasi analisa — belum dieksekusi (urutan ditentukan arah komersialisasi: 1 outlet mendalam vs SaaS multi-klien)**.
+
+### 11.1 Celah Spesifikasi (tertulis di PRD/FEATURES tapi belum ada)
+
+- **2.1 WhatsApp Marketing** (PRD 3.10, FEATURES #9) — hanya deep-link `wa.me` manual per pelanggan (`Customers.tsx` `openWhatsApp`); belum ada campaign/broadcast. Perlu Edge Function + WA Gateway API.
+- **2.2 Google Drive backup** (PRD 3.13, FEATURES #13) — opsi `destination: 'Google Drive'` + UI "Coming Soon" (`AutoBackupSection.tsx`) tanpa OAuth2/upload.
+- **2.3 QRIS Gateway** (FEATURES #1) — QRIS metode bayar **manual** (kasir input/scan); belum integrasi Midtrans/Duitku/QRIS terverifikasi.
+- **2.4 Multi-outlet** (PRD 1.2 & pricing Pro Rp 399k/bulan) — hanya field `outletId?: string` di `Transaction`; tanpa pemilihan/filter outlet per device.
+- **2.5 RLS ber-JWT** — schema punya 13 policy `"Allow all for anon"` (tanpa auth); aman untuk 1 outlet, **tidak aman untuk SaaS multi-klien** (roadmap #2).
+- **2.6 Diskon per item** — hanya diskon manual nominal per transaksi; tanpa diskon per baris (umum di POS retail).
+
+### 11.2 Rekomendasi P0 — Sebelum dijual ke klien (KRITIS)
+
+- [x] **Laporan PPN formal (P0.1 — ✅ SELESAI v4.7)** — tab baru **PPN** di Laporan + export CSV/PDF. File: `src/utils/ppnReport.ts` (murni: `isTaxableTransaction`/`toPpnRow`/`summarizePpn`/`aggregatePpnByDay`), `src/utils/pdfExport.ts` (`exportPpnPDF`), `src/pages/Reports.tsx` (tab `tax`, kartu ringkasan, rekap per hari, detail transaksi), `src/test/ppnReport.test.ts` (9 kasus). Semantik: **DPP = subtotal − diskon (net sales)**, **PPN = `t.tax`** (dibulatkan saat checkout), Total = DPP + PPN; hanya transaksi `Selesai` non-split kena pajak (tax > 0); non-pajak dihitung sebagai exempt. Total test: **201/201**.
+- [x] **Refund/retur penuh (P0.2 — ✅ SELESAI v4.7)** — alur refund transaksi `Selesai` dari halaman Transaksi. File: `src/utils/refund.ts` (murni: `isRefundableTransaction`/`refundAmount`/`refundMovementNotes`/`buildRefundCashMovement`), `src/pages/Transactions.tsx` (tombol Refund + modal alasan + PIN Manager untuk role non-Manager, badge "Refund", info refund di detail, statistik eksklusi), `src/utils/transactionStockActions.ts` (guard `refunded` — anti double-revert), `src/types/index.ts` (field `refunded*` + AuditAction `refund_transaction`), `src/lib/cloudSync.ts` (Migration 20 + syncTransactionMeta refund fields + fetch mapping), `supabase/schema.sql`, `src/pages/Reports.tsx` & `src/pages/Dashboard.tsx` (refunded TIDAK dihitung sebagai penjualan). Alur: revert stok (recipeSnapshot) + revert kunjungan + **Kas Keluar 'Refund' di Rekap Kas** (akuntabel, online/offline queue) + tandai refunded (sync lintas device) + audit log. Guard: hanya `Selesai` non-split, belum refunded, nominal > 0; transaksi refunded tidak bisa diubah status lagi. Test: `src/test/refund.test.ts` (9) + `transactionStockActions.test.ts` (3 guard). Total test: **213/213**.
+- [ ] **Refund/retur penuh** — sekarang hanya Cancel/Void/Delete (revert stok); tanpa alur refund + arus kas keluar tercatat akuntabel.
+- [ ] **Role Owner terpisah** — hierarki Owner > Manager (otorisasi opname 10.2 sudah kuat, tapi approver hanya Manager).
+- [x] **Struk digital (WA/email) (P0.4 — ✅ SELESAI v4.7)** — kirim struk dari halaman Transaksi + Settings. File: `src/utils/digitalReceipt.ts` (murni: `buildReceiptText`/`normalizePhone`/`buildWhatsAppUrl`/`buildMailtoUrl`/`findCustomerContact`/`autoSendReceiptTarget`), `src/pages/Transactions.tsx` (tombol "Struk Digital" + modal kirim WA/email: kontak terisi otomatis dari CRM, override manual, pratinjau struk), `src/pages/SettingsPage.tsx` (toggle "Kirim Struk Digital Otomatis via WhatsApp" di Pengaturan Format & Preview Struk), `src/pages/POS.tsx` (auto-kirim pasca-checkout: pre-open window WA sebelum await anti popup blocker, isi struk setelah sukses, skip idempotent replay), `src/types/index.ts` (AuditAction `send_digital_receipt` + setting `autoSendDigitalReceipt`), `src/lib/cloudSync.ts` (Migration 21 + guard syncSettings + fetch mapping), `supabase/schema.sql` (kolom `auto_send_digital_receipt`). Alur: struk diformat teks polos (layout thermal, memakai nama toko/alamat/header/footer dari Settings) → deep-link `wa.me`/`mailto` dengan struk sudah terisi (bukan pesan generik manual) → audit log tercatat; auto-kirim WA hanya bila setting aktif + pelanggan punya nomor valid. Total test: **235/235**.
+  - ⚠️ SQL sekali di Supabase SQL Editor (DB lama): `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;` (tercetak otomatis via Migration 21).
+- [x] **Urutan badge kategori POS bisa diatur (fitur baru — ✅ SELESAI v4.7)** — seret-and-lepas badge kategori di halaman POS untuk menentukan posisi awal/akhir. File: `src/utils/categoryOrder.ts` (murni: `buildCategoryTabs` — tab sistem 'Semua'/'Best Seller' tetap di depan, urutan `customCategories` didahulukan, kategori menu lain menyusul; `reorderTabs` — pindah item ke slot target), `src/store/menuStore.ts` (`reorderCategories` — simpan urutan ke `customCategories` + sync cloud via `syncCustomCategories` settings id=1, konsisten lintas device), `src/pages/POS.tsx` (drag-and-drop native HTML5 di badge row: `dragCat`/`dropCat` state, highlight ring saat drop target, cursor grab, `dataTransfer.setData` untuk Firefox), `src/test/categoryOrder.test.ts` (13 kasus). Total test: **248/248**. Tanpa migrasi DB — urutan memakai kolom `categories` yang sudah ada.
+
+### 11.3 Rekomendasi P1 — Fase berikutnya (diferensiasi)
+
+- [ ] **QRIS payment gateway** (menutup 2.3 — Midtrans/Duitku).
+- [ ] **Pembelian/restok + supplier (PO)** — alur beli → terima → stok naik (sekarang stok masuk hanya via opname/adjust/import).
+- [ ] **Harga khusus & diskon per item** (menutup 2.6 — grosir/member/price-list).
+- [ ] **QR Self-Order per meja** (roadmap #6).
+- [ ] **Multi-outlet fungsional** (menutup 2.4 — janji paket Pro).
+- [ ] **RLS ber-JWT + auth** (menutup 2.5 — prasyarat SaaS multi-klien).
+- [ ] **Push notification** (stok kritis, laporan harian — roadmap #7).
+
+### 11.4 Rekomendasi P2 — Nice-to-have
+
+- [ ] i18n multi-bahasa (roadmap #8)
+- [ ] Integrasi delivery (GoFood/Grab/Shopee) manual
+- [ ] Absensi karyawan
+- [ ] Ekspor ke software akuntansi (Excel/Jurnal)
+- [ ] Backup Google Drive (menutup 2.2)
+- [ ] Auto-reconnect & visibility (roadmap #1)
+
+### 11.5 Catatan Arah
+
+- Aplikasi sudah melampaui PRD dari sisi keandalan (atomic engine, pending/split, backup, opname aman). Yang tersisa: menutup 6 celah spesifikasi + memilih arah komersialisasi: **1 outlet mendalam (P0 + laporan)** vs **multi-tenant SaaS (butuh RLS JWT + multi-outlet + gateway)**. Keputusan ini menentukan urutan eksekusi P1.
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -709,6 +757,7 @@
 6. **Prioritas 8 (Stok vs Cancel/Demo)**: **8.1–8.4 SELESAI (v4.7) — tuntas**; stok tidak bocor lagi (Demo→Selesai & hapus Pending), sync cloud konsisten (satu helper bulk), stok negatif terpantau di UI.
 7. **Prioritas 9 (Opname & Adjustment)**: **9.1–9.4 SELESAI (v4.7) — tuntas**; log 'import' aktif, guard race opname lintas device, nama baru di log, opname/import batch.
 8. **Prioritas 10 (Mode Blind Opname & PIN)**: 10.1 (kritis — kebocoran mode buta), 10.2 (role-gate PIN + identitas approver), 10.3 (alasan wajib staff), 10.4 (clamp stok aktual), 10.5 (catatan desain ambang PIN) **SELESAI (v4.7) — Prioritas 10 tuntas**.
+9. **Prioritas 11 (Celah Spesifikasi & Arah Komersialisasi)**: terdokumentasi (v4.7) — 6 celah (WhatsApp marketing, Google Drive, QRIS gateway, multi-outlet, RLS JWT, diskon per item) + P0/P1/P2. Eksekusi: **P0 selesai 3/4** — P0.1 laporan PPN ✅, P0.2 refund ✅, P0.4 struk digital ✅; tersisa **P0.3 (role Owner)** → P1 bertahap → P2; arah komersialisasi (1 outlet vs SaaS) menentukan prioritas P1.
 
 ---
 

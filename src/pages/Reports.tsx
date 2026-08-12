@@ -10,7 +10,9 @@ import { formatRupiah, formatDate } from '../utils/format';
 import { splitContributionDivisor } from '../utils/splitAllocation';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
-import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF } from '../utils/pdfExport';
+import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF, exportPpnPDF } from '../utils/pdfExport';
+// v4.7 TO DO 11.2 (P0.1): Laporan PPN bulanan — logika murni
+import { isTaxableTransaction, toPpnRow, summarizePpn, aggregatePpnByDay } from '../utils/ppnReport';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -36,11 +38,12 @@ import {
   Download,
   Wallet,
   ClipboardCheck,
+  Receipt,
 } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement);
 
-type ReportTab = 'pnl' | 'transactions' | 'inventory' | 'shift' | 'cash' | 'opname';
+type ReportTab = 'pnl' | 'transactions' | 'inventory' | 'shift' | 'cash' | 'opname' | 'tax';
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Reports() {
@@ -66,6 +69,9 @@ export default function Reports() {
       // v4.1 TO DO 1.6: Sub-bill hasil split bill (anak) tidak dihitung lagi — omset sudah tercatat
       // di transaksi induk (parent). Tanpa ini, omset & HPP terhitung ganda (double accounting).
       if (t.splitParentId) return false;
+      // v4.7 TO DO 11.2 (P0.2): transaksi yang sudah di-refund tidak lagi dihitung sebagai penjualan
+      // (pendapatan sudah dikembalikan & tercatat sebagai Kas Keluar 'Refund' di Rekap Kas).
+      if (t.refunded) return false;
       const d = new Date(t.date);
       switch (dateFilterType) {
         case 'today':
@@ -193,6 +199,15 @@ export default function Reports() {
     });
     return Object.entries(map).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [filteredTx, menus]);
+
+  // v4.7 TO DO 11.2 (P0.1): PPN — transaksi kena pajak (tax > 0), DPP = subtotal − diskon
+  const ppnTaxable = useMemo(() => filteredTx.filter(isTaxableTransaction), [filteredTx]);
+  const ppnSummary = useMemo(() => summarizePpn(filteredTx), [filteredTx]);
+  const ppnDays = useMemo(() => aggregatePpnByDay(filteredTx), [filteredTx]);
+  const ppnRows = useMemo(
+    () => ppnTaxable.map(toPpnRow).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
+    [ppnTaxable]
+  );
 
   const { movements } = useCashMovementStore();
 
@@ -480,6 +495,28 @@ export default function Reports() {
     downloadCSV(rows, 'laporan-kas-kasir.csv');
   };
 
+  const exportPpnExcel = () => {
+    const rows = [
+      ['LAPORAN PPN (PAJAK PERTAMBAHAN NILAI)'],
+      ['Periode', getDateLabel()],
+      [''],
+      ['RINGKASAN'],
+      ['Dasar Pengenaan Pajak (DPP)', ppnSummary.totalDpp],
+      ['PPN Terkumpul (Kewajiban Setor)', ppnSummary.totalPpn],
+      ['Transaksi Kena Pajak', ppnSummary.taxableCount],
+      ['Transaksi Non-Pajak (Exempt)', ppnSummary.exemptCount],
+      [''],
+      ['REKAP PPN PER HARI'],
+      ['Tanggal', 'Jumlah Tx', 'DPP', 'PPN'],
+      ...ppnDays.map((d) => [d.label, d.txCount, d.dpp, d.ppn]),
+      [''],
+      ['DETAIL TRANSAKSI KENA PAJAK'],
+      ['No. Antrean', 'Tanggal', 'Kasir', 'DPP', 'PPN', 'Total'],
+      ...ppnRows.map((r) => [`#${r.queueNumber}`, formatDate(r.date), r.cashierName, r.dpp, r.ppn, r.total]),
+    ];
+    downloadCSV(rows, 'laporan-ppn.csv');
+  };
+
   const exportTransactionsExcel = () => {
     const rows = [
       ['LAPORAN TRANSAKSI'],
@@ -535,6 +572,7 @@ export default function Reports() {
     { id: 'pnl' as ReportTab, label: 'Laba Rugi', icon: DollarSign },
     { id: 'transactions' as ReportTab, label: 'Transaksi', icon: FileText },
     { id: 'cash' as ReportTab, label: 'Kas Kasir', icon: Wallet },
+    { id: 'tax' as ReportTab, label: 'PPN', icon: Receipt },
     { id: 'inventory' as ReportTab, label: 'Stok Bahan', icon: Package },
     { id: 'shift' as ReportTab, label: 'Shift', icon: Users },
     { id: 'opname' as ReportTab, label: 'Stock Opname', icon: ClipboardCheck },
@@ -592,6 +630,22 @@ export default function Reports() {
           )}
           {activeTab === 'transactions' && (
             <button onClick={() => exportTransactionsPDF({ storeName: settings.storeName, period: getDateLabel(), transactions: filteredTx.map((t) => ({ queue: `#${t.queueNumber}`, date: formatDate(t.date), cashier: t.cashierName, customer: t.customerName || '-', items: t.items.map((i) => `${i.name} x${i.quantity}`).join(', '), tax: formatRupiah(t.tax || 0), total: formatRupiah(t.totalAmount), method: t.paymentMethod, status: t.txStatus })), totalRevenue, txCount: filteredTx.length })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+              <FileText size={14} /> PDF
+            </button>
+          )}
+          {activeTab === 'tax' && (
+            <button onClick={exportPpnExcel} className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+              <Download size={14} /> CSV
+            </button>
+          )}
+          {activeTab === 'tax' && (
+            <button onClick={() => exportPpnPDF({
+              storeName: settings.storeName,
+              period: getDateLabel(),
+              summary: ppnSummary,
+              days: ppnDays.map((d) => ({ label: d.label, txCount: d.txCount, dpp: formatRupiah(d.dpp), ppn: formatRupiah(d.ppn) })),
+              rows: ppnRows.map((r) => ({ queue: `#${r.queueNumber}`, date: formatDate(r.date), dpp: formatRupiah(r.dpp), ppn: formatRupiah(r.ppn), total: formatRupiah(r.total) })),
+            })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
               <FileText size={14} /> PDF
             </button>
           )}
@@ -927,6 +981,105 @@ export default function Reports() {
                             {t.txStatus}
                           </span>
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PPN Tab (v4.7 TO DO 11.2 — P0.1) */}
+      {activeTab === 'tax' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="card p-5">
+              <p className="text-xs text-slate-500">PPN Terkumpul (Kewajiban Setor)</p>
+              <p className="text-2xl font-bold text-brand-700">{formatRupiah(ppnSummary.totalPpn)}</p>
+            </div>
+            <div className="card p-5">
+              <p className="text-xs text-slate-500">Dasar Pengenaan Pajak (DPP)</p>
+              <p className="text-2xl font-bold">{formatRupiah(ppnSummary.totalDpp)}</p>
+            </div>
+            <div className="card p-5">
+              <p className="text-xs text-slate-500">Transaksi Kena Pajak</p>
+              <p className="text-2xl font-bold text-green-700">{ppnSummary.taxableCount}</p>
+            </div>
+            <div className="card p-5">
+              <p className="text-xs text-slate-500">Transaksi Non-Pajak (Exempt)</p>
+              <p className="text-2xl font-bold text-slate-500">{ppnSummary.exemptCount}</p>
+            </div>
+          </div>
+
+          {/* Rekap per hari */}
+          <div className="card overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="font-bold">Rekap PPN per Hari</h3>
+              <span className="text-xs text-slate-400">DPP = Subtotal − Diskon (Net Sales)</span>
+            </div>
+            {ppnDays.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <p className="text-sm">Belum ada transaksi kena pajak pada periode ini</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0">
+                    <tr>
+                      <th className="text-left p-3 font-semibold">Tanggal</th>
+                      <th className="text-center p-3 font-semibold">Jumlah Tx</th>
+                      <th className="text-right p-3 font-semibold">DPP</th>
+                      <th className="text-right p-3 font-semibold">PPN</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ppnDays.map((d) => (
+                      <tr key={d.dateKey} className="border-b border-slate-50 dark:border-slate-700/40">
+                        <td className="p-3 font-medium">{d.label}</td>
+                        <td className="p-3 text-center">{d.txCount}</td>
+                        <td className="p-3 text-right font-mono">{formatRupiah(d.dpp)}</td>
+                        <td className="p-3 text-right font-mono text-brand-700 font-semibold">{formatRupiah(d.ppn)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Detail transaksi kena pajak */}
+          <div className="card overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="font-bold">Detail Transaksi Kena Pajak</h3>
+            </div>
+            {ppnRows.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <p className="text-sm">Belum ada data</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0">
+                    <tr>
+                      <th className="text-left p-3 font-semibold">No.</th>
+                      <th className="text-left p-3 font-semibold">Tanggal</th>
+                      <th className="text-left p-3 font-semibold">Kasir</th>
+                      <th className="text-right p-3 font-semibold">DPP</th>
+                      <th className="text-right p-3 font-semibold">PPN</th>
+                      <th className="text-right p-3 font-semibold">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ppnRows.map((r) => (
+                      <tr key={`${r.queueNumber}-${r.date}`} className="border-b border-slate-50 dark:border-slate-700/40">
+                        <td className="p-3 font-bold text-brand-700">#{r.queueNumber}</td>
+                        <td className="p-3 text-xs text-slate-500">{formatDate(r.date)}</td>
+                        <td className="p-3 text-sm">{r.cashierName}</td>
+                        <td className="p-3 text-right font-mono">{formatRupiah(r.dpp)}</td>
+                        <td className="p-3 text-right font-mono text-brand-700 font-semibold">{formatRupiah(r.ppn)}</td>
+                        <td className="p-3 text-right font-medium">{formatRupiah(r.total)}</td>
                       </tr>
                     ))}
                   </tbody>

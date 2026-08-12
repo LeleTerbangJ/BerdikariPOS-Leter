@@ -176,4 +176,6 @@ export const seedSettings: AppSettings = {
   receiptAsciiOnly: true,
   autoPrintReceipt: false,
   autoPrintKitchen: false,
+  // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (default off)
+  autoSendDigitalReceipt: false,
 };

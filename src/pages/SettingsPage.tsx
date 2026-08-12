@@ -1228,6 +1228,31 @@ export default function SettingsPage() {
               />
               <p className="text-xs text-slate-400 mt-1">Dicetak di bagian paling bawah struk.</p>
             </div>
+
+            {/* v4.7 TO DO 11.2 (P0.4): Struk Digital — auto-kirim WA pasca-checkout */}
+            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/20 rounded-xl border border-emerald-200 dark:border-emerald-800/40 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-sm text-emerald-800 dark:text-emerald-300">Kirim Struk Digital Otomatis via WhatsApp</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Setelah checkout berhasil, struk dibuka di WhatsApp dengan nomor pelanggan terisi otomatis — tinggal kirim.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={!!settings.autoSendDigitalReceipt}
+                    onChange={(e) => updateSettings({ autoSendDigitalReceipt: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                Syarat: transaksi memakai pelanggan (CRM) dengan nomor HP valid. Nama toko, alamat, header & footer di atas ikut
+tersalin ke struk digital.
+              </p>
+            </div>
           </div>
 
           {/* Live Receipt Preview */}
