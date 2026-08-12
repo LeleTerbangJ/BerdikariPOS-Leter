@@ -7,9 +7,20 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { formatRupiah, formatDate } from '../utils/format';
+import {
+  findDriftedOpnameItems,
+  resolveOpnameGate,
+  shouldShowLargeDifferenceBanner,
+  fillMissingItemReasons,
+  parseActualStock,
+  type StockDrift,
+} from '../utils/stockImport';
 import type { StockOpnameItem, StockOpname as StockOpnameType } from '../types';
+import type { ApproverInfo } from '../utils/pinAuth';
+import { getDeviceMarker } from '../utils/pinAuth';
 import PinModal from '../components/PinModal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import { AlertTriangle, CheckCircle, History, Search, ClipboardCheck, EyeOff } from 'lucide-react';
 
 const REASON_OPTIONS = ['Basi', 'Bahan Rusak', 'Salah Input', 'Tercecer', 'Penyusutan', 'Lainnya'];
@@ -25,7 +36,7 @@ interface OpnameRow {
 }
 
 export default function StockOpname() {
-  const { items: inventory, updateItem } = useInventoryStore();
+  const { items: inventory, applyBulkStock } = useInventoryStore();
   const { addLog: addStockLog } = useStockLogStore();
   const { records, addRecord } = useStockOpnameStore();
   const { currentUser } = useAuthStore();
@@ -49,6 +60,14 @@ export default function StockOpname() {
   const [opnamePage, setOpnamePage] = useState(1);
   const [showPinModal, setShowPinModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  // v4.7 TO DO 9.2: item yang stoknya berubah di perangkat lain sejak form dibuka (race lintas device)
+  const [driftConfirm, setDriftConfirm] = useState<{ items: StockDrift[] } | null>(null);
+  // v4.7 TO DO 10.2: approver (Manager) yang menyetujui — identitas dicatat TERPISAH dari staff penginput.
+  const [approver, setApprover] = useState<ApproverInfo | null>(null);
+  // v4.7 TO DO 10.3: dialog alasan utama wajib pasca-PIN untuk Staf Gudang (dual-control + jejak audit).
+  const [showReasonDialog, setShowReasonDialog] = useState(false);
+  const [reasonChoice, setReasonChoice] = useState('');
+  const [reasonDetail, setReasonDetail] = useState('');
 
   // Unique units for filter dropdown
   const uniqueUnits = useMemo(() => {
@@ -61,7 +80,8 @@ export default function StockOpname() {
     return rows
       .filter((r) => r.actualStock !== '')
       .map((r) => {
-        const actual = parseFloat(r.actualStock) || 0;
+        // v4.7 TO DO 10.4: clamp negatif/NaN — nilai inilah yang ditulis ke inventory.
+        const actual = parseActualStock(r.actualStock);
         const diff = actual - r.systemStock;
         const loss = diff < 0 ? Math.abs(diff) * r.costPerUnit : 0;
         return {
@@ -75,6 +95,9 @@ export default function StockOpname() {
   const totalLoss = opnameItems.reduce((a, i) => a + i.lossValue, 0);
   const itemsWithDiff = opnameItems.filter((i) => i.difference !== 0).length;
   // PIN trigger: any item with difference >= 10% of system stock
+  // v4.7 TO DO 10.5 (catatan desain): ambang = max(10% stok sistem, 1 unit). Untuk item dengan
+  // stok sistem < 10 (mis. stok 5, selisih 1 = 20%), ambang 1 unit membuat PIN lebih sering
+  // muncul — ketat tapi DISENGAJA (validasi stok rendah lebih ketat). Tidak diubah.
   const hasLargeDifference = opnameItems.some((i) => {
     const threshold = Math.max(i.systemStock * 0.1, 1);
     return Math.abs(i.difference) >= threshold;
@@ -99,6 +122,17 @@ export default function StockOpname() {
     setRows((prev) => prev.map((r) => (r.inventoryId === targetId ? { ...r, [field]: value } : r)));
   };
 
+  // Gate konfirmasi: PIN Manager atau dialog konfirmasi biasa.
+  // v4.7 TO DO 10.1: Staf Gudang SELALU lewat PIN (jalur seragam) — tanpa banner/ConfirmDialog
+  // terpisah agar tidak ada sinyal diferensial (oracle ±10% untuk membaca stok sistem).
+  const proceedToConfirm = () => {
+    if (resolveOpnameGate(isWarehouseStaff, hasLargeDifference) === 'pin') {
+      setShowPinModal(true);
+    } else {
+      setShowConfirm(true);
+    }
+  };
+
   const handleSubmitAttempt = () => {
     if (filledCount === 0) return alert('Mohon isi setidaknya 1 item stok aktual.');
     
@@ -110,25 +144,46 @@ export default function StockOpname() {
       }
     }
 
-    if (hasLargeDifference) {
-      setShowPinModal(true);
-    } else {
-      setShowConfirm(true);
+    // v4.7 TO DO 9.2: guard race lintas device — form menangkap systemStock saat DIBUKA;
+    // jika perangkat lain mengubah stok sejak itu, menulis stok absolut akan menimpa hasilnya
+    // (lost update) tanpa jejak. Deteksi & minta konfirmasi sebelum commit.
+    const drifted = findDriftedOpnameItems(opnameItems, inventory);
+    if (drifted.length > 0) {
+      setDriftConfirm({ items: drifted });
+      return;
     }
+
+    proceedToConfirm();
   };
 
-  const doSubmit = (pinVerified: boolean) => {
+  const doSubmit = (pinVerified: boolean, approver?: ApproverInfo, adjustmentReason?: string, reasonDetailText?: string) => {
     if (!currentUser) return;
+    // v4.7 TO DO 10.3: alasan utama (wajib Staf Gudang pasca-PIN) diterapkan ke item berselisih
+    // yang belum punya alasan — jejak audit penyebab kerugian tidak lagi kosong/'-'.
+    const items = adjustmentReason ? fillMissingItemReasons(opnameItems, adjustmentReason) : opnameItems;
+    const finalNotes = adjustmentReason
+      ? [notes?.trim(), `Alasan: ${adjustmentReason}${reasonDetailText ? ` — ${reasonDetailText}` : ''}`].filter(Boolean).join('\n')
+      : notes?.trim() || undefined;
     const record: StockOpnameType = {
       id: uuid(), date: new Date().toISOString(),
       staffId: currentUser.id, staffName: currentUser.name,
-      items: opnameItems, totalLossValue: totalLoss,
+      items, totalLossValue: totalLoss,
       totalItems: filledCount, itemsWithDifference: itemsWithDiff,
-      pinVerified, notes: notes || undefined,
+      pinVerified,
+      // v4.7 TO DO 10.2: identitas approver + jejak audit (timestamp + penanda perangkat).
+      approverId: approver?.id,
+      approverName: approver?.name,
+      approverRole: approver?.role,
+      approvedAt: pinVerified ? new Date().toISOString() : undefined,
+      deviceId: pinVerified ? getDeviceMarker() : undefined,
+      adjustmentReason,
+      notes: finalNotes,
     };
     addRecord(record);
 
-    for (const item of opnameItems) {
+    // v4.7 TO DO 9.4: batch — SATU setState + SATU syncInventoryStock bulk (bukan N × syncInventoryItem)
+    const stockEntries: { id: string; stock: number }[] = [];
+    for (const item of items) {
       if (item.difference !== 0) {
         addStockLog({
           id: uuid(), inventoryId: item.inventoryId, inventoryName: item.inventoryName,
@@ -137,13 +192,15 @@ export default function StockOpname() {
           unit: item.unit, reason: `Stock Opname: ${item.reason}`,
           date: new Date().toISOString(),
         });
-        updateItem(item.inventoryId, { stock: item.actualStock }, { skipLog: true });
+        stockEntries.push({ id: item.inventoryId, stock: item.actualStock });
       }
     }
+    applyBulkStock(stockEntries);
 
     addAuditLog(currentUser.id, currentUser.name, currentUser.role, 'stock_opname',
-      `Stock Opname: ${filledCount} item, ${itemsWithDiff} selisih, Kerugian: ${formatRupiah(totalLoss)}`,
-      { opnameId: record.id, totalLoss, itemsWithDiff, pinVerified }
+      `Stock Opname: ${filledCount} item, ${itemsWithDiff} selisih, Kerugian: ${formatRupiah(totalLoss)}` +
+        (approver ? ` — Disetujui oleh ${approver.name}` : ''),
+      { opnameId: record.id, totalLoss, itemsWithDiff, pinVerified, approverId: approver?.id, approverName: approver?.name, approvedAt: record.approvedAt, deviceId: record.deviceId, adjustmentReason }
     );
 
     // Reset
@@ -238,7 +295,8 @@ export default function StockOpname() {
                 </thead>
                 <tbody>
                   {paginatedRows.map((row, idx) => {
-                    const actual = parseFloat(row.actualStock);
+                    // v4.7 TO DO 10.4: preview memakai nilai ter-clamp yang sama dengan yang disimpan.
+                    const actual = parseActualStock(row.actualStock);
                     const diff = row.actualStock !== '' ? actual - row.systemStock : null;
                     const loss = diff !== null && diff < 0 ? Math.abs(diff) * row.costPerUnit : 0;
                     const hasDiff = diff !== null && diff !== 0;
@@ -309,7 +367,7 @@ export default function StockOpname() {
               <label className="label">Catatan Tambahan (Opsional)</label>
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="input" rows={2} placeholder="Catatan untuk opname ini..." />
             </div>
-            {hasLargeDifference && (
+            {shouldShowLargeDifferenceBanner(isWarehouseStaff, hasLargeDifference) && (
               <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl flex items-start gap-2">
                 <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-700 dark:text-amber-400">
@@ -342,7 +400,12 @@ export default function StockOpname() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-semibold text-sm">{formatDate(rec.date)}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Oleh: {rec.staffName} {rec.pinVerified && <span className="text-green-600">✓ PIN Verified</span>}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Oleh: {rec.staffName}{' '}
+                    {rec.pinVerified && (
+                      <span className="text-green-600">✓ {rec.approverName ? `Disetujui ${rec.approverName}` : 'PIN Verified'}</span>
+                    )}
+                  </p>
                 </div>
                 <div className="text-right">
                   {isWarehouseStaff ? (
@@ -356,6 +419,7 @@ export default function StockOpname() {
                 </div>
               </div>
               {rec.notes && <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">{rec.notes}</p>}
+              {rec.adjustmentReason && <p className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">Alasan penyesuaian: <strong>{rec.adjustmentReason}</strong></p>}
               {rec.items.length > 0 && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -391,13 +455,61 @@ export default function StockOpname() {
         </div>
       )}
 
+      {/* v4.7 TO DO 10.1: judul generik untuk Staf Gudang — tanpa menyebut "Selisih Besar" */}
       <PinModal open={showPinModal} onClose={() => setShowPinModal(false)}
-        onSuccess={() => { setShowPinModal(false); doSubmit(true); }}
-        title="Verifikasi PIN Manager — Selisih Besar" />
+        requireManager
+        onSuccess={(approver) => {
+          setShowPinModal(false);
+          // v4.7 TO DO 10.3: Staf Gudang (mode buta) wajib pilih alasan utama SETELAH PIN disetujui —
+          // rangkuman selisih + alasan sebelum eksekusi (dual-control & jejak audit penyebab kerugian).
+          if (isWarehouseStaff && itemsWithDiff > 0) {
+            setApprover(approver ?? null);
+            setReasonChoice('');
+            setReasonDetail('');
+            setShowReasonDialog(true);
+          } else {
+            doSubmit(true, approver);
+          }
+        }}
+        title={isWarehouseStaff ? 'Otorisasi Manager' : 'Verifikasi PIN Manager — Selisih Besar'} />
+      {/* v4.7 TO DO 10.3: alasan utama wajib untuk Staf Gudang setelah PIN Manager disetujui */}
+      <Modal open={showReasonDialog} onClose={() => setShowReasonDialog(false)}
+        title="Alasan Penyesuaian (Wajib)" maxWidth="max-w-md">
+        <div className="space-y-4">
+          <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-800 dark:text-amber-300">
+            <p><strong>PIN Manager disetujui.</strong> {itemsWithDiff} item memiliki selisih stok.</p>
+            <p className="mt-1">Pilih alasan utama untuk penyesuaian ini sebelum data disimpan — alasan dicatat untuk audit penyebab kerugian.</p>
+          </div>
+          <div>
+            <label className="label">Alasan Utama</label>
+            <select value={reasonChoice} onChange={(e) => setReasonChoice(e.target.value)} className="input">
+              <option value="">— Pilih alasan —</option>
+              {REASON_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Detail (Opsional)</label>
+            <textarea value={reasonDetail} onChange={(e) => setReasonDetail(e.target.value)} className="input" rows={2} placeholder="Keterangan tambahan (jika ada)..." />
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setShowReasonDialog(false)} className="btn-secondary flex-1">Batal</button>
+            <button onClick={() => { if (reasonChoice) { setShowReasonDialog(false); doSubmit(true, approver ?? undefined, reasonChoice, reasonDetail.trim()); } }}
+              disabled={!reasonChoice} className="btn-primary flex-1">Eksekusi Opname</button>
+          </div>
+        </div>
+      </Modal>
       <ConfirmDialog open={showConfirm} onClose={() => setShowConfirm(false)}
         onConfirm={() => { setShowConfirm(false); doSubmit(false); }}
         title="Konfirmasi Stock Opname"
         message={isWarehouseStaff ? `Simpan hasil opname ${filledCount} item fisik? Data stok inventory akan diperbarui.` : `Simpan hasil opname ${filledCount} item? ${itemsWithDiff} item memiliki selisih. Stok di inventory akan diperbarui sesuai stok fisik.`} />
+      {/* v4.7 TO DO 9.2: peringatan stok berubah sejak form dibuka (race lintas device) */}
+      <ConfirmDialog open={!!driftConfirm} onClose={() => setDriftConfirm(null)}
+        onConfirm={() => { setDriftConfirm(null); proceedToConfirm(); }}
+        title="⚠️ Stok Berubah Sejak Form Dibuka"
+        message={isWarehouseStaff
+          ? `${driftConfirm?.items.length ?? 0} item memiliki stok yang berubah di perangkat lain sejak form ini dibuka. Lanjutkan dengan stok fisik yang dihitung? Stok terkini akan ditimpa.`
+          : `Stok beberapa item berubah sejak form dibuka (kemungkinan ada transaksi di perangkat lain): ${driftConfirm?.items.map((d) => `${d.name} (${d.systemStock} → ${d.currentStock} ${d.unit})`).join(', ')}. Lanjutkan menulis stok fisik?`
+        } />
     </div>
   );
 }

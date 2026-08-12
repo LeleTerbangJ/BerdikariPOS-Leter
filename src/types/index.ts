@@ -443,5 +443,19 @@ export interface StockOpname {
   totalItems: number;     // Jumlah item yang diopname
   itemsWithDifference: number; // Jumlah item yang ada selisih
   pinVerified: boolean;   // Apakah PIN Manager sudah diverifikasi (wajib jika ada selisih besar)
+
+  // v4.7 TO DO 10.2: identitas approver + jejak audit (dual-control).
+  // PIN/approval hanya bisa dari akun Manager/Owner; identitas dicatat TERPISAH dari
+  // staffId (staff penginput) karena approval diketik manager di perangkat staff.
+  approverId?: string;    // ID user Manager yang menyetujui
+  approverName?: string;  // Nama approver
+  approverRole?: string;  // Role approver (selalu 'Manager')
+  approvedAt?: string;    // ISO timestamp saat approval berhasil
+  deviceId?: string;      // Penanda perangkat tempat approval terjadi
+
+  // v4.7 TO DO 10.3: alasan utama wajib untuk Staf Gudang setelah PIN disetujui
+  // (mode buta — alasan per-item tidak praktis karena staff tidak tahu item yang berselisih).
+  adjustmentReason?: string;
+
   notes?: string;         // Catatan tambahan
 }

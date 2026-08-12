@@ -6,6 +6,7 @@
 - **Repository**: https://github.com/LeleTerbangJ/BerdikariPOS-Leter.git
 - **Branch produksi**: `main` (Vercel auto-deploy dari `main`)
 - **CI/CD**: Push/merge ke `main` → Vercel auto-build & deploy (1–2 menit)
+- **Changelog rilis**: [`CHANGELOG.md`](./CHANGELOG.md) — riwayat v4.4 → v4.7 (fitur baru, perbaikan, SQL wajib)
 
 ## Daftar Isi
 1. [Apakah Harus Produksi Dulu?](#1-apakah-harus-produksi-dulu)
@@ -15,6 +16,7 @@
 5. [Model Bisnis & Pricing](#5-model-bisnis--pricing)
 6. [Panduan Pemakaian untuk Klien](#6-panduan-pemakaian-untuk-klien)
 7. [Checklist Sebelum Jual / Komersialisasi](#7-checklist-sebelum-jual--komersialisasi)
+8. [Changelog Rilis](#8-changelog-rilis)
 
 ---
 
@@ -29,6 +31,7 @@
 - Background Printer Connection Monitor dengan status banner & 1-click reconnect
 - **Rekap Kas (Kas Masuk/Keluar) tersinkron lintas device** (fix v4.6 — RLS + offline queue + badge "Belum Sync")
 - Penyimpanan lokal IndexedDB untuk transaksi & audit log (kuota tidak lagi jadi batas)
+- **Stock Opname aman (v4.7)** — mode blind tanpa kebocoran oracle, otorisasi dual-control Manager, alasan penyesuaian wajib, clamp stok aktual negatif/NaN
 
 ### Arsitektur Production:
 ```
@@ -70,7 +73,7 @@ Vercel otomatis detect push ke `main` dan re-deploy dalam 1–2 menit. Tidak per
 
 ### Sebelum merge ke produksi, pastikan:
 - `npx tsc --noEmit` → 0 error
-- `npx vitest run` → semua test lolos (saat ini **99/99**)
+- `npx vitest run` → semua test lolos (saat ini **192/192**)
 - `npm run build` → sukses
 - Perubahan database (jika ada) sudah dijalankan di Supabase SQL Editor — lihat §4
 
@@ -106,7 +109,7 @@ Setiap klien (toko) yang membeli aplikasi ini perlu:
 
 ### Setup Cepat untuk 1 Klien Baru (Opsi B):
 1. Buat Supabase project baru (paket gratis sudah cukup untuk 1 outlet).
-2. **Jalankan `supabase/schema.sql` (v4.6) di SQL Editor** — file ini sudah lengkap: semua tabel, kolom v4.1–v4.6, RLS + policy, dan publication realtime. **Project baru TIDAK perlu SQL tambahan.**
+2. **Jalankan `supabase/schema.sql` (v4.7) di SQL Editor** — file ini sudah lengkap: semua tabel, kolom v4.1–v4.7 (termasuk kolom otorisasi Stock Opname), RLS + policy, dan publication realtime. **Project baru TIDAK perlu SQL tambahan.**
 3. Deploy frontend (Vercel) dengan env vars klien tersebut:
 
 | Variabel | Nilai | Dari mana |
@@ -132,12 +135,12 @@ Setiap klien (toko) yang membeli aplikasi ini perlu:
 ## 4. Perubahan Database yang WAJIB Dijalankan (DB Lama)
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` (v4.7) — selesai.
-> Untuk **meng-upgrade database yang sudah ada** ke v4.6, jalankan seluruh blok berikut di Supabase SQL Editor. Aman dijalankan berulang (`IF NOT EXISTS`), kecuali butir 7 yang sudah dibuat idempoten via DO block.
-> **v4.7 menambah satu langkah Storage opsional** untuk Auto Backup cloud — lihat §4b.
+> Untuk **meng-upgrade database yang sudah ada** ke v4.7, jalankan seluruh blok berikut di Supabase SQL Editor. Aman dijalankan berulang (`IF NOT EXISTS` / DO block idempoten).
+> **v4.7 menambah dua hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), dan (b) §4b — bucket Storage untuk Auto Backup cloud (opsional).
 
 ```sql
 -- ============================================================
--- UPGRADE DB LAMA → v4.6
+-- UPGRADE DB LAMA → v4.7
 -- ============================================================
 
 -- 1. Pengaturan Pajak & Fitur Meja (v4.2)
@@ -218,12 +221,24 @@ BEGIN
   END IF;
 END $$;
 ALTER TABLE cash_movements ENABLE ROW LEVEL SECURITY;
+
+-- 8. ⚠️ v4.7 WAJIB — kolom otorisasi Stock Opname (TO DO 10.2/10.3)
+-- Identitas approver (Manager), jejak audit (timestamp + penanda perangkat), dan alasan
+-- penyesuaian wajib untuk Staf Gudang. Ditulis syncStockOpname — wajib ada agar upsert
+-- tidak gagal pada DB lama (mencegah penumpukan offline queue).
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_id TEXT;
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_name TEXT;
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_role TEXT;
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS device_id TEXT;
+ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;
 ```
 
 > [!NOTE] **Self-healing di sisi app**
 > `runMigrations()` dijalankan otomatis setiap app dibuka:
 > - Mendeteksi kolom yang kurang dan mencetak SQL perbaikannya di console (Migration 1–17).
 > - **Migration 18 (v4.6)** mendeteksi RLS-aktif-tanpa-policy di `cash_movements` via probe INSERT tanpa side-effect, lalu mencetak SQL idempoten untuk dijalankan sekali di SQL Editor.
+> - **Migration 19 (v4.7)** mendeteksi kolom otorisasi opname yang kurang di `stock_opnames` (approver_id / approver_name / approver_role / approved_at / device_id / adjustment_reason) dan mencetak SQL butir 8.
 > Jadi jika ada yang terlewat, console browser akan menunjukkan persis apa yang perlu dijalankan.
 
 ### 4b. (v4.7) Supabase Storage — bucket untuk Auto Backup cloud
@@ -325,17 +340,33 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] Penyimpanan IndexedDB (v4.5) — transaksi & audit log tidak lagi dibatasi kuota localStorage
 - [x] **Backup & Restore aman (v4.7)** — checksum berbasis isi (tamper terdeteksi), restore mode Replace (snapshot penuh), media/bundle/StockLogs ikut di-restore & di-sync
 - [x] **Auto Backup berjalan otomatis (v4.7)** — scheduler Daily/Weekly + upload ke Supabase Storage bucket `backups` (opsional)
-- [x] Validasi otomatis: tsc 0 error, **125/125 test**, build produksi sukses
+- [x] **Stock Opname aman & lengkap (v4.7)** — Prioritas 9 & 10: log import CSV, guard race lintas device (anti lost update), batch sync, mode blind tanpa kebocoran oracle ±10%, otorisasi PIN dual-control (hanya Manager — identitas approver + penanda perangkat tercatat), alasan penyesuaian wajib untuk Staf Gudang, clamp stok aktual negatif/NaN
+- [x] Validasi otomatis: tsc 0 error, **192/192 test**, build produksi sukses (diverifikasi ulang v4.7)
 
 ### 🔲 Sebelum Serah Terima ke Klien
 - [ ] Ganti password default semua akun
 - [ ] Buat Supabase project terpisah per klien (Opsi B) dan isi env vars yang benar
-- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 + §4b untuk DB lama)
+- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 — termasuk butir 8 kolom otorisasi opname — + §4b bucket Auto Backup untuk DB lama)
 - [ ] (Opsional) Buat bucket `backups` + policy Storage (§4b) bila klien memakai Auto Backup cloud
 - [ ] Verifikasi sync antar 2 device (kasir + dapur): pesanan, stok, promo, Rekap Kas
 - [ ] Uji offline: matikan internet → catat kas/transaksi → badge "Belum Sync" → online → data muncul di device lain
 - [ ] Backup database (Supabase → Database → Backups) aktif
 - [ ] Siapkan SLA/support & kontak darurat
+
+---
+
+## 8. Changelog Rilis
+
+Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL yang wajib dijalankan** — ada di **[`CHANGELOG.md`](./CHANGELOG.md)**:
+
+| Versi | Ringkasan |
+|---|---|
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud |
+| **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
+| **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
+| **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |
+
+> **Prosedur rilis berikutnya**: tambahkan bagian baru di `CHANGELOG.md` → perbarui blok upgrade DB di §4 dokumen ini → jalankan validasi (tsc, vitest, build) → merge ke `main`.
 
 ---
 

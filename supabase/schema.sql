@@ -245,6 +245,14 @@ CREATE TABLE IF NOT EXISTS stock_opnames (
   total_items INT DEFAULT 0,
   items_with_difference INT DEFAULT 0,
   pin_verified BOOLEAN DEFAULT false,
+  -- v4.7 TO DO 10.2: identitas approver + jejak audit (dual-control opname)
+  approver_id TEXT,
+  approver_name TEXT,
+  approver_role TEXT,
+  approved_at TIMESTAMPTZ,
+  device_id TEXT,
+  -- v4.7 TO DO 10.3: alasan penyesuaian wajib untuk Staf Gudang pasca-PIN
+  adjustment_reason TEXT,
   notes TEXT
 );
 

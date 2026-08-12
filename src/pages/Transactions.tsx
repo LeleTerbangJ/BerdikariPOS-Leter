@@ -11,6 +11,7 @@ import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
+import { applyStatusStockEffects, type StockEffectStatus } from '../utils/transactionStockActions';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import type { TxStatus, Transaction } from '../types';
 import PinModal from '../components/PinModal';
@@ -188,51 +189,27 @@ export default function Transactions() {
   const hasSplitChildren = (tx: Transaction): boolean =>
     !!tx.splitParentId || transactions.some((t) => t.splitParentId === tx.id);
 
+  // v4.7 TO DO 8.1 & 8.2: Satu-satunya jalur efek stok/kunjungan untuk transisi status & delete
+  // (sebelumnya dua rantai if-else identik di onConfirmAction & onPinSuccess — Demo→Selesai
+  // dan hapus Pending tidak pernah deduct/revert → stok bocor).
+  const applyStockEffects = (tx: Transaction, toStatus: StockEffectStatus) => {
+    applyStatusStockEffects(
+      tx,
+      toStatus,
+      hasSplitChildren(tx),
+      () => calculateDeductions(tx),
+      { revertStock, deductStock, revertVisit, recordVisit }
+    );
+  };
+
   // Execute after Manager confirms
   const onConfirmAction = () => {
     if (!confirmAction) return;
     if (confirmAction.type === 'status' && confirmAction.status) {
       const tx = transactions.find((t) => t.id === confirmAction.id);
       if (tx) {
-        if (confirmAction.status === 'Cancel' && tx.txStatus === 'Selesai') {
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
-            if (tx.customerId) {
-              revertVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        } else if (confirmAction.status === 'Cancel' && tx.txStatus === 'Pending') {
-          // v4.1 TO DO 1.7: Void pesanan gantung → kembalikan stok reserve (dipotong saat pending dibuat).
-          // Guard hasSplitChildren: pending yang sudah displit dikelola sesi split — jangan revert.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Cancel pesanan gantung #${tx.queueNumber}`);
-          }
-        } else if (confirmAction.status === 'Demo' && tx.txStatus === 'Pending') {
-          // v4.1 TO DO 1.7: Status Demo tidak tercatat sebagai penjualan → stok reserve dikembalikan agar tidak bocor.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Ubah pesanan gantung #${tx.queueNumber} menjadi Demo`);
-          }
-        } else if (confirmAction.status === 'Demo' && tx.txStatus === 'Selesai') {
-          // v4.1 TO DO 1.7 (konsistensi): Selesai → Demo juga tidak tercatat sebagai penjualan → kembalikan stok & kunjungan.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Ubah transaksi #${tx.queueNumber} menjadi Demo`);
-            if (tx.customerId) {
-              revertVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        } else if (confirmAction.status === 'Selesai' && tx.txStatus === 'Cancel') {
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
-            if (tx.customerId) {
-              recordVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        }
+        // TO DO 8.1: termasuk Demo → Selesai (sebelumnya hanya Cancel → Selesai yang deduct)
+        applyStockEffects(tx, confirmAction.status);
       }
       updateTxStatus(confirmAction.id, confirmAction.status);
       if (currentUser) {
@@ -241,13 +218,10 @@ export default function Transactions() {
     } else if (confirmAction.type === 'delete') {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
       // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
+      // v4.7 TO DO 8.2: hapus Pending juga me-revert stok reserve (sebelumnya hanya Selesai).
       const tx = transactions.find((t) => t.id === confirmAction.id);
-      if (tx && tx.txStatus === 'Selesai' && !hasSplitChildren(tx)) {
-        const deductions = calculateDeductions(tx);
-        revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
-        if (tx.customerId) {
-          revertVisit(tx.customerId, tx.totalAmount);
-        }
+      if (tx) {
+        applyStockEffects(tx, 'DELETE');
       }
       deleteTransaction(confirmAction.id);
       if (currentUser) {
@@ -262,45 +236,8 @@ export default function Transactions() {
     if (pinAction.type === 'status' && pinAction.status) {
       const tx = transactions.find((t) => t.id === pinAction.id);
       if (tx) {
-        if (pinAction.status === 'Cancel' && tx.txStatus === 'Selesai') {
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Cancel transaksi #${tx.queueNumber}`);
-            if (tx.customerId) {
-              revertVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        } else if (pinAction.status === 'Cancel' && tx.txStatus === 'Pending') {
-          // v4.1 TO DO 1.7: Void pesanan gantung → kembalikan stok reserve (dipotong saat pending dibuat).
-          // Guard hasSplitChildren: pending yang sudah displit dikelola sesi split — jangan revert.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Cancel pesanan gantung #${tx.queueNumber}`);
-          }
-        } else if (pinAction.status === 'Demo' && tx.txStatus === 'Pending') {
-          // v4.1 TO DO 1.7: Status Demo tidak tercatat sebagai penjualan → stok reserve dikembalikan agar tidak bocor.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Ubah pesanan gantung #${tx.queueNumber} menjadi Demo`);
-          }
-        } else if (pinAction.status === 'Demo' && tx.txStatus === 'Selesai') {
-          // v4.1 TO DO 1.7 (konsistensi): Selesai → Demo juga tidak tercatat sebagai penjualan → kembalikan stok & kunjungan.
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            revertStock(deductions, `Revert: Ubah transaksi #${tx.queueNumber} menjadi Demo`);
-            if (tx.customerId) {
-              revertVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        } else if (pinAction.status === 'Selesai' && tx.txStatus === 'Cancel') {
-          if (!hasSplitChildren(tx)) {
-            const deductions = calculateDeductions(tx);
-            deductStock(deductions, `Deduct: Re-enable transaksi #${tx.queueNumber}`);
-            if (tx.customerId) {
-              recordVisit(tx.customerId, tx.totalAmount);
-            }
-          }
-        }
+        // TO DO 8.1: termasuk Demo → Selesai (sebelumnya hanya Cancel → Selesai yang deduct)
+        applyStockEffects(tx, pinAction.status);
       }
       updateTxStatus(pinAction.id, pinAction.status);
       if (currentUser) {
@@ -309,13 +246,10 @@ export default function Transactions() {
     } else if (pinAction.type === 'delete') {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
       // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
+      // v4.7 TO DO 8.2: hapus Pending juga me-revert stok reserve (sebelumnya hanya Selesai).
       const tx = transactions.find((t) => t.id === pinAction.id);
-      if (tx && tx.txStatus === 'Selesai' && !hasSplitChildren(tx)) {
-        const deductions = calculateDeductions(tx);
-        revertStock(deductions, `Revert: Hapus transaksi #${tx.queueNumber}`);
-        if (tx.customerId) {
-          revertVisit(tx.customerId, tx.totalAmount);
-        }
+      if (tx) {
+        applyStockEffects(tx, 'DELETE');
       }
       deleteTransaction(pinAction.id);
       if (currentUser) {
