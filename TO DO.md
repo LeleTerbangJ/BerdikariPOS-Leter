@@ -561,107 +561,130 @@
 
 ## 🟤 PRIORITAS 8 — PERGERAKAN STOK: TRANSAKSI vs CANCEL/DEMO (Audit, v4.6)
 
-> Sumber: audit pergerakan stok bahan baku — jalur checkout (`atomicTransactionEngine`), status change & delete (`Transactions.tsx`), `inventoryStore` (deductStock/revertStock), `hpp.ts` (calculateItemDeductions via recipeSnapshot). Status: **dokumentasi temuan — belum dieksekusi**.
+> Sumber: audit pergerakan stok bahan baku — jalur checkout (`atomicTransactionEngine`), status change & delete (`Transactions.tsx`), `inventoryStore` (deductStock/revertStock), `hpp.ts` (calculateItemDeductions via recipeSnapshot). Status: **8.1–8.4 SELESAI (v4.7) — Prioritas 8 tuntas**.
 
 ### 8.1 (KRITIS) Demo → Selesai (re-enable) tidak memotong stok — penjualan tercatat tanpa bahan baku
 - **File**: `src/pages/Transactions.tsx` (`onConfirmAction` & `onPinSuccess`, baris ~227/295)
 - **Masalah**: Tombol "Selesai" tampil untuk semua baris `txStatus !== 'Selesai'` — termasuk transaksi **Demo** (baris ~624–630). Handler hanya menangani `status === 'Selesai' && tx.txStatus === 'Cancel'` (re-enable BUG-K3); `Demo → Selesai` tidak memicu `deductStock`. Padahal saat menjadi Demo stok sudah direvert → transaksi jadi Selesai (tercatat penjualan) TANPA bahan baku terpotong → **stok bocor**. Pola identik BUG-K3 yang sudah difix untuk Cancel, kasus Demo terlewat.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**:
-  - [ ] Tambah branch `status === 'Selesai' && tx.txStatus === 'Demo'` → `deductStock` (via `calculateDeductions`) + `recordVisit` di `onConfirmAction` & `onPinSuccess`.
+- **Status**: ✅ **SELESAI (v4.7)** — Demo → Selesai kini memotong stok & mencatat kunjungan (pola BUG-K3 lengkap).
+- **Aksi (tereksekusi)**:
+  - [x] Logika transisi stok di-ekstrak ke helper murni **`src/utils/transactionStockActions.ts`** (`applyStatusStockEffects`) — dua rantai if-else identik di `onConfirmAction` & `onPinSuccess` diganti satu pemanggilan (DRY, tidak ada lagi celah "kasus terlewat").
+  - [x] Branch `(Cancel|Demo) → Selesai` → `deductStock` + `recordVisit` (guard `hasSplitChildren`).
+  - [x] 14 test baru di `src/test/transactionStockActions.test.ts` (termasuk Demo→Selesai, regresi transisi lama, guard split, edge tanpa customerId/queueNumber).
 
 ### 8.2 (KRITIS) Hapus transaksi Pending dari halaman Transaksi tidak me-revert stok reserve — bocor
 - **File**: `src/pages/Transactions.tsx` (blok delete `onConfirmAction`/`onPinSuccess`, baris ~245/313)
 - **Masalah**: Tombol "Hapus" tampil tanpa syarat status (baris ~648). Blok delete hanya `revertStock` bila `tx.txStatus === 'Selesai'`; menghapus **Pending** → `deleteTransaction` langsung tanpa revert → stok yang di-reserve saat simpan pending tidak pernah dikembalikan. (Jalur PendingPaymentsModal sudah aman via `cancelPendingTransaction` — yang bocor jalur halaman Transaksi.)
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**:
-  - [ ] Pada blok delete, tambah `tx.txStatus === 'Pending'` (dengan guard `hasSplitChildren`) → `revertStock` sebelum `deleteTransaction`.
+- **Status**: ✅ **SELESAI (v4.7)** — hapus Pending dari halaman Transaksi kini me-revert stok reserve.
+- **Aksi (tereksekusi)**:
+  - [x] `DELETE` di `applyStatusStockEffects`: `Pending` → `revertStock` (reason "Hapus pesanan gantung #N") sebelum `deleteTransaction`; `Selesai` → revert + revertVisit (dipertahankan); `Cancel`/`Demo` → tanpa efek (sudah di-revert saat transisi).
+  - [x] Guard `hasSplitChildren` tetap berlaku (transaksi split tidak disentuh).
+  - [x] Test: DELETE Pending revert tanpa revertVisit; DELETE Selesai revert+visit; DELETE Cancel/Demo tanpa efek.
 
 ### 8.3 (SEDANG) Inkonsistensi jalur sync cloud stok: deduct bulk vs revert per-item
 - **File**: `src/store/inventoryStore.ts` (`deductStock` → `syncInventoryDeduction` bulk; `revertStock` → loop `syncInventoryItem`)
 - **Masalah**: Dua jalur berbeda; pada revert banyak bahan, tiap item di-upsert terpisah (lebih banyak request). Fungsional, tapi tidak konsisten dan boros request saat void massal.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Seragamkan (mis. `syncInventoryDeduction` untuk delta, atau satu helper bulk untuk revert).
+- **Status**: ✅ **SELESAI (v4.7)** — satu helper bulk untuk kedua jalur.
+- **Aksi (tereksekusi)**:
+  - [x] `syncInventoryDeduction` → **`syncInventoryStock`** (nama netral: kirim nilai stok post-mutasi dari items untuk setiap id) di `cloudSync.ts`.
+  - [x] `deductStock` & `revertStock` sama-sama memanggil `syncInventoryStock(deductions, updatedItems)` — loop `syncInventoryItem` di revert dihapus.
+  - [x] Test: deduct & revert sama-sama 1× panggilan bulk dengan stok post-mutasi; `syncInventoryItem` tidak dipakai revert.
 
 ### 8.4 (SEDANG) Stok negatif pasca-deduksi tidak diperiksa (hanya pre-flight)
 - **File**: `src/lib/atomicTransactionEngine.ts`, `src/lib/inventoryEngine.ts` (LOGIC-5 izinkan negatif)
 - **Masalah**: Validasi hanya pre-flight (`validateStockAvailability`); race 2 device checkout bahan terakhir bersamaan bisa menghasilkan stok negatif tanpa peringatan setelah kejadian. Diterima sebagai trade-off (kasir tidak diblokir), tapi perlu dipantau.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Opsional: warning low/negatif stock di UI setelah deduksi (bukan blokir).
+- **Status**: ✅ **SELESAI (v4.7)** — stok negatif kini terpantau di UI (tetap tidak memblokir kasir).
+- **Aksi (tereksekusi)**:
+  - [x] Helper murni `findNegativeStocksAfterDeduction` di `stockCheck.ts` — item yang stoknya jatuh < 0 oleh deduksi (dari stok PRE-deduksi).
+  - [x] `deductStock`: setelah mutasi, hitung negatif → **toast `⚠️ Stok negatif: ...`** (maks 3 item + "+N bahan lain", type warning 6 dtk) + state transient `lastNegativeStockAlerts` (dibersihkan `revertStock`).
+  - [x] Test: helper murni (habis pas 0 = bukan negatif, multi-item, amount 0/unknown) + integrasi store (alert terisi, toast, revert bersih).
 
 ---
 
 ## 🟤 PRIORITAS 9 — AUDIT STOK: OPNAME & ADJUSTMENT MANUAL (v4.6)
 
-> Sumber: audit pergerakan stok pada Stock Opname (`StockOpname.tsx` doSubmit), Adjustment manual (`Inventory.tsx` edit/CSV import), `stockLogStore`, `inventoryStore.updateItem` (auto-log). Jalur utama sudah benar & tersync — temuan di bawah adalah celah pelabelan & race. Status: **dokumentasi temuan — belum dieksekusi**.
+> Sumber: audit pergerakan stok pada Stock Opname (`StockOpname.tsx` doSubmit), Adjustment manual (`Inventory.tsx` edit/CSV import), `stockLogStore`, `inventoryStore.updateItem` (auto-log). Jalur utama sudah benar & tersync — temuan di bawah adalah celah pelabelan & race. Status: **9.1–9.4 SELESAI (v4.7) — Prioritas 9 tuntas**.
 
 ### 9.1 (SEDANG) Tipe log `'import'` mati — CSV import tidak bisa dibedakan dari adjustment manual
 - **File**: `src/store/stockLogStore.ts` (`StockLogType = 'deduct' | 'add' | 'adjust' | 'import'`), `src/pages/Inventory.tsx` (CSV import → `updateItem` auto-log)
 - **Masalah**: Tipe `'import'` didefinisikan tapi TIDAK pernah dipakai. CSV import untuk item yang sudah ada jatuh ke auto-log `updateItem` → `'adjust'` dengan reason generik `"Adjustment manual"`; item baru hasil import (`addItem`) tidak dicatat sama sekali. Riwayat stok tidak menunjukkan asal perubahan (import vs penyesuaian manual).
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**:
-  - [ ] Saat CSV import: untuk item existing dengan stok berubah → log tipe `'import'` (reason `Import CSV`); item baru → log `'import'` juga (stok awal).
-  - [ ] Opsional: tampilkan badge tipe di riwayat stok per item.
+- **Status**: ✅ **SELESAI (v4.7)**
+- **Aksi (tereksekusi)**:
+  - [x] Helper murni `planCsvImportRow` di **`src/utils/stockImport.ts`**: existing + stok berubah → `update` + log `'import'` (reason `Import CSV`); existing + stok sama → update tanpa log; baru → `create` + log `'import'` (stockBefore 0).
+  - [x] `Inventory.tsx handleImport`: pakai helper; `updateItem(..., { skipLog: true })` untuk hindari auto-log `'adjust'`, lalu `addStockLog` eksplisit tipe `'import'`.
+  - [x] Test `src/test/stockImport.test.ts` (4 kasus: berubah/tetap/baru/turun).
+  - [ ] (Opsional, ditunda) Badge tipe di riwayat stok per item — UI riwayat per-item belum ada (hanya Dashboard konsumsi); tambah nanti bila halaman riwayat stok dibuat.
 
 ### 9.2 (SEDANG) Stock Opname menulis stok ABSOLUT → race lintas device (lost update)
 - **File**: `src/pages/StockOpname.tsx` (form menangkap `systemStock` saat dibuka, baris ~41–44; `updateItem(id, { stock: actualStock })` baris 140)
 - **Masalah**: Bila perangkat lain menjual/merubah stok antara form dibuka dan submit, `updateItem` menimpa hasil perubahan itu (lost update) — log opname mencatat `stockBefore/stockAfter` dari snapshot lama, jadi selisihnya tidak terlihat. Contoh: form buka `susu=100`, device lain jual 5 (stok 95), opname submit 100 → 5 unit "dihidupkan" tanpa jejak.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**:
-  - [ ] Saat submit, bandingkan `systemStock` snapshot vs stok saat ini: jika berbeda → tampilkan peringatan selisih (konfirmasi kasir) sebelum commit.
-  - [ ] Opsional: tulis opname sebagai delta (actual − stok saat ini) alih-alih absolut, dengan guard stok tidak negatif.
+- **Status**: ✅ **SELESAI (v4.7)**
+- **Aksi (tereksekusi)**:
+  - [x] Helper murni `findDriftedOpnameItems` di `stockImport.ts` — item yang akan DITULIS (difference ≠ 0) dengan `currentStock ≠ systemStock` snapshot → daftar drift.
+  - [x] `handleSubmitAttempt`: deteksi drift → **ConfirmDialog "⚠️ Stok Berubah Sejak Form Dibuka"** sebelum PIN/konfirmasi; lanjut = tulis stok fisik, batal = tidak commit. Untuk Staf Gudang pesannya generik (hanya jumlah, tanpa angka stok — aman untuk blind mode).
+  - [x] Test (6 kasus: drift terdeteksi, sama→tanpa alert, difference 0 dilewati, item hilang, toleransi float 1e-9, multi-item).
+  - [ ] (Opsional, ditunda) Tulis opname sebagai delta + guard non-negatif — peringatan konfirmasi sudah menutup lost update tanpa mengubah semantik opname.
 
 ### 9.3 (MINOR) Auto-log edit memakai nama lama saat rename bersamaan
 - **File**: `src/store/inventoryStore.ts` (`updateItem` auto-log memakai `current.name`)
 - **Masalah**: Edit yang sekaligus mengganti nama bahan → log stok menampilkan nama lama (kosmetik, menyulitkan pencarian riwayat).
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Log memakai nama baru bila `data.name` ada, fallback nama lama.
+- **Status**: ✅ **SELESAI (v4.7)**
+- **Aksi (tereksekusi)**: [x] Auto-log kini memakai `data.name ?? current.name` — nama baru saat rename bersamaan, fallback nama lama. Test: rename+stok → log nama baru; tanpa rename → nama lama.
 
 ### 9.4 (MINOR) Banyak request cloud per item pada opname/import
 - **File**: `src/pages/StockOpname.tsx` (loop `updateItem` → `syncInventoryItem` per item), `src/pages/Inventory.tsx` (CSV import loop)
 - **Masalah**: Opname/import dengan banyak item → 1 request cloud per item. Fungsional tapi boros request (terkait 8.3 — seragamkan jalur bulk).
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Batch sync inventory (mis. satu `syncInventoryDeduction`-style bulk atau batasi ke item yang berubah).
+- **Status**: ✅ **SELESAI (v4.7)** — opname & import kini batch.
+- **Aksi (tereksekusi)**:
+  - [x] `inventoryStore.applyBulkStock(entries)`: SATU setState + SATU `syncInventoryStock` bulk — dipakai `StockOpname.doSubmit` (ganti loop `updateItem` per item).
+  - [x] `inventoryStore.importItems(rows)`: 1 setState semua baris + log `'import'` (9.1) + 1 `syncInventoryStock` bulk untuk stok + `syncInventoryItem` penuh HANYA untuk item baru / yang field non-stok berubah. `updateItem`/`addItem` dapat opsi `skipSync`.
+  - [x] `Inventory.tsx handleImport` hanya parse CSV → `importItems(rows)`.
+  - [x] Test `src/test/inventoryBatch.test.ts` (7 kasus: rename-log, bulk stock 1 panggilan, import batch log+sync, tanpa upsert penuh bila hanya stok berubah, empty no-op).
 
 ---
 
 ## 🟤 PRIORITAS 10 — AUDIT MODE BLIND STOCK OPNAME & OTORISASI PIN (v4.6)
 
-> Sumber: audit alur mode blind opname untuk Staf Gudang (`StockOpname.tsx`), otorisasi PIN (`PinModal.tsx`, `settingsStore.verifyPin`), akses halaman (`App.tsx`/`Inventory.tsx`). Masking kolom & akses role sudah benar; temuan di bawah = kebocoran informasi mode buta & kelemahan otorisasi PIN. Status: **dokumentasi temuan — belum dieksekusi**.
+> Sumber: audit alur mode blind opname untuk Staf Gudang (`StockOpname.tsx`), otorisasi PIN (`PinModal.tsx`, `settingsStore.verifyPin`), akses halaman (`App.tsx`/`Inventory.tsx`). Masking kolom & akses role sudah benar; temuan di bawah = kebocoran informasi mode buta & kelemahan otorisasi PIN. Status: **10.1–10.5 SELESAI (v4.7) — Prioritas 10 tuntas**.
 
 ### 10.1 (KRITIS) Mode buta bocor: banner "Selisih Besar" + judul modal PIN menampilkan info selisih untuk Staf Gudang
 - **File**: `src/pages/StockOpname.tsx` (banner baris ~312 tidak di-guard `isWarehouseStaff`; judul `PinModal` baris ~408 `"Verifikasi PIN Manager — Selisih Besar"`)
 - **Masalah**: Banner peringatan selisih ≥10% dan judul modal PIN tampil untuk SEMUA role termasuk Staf Gudang. Staff bisa memakai banner sebagai oracle: input fisik → banner muncul = selisih ≥10%, tidak muncul = dalam ±10% → dengan iterasi, stok sistem terbaca dengan presisi 10% — persis manipulasi yang ingin dicegah mode buta (PRD 2.4). Perbedaan jalur PIN modal vs ConfirmDialog juga mengungkap batas 10% walau banner disembunyikan.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**:
-  - [ ] Sembunyikan banner "Selisih Besar Terdeteksi" untuk `isWarehouseStaff`.
-  - [ ] Judul modal PIN generik ("Otorisasi Manager") tanpa frasa "Selisih Besar".
-  - [ ] (Opsional — menutup oracle sepenuhnya) Untuk Staf Gudang: jalur PIN seragam tanpa banner/ConfirmDialog diferensial.
+- **Status**: ✅ **SELESAI (v4.7)** — oracle ±10% tertutup penuh (bukan hanya banner/judul).
+- **Aksi (tereksekusi)**:
+  - [x] Helper murni `resolveOpnameGate` & `shouldShowLargeDifferenceBanner` di `stockImport.ts`.
+  - [x] Banner "Selisih Besar Terdeteksi" HANYA untuk non-staff (`shouldShowLargeDifferenceBanner`).
+  - [x] Staf Gudang SELALU lewat jalur PIN (`resolveOpnameGate` → 'pin' walau selisih kecil) — tanpa banner & tanpa ConfirmDialog diferensial → tidak ada sinyal apa pun yang mengungkap batas ±10%.
+  - [x] Judul modal PIN generik `"Otorisasi Manager"` untuk Staf Gudang (non-staff tetap "Verifikasi PIN Manager — Selisih Besar").
+  - [x] Test `stockImport.test.ts` (4 kasus: staff+selisih kecil → tetap PIN; staff+besar → PIN; non-staff gate normal; banner hanya non-staff+besar).
 
-### 10.2 (TINGGI) Otorisasi PIN tidak terikat role & tidak ada identitas approver
-- **File**: `src/store/settingsStore.ts` (`verifyPin` — hanya membandingkan PIN global `managerPin` bcrypt), `src/pages/StockOpname.tsx` (`pinVerified: true` boolean), `src/components/PinModal.tsx`
+### 10.2 (TINGGI) Otorisasi PIN tidak terikat role & tidak ada identitas approver — ✅ SELESAI (v4.7)
+- **File**: `src/utils/pinAuth.ts` (BARU — `isApproverRole`/`authenticateManager`/`getDeviceMarker`), `src/store/authStore.ts` (`verifyManagerCredentials` non-mutating), `src/components/PinModal.tsx` (`requireManager` + quick-login), `src/pages/StockOpname.tsx` (record + audit log), `src/types/index.ts` (field approver), `src/lib/cloudSync.ts` (Migration 19 + mapping), `supabase/schema.sql`
 - **Masalah**: Siapa pun yang tahu PIN Manager (termasuk Staf Gudang) bisa menyetujui selisih besar; tidak ada cek role user yang mengetik. Audit hanya menyimpan boolean `pinVerified` — tanpa identitas approver maupun timestamp, jadi tidak ada jejak siapa yang menyetujui. Catatan: karena PIN bersifat shared dan biasanya diketik di perangkat staff (manager mengetik PIN-nya), mencatat `currentUser` akan salah identitas.
-- **Status**: 🔲 BELUM
+- **Status**: ✅ SELESAI (v4.7)
 - **Aksi (rencana)**:
-  - [ ] Role-gate: hanya Manager/Owner yang dapat membuka modal PIN otorisasi (atau catat identitas approver via flow login cepat).
-  - [ ] Minimal: tambahkan timestamp + penanda perangkat pada record opname & audit log saat PIN diverifikasi.
+  - [x] Role-gate: `PinModal` kini menerima `requireManager` — sesi non-Manager TIDAK bisa menyetujui hanya dengan PIN global; wajib login cepat sebagai Manager (username + password akun). Akun non-Manager (Kasir/Acaraki/Staf Gudang) ditolak walau kredensialnya benar.
+  - [x] Identitas approver: `verifyManagerCredentials` (authStore) memvalidasi kredensial akun Manager TANPA mengubah sesi (staff tetap tercatat sebagai penginput). `onSuccess(approver)` membawa `{id, name, role}`.
+  - [x] Minimal: record opname & audit log kini menyimpan `approverId`/`approverName`/`approverRole`/`approvedAt` (timestamp) + `deviceId` (penanda perangkat via `getDeviceMarker`, stabil per device) — jejak audit lengkap siapa/menyetujui/kapan/dari mana.
+  - [x] DB: kolom `approver_id/approver_name/approver_role/approved_at/device_id` ditambahkan ke `stock_opnames` (schema.sql + Migration 19 di runMigrations dengan SQL idempoten; mapping syncStockOpname/fetch ikut).
+  - [x] Test: `src/test/pinAuth.test.ts` (13 kasus) — role-gate, kredensial Manager (bcrypt + legacy plaintext), penanda perangkat stabil/fallback.
 
-### 10.3 (TINGGI) Alasan selisih tidak wajib untuk Staf Gudang → audit penyebab kerugian lemah
-- **File**: `src/pages/StockOpname.tsx` (baris ~105–112 — validasi alasan di-skip untuk staff; record menyimpan `reason: '-'`)
+### 10.3 (TINGGI) Alasan selisih tidak wajib untuk Staf Gudang → audit penyebab kerugian lemah — ✅ SELESAI (v4.7)
+- **File**: `src/pages/StockOpname.tsx` (dialog alasan pasca-PIN), `src/utils/stockImport.ts` (`fillMissingItemReasons`), `src/types/index.ts` (`adjustmentReason`), `supabase/schema.sql`
 - **Masalah**: Staf Gudang bisa mencatat kerugian besar (mis. stok 100 → 0, `Basi`) tanpa alasan apa pun, asalkan PIN disetujui. Namun staff memang tidak tahu item mana yang berselisih (mode buta) — mewajibkan alasan per-item tidak praktis.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Setelah PIN manager disetujui, tampilkan rangkuman selisih + wajibkan alasan sebelum eksekusi (dual-control sekaligus memperkuat jejak audit).
+- **Status**: ✅ SELESAI (v4.7)
+- **Aksi (rencana)**: [x] Setelah PIN Manager disetujui (Staf Gudang + ada selisih), tampilkan dialog **"Alasan Penyesuaian (Wajib)"** — rangkuman jumlah item berselisih (tanpa nama item/nominal — blind mode tetap aman) + pilihan alasan utama (Basi/Bahan Rusak/Salah Input/Tercecer/Penyusutan/Lainnya) + detail opsional. Tombol "Eksekusi Opname" nonaktif sampai alasan dipilih. Alasan diterapkan ke item berselisih yang belum punya alasan (`fillMissingItemReasons`), disimpan di record (`adjustmentReason`) + dirangkum di notes, dan tampil di riwayat & audit log. Dual-control: staff TIDAK bisa eksekusi tanpa (1) approval Manager dan (2) alasan.
 
-### 10.4 (SEDANG) Stok aktual negatif/NaN bisa masuk ke inventory
-- **File**: `src/pages/StockOpname.tsx` (baris ~86: `parseFloat(r.actualStock) || 0`; input `type="number" min="0"` tidak mencegah mengetik `-5`)
+### 10.4 (SEDANG) Stok aktual negatif/NaN bisa masuk ke inventory — ✅ SELESAI (v4.7)
+- **File**: `src/utils/stockImport.ts` (`parseActualStock`), `src/pages/StockOpname.tsx` (opnameItems + preview baris), `src/test/stockImport.test.ts` (5 kasus)
 - **Masalah**: `parseFloat("-5") = -5` → `updateItem(id, { stock: -5 })` → stok inventory jadi negatif tanpa validasi.
-- **Status**: 🔲 BELUM
-- **Aksi (rencana)**: [ ] Clamp `Math.max(0, parseFloat(...) || 0)` sebelum masuk store.
+- **Status**: ✅ SELESAI (v4.7)
+- **Aksi (rencana)**: [x] Helper murni `parseActualStock(raw) = Math.max(0, parseFloat(raw) || 0)` — SATU-SATUNYA jalur parse stok fisik: negatif → 0, NaN/teks/kosong → 0. Dipakai di `opnameItems` (yang ditulis ke inventory via `applyBulkStock`) DAN di preview baris (diff/kerugian konsisten dengan nilai yang akan disimpan). Test: "-5" → 0, "-0.5" → 0, "abc"/"" → 0, "0" → 0, positif dipertahankan.
 
-### 10.5 (MINOR) Ambang PIN ketat untuk stok rendah — catatan desain
+### 10.5 (MINOR) Ambang PIN ketat untuk stok rendah — catatan desain — ✅ DIDOKUMENTASIKAN (v4.7)
 - **File**: `src/pages/StockOpname.tsx` (baris ~78–83: `Math.max(systemStock × 0.1, 1)`)
 - **Masalah**: Untuk item dengan stok sistem < 10, selisih ≥ 1 unit (mis. stok 5, selisih 1 = 20%) langsung memicu PIN — ketat tapi sah; catatan agar perilaku ini tidak mengejutkan saat muncul.
-- **Status**: 🔵 Catatan desain — tidak perlu diubah
+- **Status**: 🔵 Catatan desain — komentar inline ditambahkan di kode (ambang = max(10% stok sistem, 1 unit); stok rendah → PIN lebih sering muncul, disengaja). Tidak ada perubahan perilaku.
 
 ---
 
@@ -683,9 +706,9 @@
 3. **Alur split** (1.5, 1.6, 1.7) — stok & akuntansi.
 4. **Pemolesan** (2.x, 3.x).
 5. **Prioritas 7 (Backup & Restore)**: **7.1–7.8 SELESAI (v4.7) — tuntas**; backup kini aman (checksum isi), restore snapshot (Replace), media & bundle utuh, auto backup berjalan.
-6. **Prioritas 8 (Stok vs Cancel/Demo)**: kerjakan 8.1–8.2 (kritis — bocor stok) dulu, 8.3–8.4 menyusul.
-7. **Prioritas 9 (Opname & Adjustment)**: kerjakan 9.1–9.2 (sedang) dulu, 9.3–9.4 menyusul.
-8. **Prioritas 10 (Mode Blind Opname & PIN)**: kerjakan 10.1 (kritis — kebocoran mode buta) dulu, lalu 10.2–10.3 (tinggi), 10.4 menyusul (10.5 catatan desain).
+6. **Prioritas 8 (Stok vs Cancel/Demo)**: **8.1–8.4 SELESAI (v4.7) — tuntas**; stok tidak bocor lagi (Demo→Selesai & hapus Pending), sync cloud konsisten (satu helper bulk), stok negatif terpantau di UI.
+7. **Prioritas 9 (Opname & Adjustment)**: **9.1–9.4 SELESAI (v4.7) — tuntas**; log 'import' aktif, guard race opname lintas device, nama baru di log, opname/import batch.
+8. **Prioritas 10 (Mode Blind Opname & PIN)**: 10.1 (kritis — kebocoran mode buta), 10.2 (role-gate PIN + identitas approver), 10.3 (alasan wajib staff), 10.4 (clamp stok aktual), 10.5 (catatan desain ambang PIN) **SELESAI (v4.7) — Prioritas 10 tuntas**.
 
 ---
 

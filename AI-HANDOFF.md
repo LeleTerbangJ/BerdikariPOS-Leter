@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (Prioritas 1–7 semuanya ✅, termasuk 6.6 Rekap Kas & 7.1–7.8 Backup/Restore — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–10 semuanya ✅** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§14) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,8 +341,8 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5)
-- `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5)
+- `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
 
@@ -502,7 +502,69 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - `npx tsc --noEmit` → **0 error**
 - `npx vitest run` → **125/125 test lolos** (13 file; baru: `backupService.test.ts` 14 kasus — checksum isi/tamper/media/bundle/versioning/currentUser; `autoBackupScheduler.test.ts` 12 kasus — OFF/Daily/Weekly/boundary/targetTime)
 - `npm run build` → belum diverifikasi ulang setelah v4.7 (disarankan jalankan sekali sebelum deploy)
-- **TO DO.md**: Prioritas 7 tuntas (7.1–7.8 ✅). Sisa prioritas yang belum dieksekusi: **8.1–8.2** (bocor stok `Demo → Selesai` & hapus Pending tanpa revert — KRITIS), 8.3–8.4, 9.1–9.4, 10.1–10.5.
+- **TO DO.md**: Prioritas 7 tuntas (7.1–7.8 ✅) & **Prioritas 8 tuntas (8.1–8.4 ✅ — §13)**. Sisa prioritas yang belum dieksekusi: 9.1–9.4, 10.1–10.5.
+
+---
+
+## 13. Riwayat Pengerjaan v4.7 — Prioritas 8: Pergerakan Stok (8.1–8.4, semua ✅)
+
+> Sesi lanjutan dalam v4.7. Menuntaskan **Prioritas 8 di `TO DO.md`** — audit pergerakan stok (transaksi vs cancel/demo, sync cloud, pantauan stok negatif). Dua bocor stok KRITIS ditutup, jalur sync cloud diseragamkan, dan stok negatif kini terpantau di UI tanpa memblokir kasir.
+
+### 13.1 Temuan KRITIS — 8.1, 8.2 ✅ (bocor stok)
+
+- **8.1 Demo → Selesai (re-enable) tidak memotong stok**: tombol "Selesai" tampil untuk semua `txStatus !== 'Selesai'` (termasuk Demo), tapi handler hanya menangani `Cancel → Selesai` (BUG-K3). Demo → Selesai jadi penjualan tanpa potong bahan baku → bocor. **Fix**: logika transisi stok di-ekstrak ke helper murni **`src/utils/transactionStockActions.ts`** (`applyStatusStockEffects`) — dua rantai if-else identik di `onConfirmAction`/`onPinSuccess` diganti satu pemanggilan (DRY); branch `(Cancel|Demo) → Selesai` → `deductStock` + `recordVisit` (guard `hasSplitChildren`). 14 test baru.
+- **8.2 Hapus Pending dari halaman Transaksi tanpa revert stok reserve**: blok delete hanya revert untuk `Selesai`; hapus Pending → reserve tidak pernah dikembalikan. **Fix**: `DELETE` Pending → `revertStock` (reason "Hapus pesanan gantung #N") sebelum `deleteTransaction`; Selesai → revert + revertVisit (dipertahankan); Cancel/Demo → tanpa efek (sudah di-revert); split tetap di-guard.
+
+### 13.2 Temuan SEDANG — 8.3, 8.4 ✅
+
+- **8.3 Inkonsistensi jalur sync cloud stok**: `deductStock` pakai `syncInventoryDeduction` bulk, `revertStock` loop `syncInventoryItem` per-item (dua logika, boros request saat void massal). **Fix**: `syncInventoryDeduction` → **`syncInventoryStock`** (nama netral), dipakai **kedua** jalur — satu helper bulk, `syncInventoryItem` tidak lagi dipakai revert.
+- **8.4 Stok negatif pasca-deduksi tidak dipantau**: validasi hanya pre-flight (LOGIC-5 izinkan negatif); race 2 device bisa jadi negatif tanpa disadari. **Fix**: helper murni `findNegativeStocksAfterDeduction` di `stockCheck.ts`; `deductStock` menghitung negatif dari stok pre-deduksi → **toast `⚠️ Stok negatif: ...`** (maks 3 item + "+N bahan lain", 6 dtk) + state transient `lastNegativeStockAlerts` (dibersihkan `revertStock`). Kasir tetap TIDAK diblokir.
+
+### 13.3 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **148/148 test lolos** (15 file; baru: `transactionStockActions.test.ts` 14 kasus — Demo→Selesai/regresi/guard split/edge; `stockNegativeAlert.test.ts` 9 kasus — helper negatif + integrasi store + unifikasi bulk)
+- `npm run build` → belum diverifikasi ulang setelah v4.7 (disarankan jalankan sekali sebelum deploy)
+- **TO DO.md**: Prioritas 8 tuntas (8.1–8.4 ✅). Sisa prioritas yang belum dieksekusi: **9.1–9.4** (Opname & Adjustment), **10.1–10.5** (Mode Blind Opname & PIN — 10.1 kritis: oracle ±10%).
+
+---
+
+## 14. Riwayat Pengerjaan v4.7 — Prioritas 9 & 10 (9.1–9.4 ✅, 10.1–10.5 ✅)
+
+> Sesi lanjutan dalam v4.7. Menuntaskan **Prioritas 9 (Opname & Adjustment)** dan **Prioritas 10 (Mode Blind Opname & PIN)** di `TO DO.md`. Dengan ini **SELURUH prioritas 1–10 tuntas** — tidak ada prioritas tersisa.
+
+### 14.1 Prioritas 9 — Opname & Adjustment (9.1–9.4 ✅)
+
+- **9.1 CSV import tercatat tipe 'import'**: helper murni `planCsvImportRow` (`src/utils/stockImport.ts`) — item existing dengan stok berubah → update + log `'import'` (bukan `'adjust'` generik); stok sama → update tanpa log; item baru → create + log `'import'` (stockBefore 0). Riwayat stok kini menunjukkan asal perubahan (import vs adjustment manual).
+- **9.2 Guard race opname lintas device (anti lost update)**: `findDriftedOpnameItems` — hanya item yang akan ditulis (difference ≠ 0) yang diperiksa; stok berubah sejak form dibuka (toleransi float 1e-9) → ConfirmDialog **"⚠️ Stok Berubah Sejak Form Dibuka"** sebelum commit (pesan generik untuk Staf Gudang — blind mode tetap aman).
+- **9.3 Auto-log pakai nama baru saat rename bersamaan**: auto-log `updateItem` memakai `data.name ?? current.name`.
+- **9.4 Batch sync opname & import**: `applyBulkStock(entries)` (1 setState + 1 `syncInventoryStock` bulk untuk opname) & `importItems(rows)` (1 batch untuk seluruh CSV: log `'import'` + bulk stok; `syncInventoryItem` penuh hanya untuk item baru / field non-stok yang berubah; opsi `skipSync`).
+
+### 14.2 Temuan KRITIS — 10.1 ✅ (kebocoran mode blind)
+
+- **10.1 Oracle ±10% bocor ke Staf Gudang**: banner "Selisih Besar Terdeteksi" + judul modal PIN "Verifikasi PIN Manager — Selisih Besar" menampilkan info selisih ke staf di mode buta. **Fix**: helper murni `resolveOpnameGate` (Staf Gudang SELALU jalur PIN — seragam, tanpa sinyal diferensial) + `shouldShowLargeDifferenceBanner` (banner HANYA non-staff) + judul PinModal generik 'Otorisasi Manager'. 4 test baru.
+
+### 14.3 Temuan TINGGI — 10.2, 10.3 ✅ (otorisasi & audit)
+
+- **10.2 Otorisasi PIN tidak terikat role & tanpa identitas approver**: siapa pun yang tahu PIN global (termasuk Staf Gudang) bisa menyetujui selisih besar; audit hanya menyimpan boolean `pinVerified`. **Fix** dual-control dengan identitas nyata:
+  - `src/utils/pinAuth.ts` (baru): `isApproverRole` (hanya Manager), `authenticateManager` (kredensial akun Manager — bcrypt + legacy plaintext, TANPA efek samping), `getDeviceMarker` (penanda perangkat stabil per device).
+  - `authStore.verifyManagerCredentials` — validasi kredensial Manager **tanpa mengubah sesi** (staff tetap tercatat sebagai penginput; tidak ada sesi "hantu").
+  - `PinModal` prop baru `requireManager`: sesi non-Manager TIDAK bisa menyetujui hanya dengan PIN global — wajib **login cepat sebagai Manager** (username + password akun); akun non-Manager (Kasir/Acaraki/Staf Gudang) ditolak walau kredensialnya benar. `onSuccess(approver)` kini membawa `{id, name, role}`; caller lain (Transactions/Customers/CashMovements/AuditLog) tidak terpengaruh.
+  - Record opname & audit log kini menyimpan `approverId/approverName/approverRole/approvedAt` (timestamp) + `deviceId` (penanda perangkat); riwayat menampilkan "✓ Disetujui {nama}".
+  - **DB**: kolom `approver_id/approver_name/approver_role/approved_at/device_id/adjustment_reason` ditambahkan ke `stock_opnames` (schema.sql + **Migration 19** idempoten di runMigrations; mapping `syncStockOpname`/`fetch` ikut). ⚠️ Klien perlu menjalankan ALTER TABLE sekali di SQL Editor (SQL juga tercetak di console app).
+- **10.3 Alasan selisih tidak wajib untuk Staf Gudang**: staf bisa mencatat kerugian besar tanpa alasan apa pun asalkan PIN disetujui. **Fix**: setelah PIN Manager disetujui (staf + ada selisih) → dialog **"Alasan Penyesuaian (Wajib)"** — rangkuman jumlah item berselisih (tanpa nama item/nominal — blind mode aman) + pilihan alasan utama + detail opsional; tombol eksekusi nonaktif sampai alasan dipilih. Alasan diisi ke item berselisih yang belum punya alasan (`fillMissingItemReasons`), disimpan di record (`adjustmentReason`) + dirangkum di notes + tampil di riwayat & audit log. Dual-control: staf tidak bisa eksekusi tanpa (1) approval Manager dan (2) alasan.
+
+### 14.4 Temuan SEDANG/MINOR — 10.4, 10.5 ✅
+
+- **10.4 Stok aktual negatif/NaN bisa masuk inventory**: `parseFloat("-5") = -5` ditulis langsung ke inventory. **Fix**: helper murni `parseActualStock(raw) = Math.max(0, parseFloat(raw) || 0)` — satu-satunya jalur parse stok fisik (negatif/NaN/kosong → 0); dipakai di `opnameItems` (nilai yang disimpan via `applyBulkStock`) & preview baris (konsisten). 5 test baru.
+- **10.5 Ambang PIN stok rendah (catatan desain)**: komentar inline didokumentasikan di kode — ambang `max(10% stok sistem, 1 unit)`; stok < 10 unit → PIN lebih sering muncul (disengaja: validasi stok rendah lebih ketat). Tidak ada perubahan perilaku.
+
+### 14.5 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **192/192 test lolos** (18 file; baru di Prioritas 9–10: `stockImport.test.ts` — CSV import/drift/gate/blind/clamp/reason, `inventoryBatch.test.ts` — rename log + bulk, `pinAuth.test.ts` — role-gate/kredensial/device marker)
+- `npm run build` → **sukses** (`tsc && vite build` + PWA generateSW, 50 entry precache) — diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7)
+- **TO DO.md**: Prioritas 9 tuntas (9.1–9.4 ✅) & **Prioritas 10 tuntas (10.1–10.5 ✅) — SELURUH prioritas 1–10 selesai, tidak ada prioritas tersisa.**
 
 ---
 

@@ -235,6 +235,29 @@ export async function runMigrations() {
       migrationNeeded.voucherCode = true;
     }
 
+    // Migration 19 (v4.7 TO DO 10.2/10.3): kolom otorisasi opname di stock_opnames.
+    // syncStockOpname menulis approver_id/approver_name/approver_role/approved_at/device_id/
+    // adjustment_reason — deteksi agar upsert pada DB lama tidak gagal (mencegah penumpukan offline queue).
+    const opnameColumns = ['approver_id', 'approver_name', 'approver_role', 'approved_at', 'device_id', 'adjustment_reason'];
+    const { error: opnameColError } = await supabase
+      .from('stock_opnames')
+      .select(opnameColumns.join(','))
+      .limit(1);
+    const opnameColumnsMissing =
+      !!opnameColError &&
+      opnameColumns.some((c) => opnameColError.message?.includes(c));
+    if (opnameColumnsMissing) {
+      console.warn('[Migration] Kolom otorisasi opname belum ada di stock_opnames (TO DO 10.2/10.3): approver_id / approver_name / approver_role / approved_at / device_id / adjustment_reason.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_id TEXT;');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_name TEXT;');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_role TEXT;');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS device_id TEXT;');
+      console.warn('  ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;');
+      migrationNeeded.opnameApprover = true;
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -286,7 +309,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -594,9 +617,12 @@ export async function syncInventoryItem(item: InventoryItem) {
   });
 }
 
-export async function syncInventoryDeduction(deductions: Record<string, number>, items: InventoryItem[]) {
+// v4.7 TO DO 8.3: satu helper BULK untuk sync stok cloud — dipakai deductStock & revertStock
+// (sebelumnya deduct pakai fungsi ini, revert pakai loop syncInventoryItem → dua jalur berbeda).
+// Nama netral: helper ini mengirim NILAI STOK TERBARU (post-mutasi) dari items untuk setiap id.
+export async function syncInventoryStock(deductions: Record<string, number>, items: InventoryItem[]) {
   if (!isSupabaseConfigured) return;
-  // BUG-C1 fix: items already contain post-deduction stock values (deducted in inventoryStore).
+  // BUG-C1 fix: items already contain post-change stock values (mutated in inventoryStore).
   // Previously this subtracted `amount` again, causing double deduction in cloud.
   for (const [id] of Object.entries(deductions)) {
     const item = items.find((i) => i.id === id);
@@ -1165,6 +1191,13 @@ export async function syncStockOpname(record: StockOpname) {
     total_items: record.totalItems,
     items_with_difference: record.itemsWithDifference,
     pin_verified: record.pinVerified,
+    // v4.7 TO DO 10.2/10.3: identitas approver + jejak audit + alasan penyesuaian
+    approver_id: record.approverId || null,
+    approver_name: record.approverName || null,
+    approver_role: record.approverRole || null,
+    approved_at: record.approvedAt || null,
+    device_id: record.deviceId || null,
+    adjustment_reason: record.adjustmentReason || null,
     notes: record.notes || null,
   });
 }
@@ -1184,6 +1217,13 @@ export async function fetchStockOpnamesFromCloud(): Promise<StockOpname[] | null
       totalItems: row.total_items || 0,
       itemsWithDifference: row.items_with_difference || 0,
       pinVerified: row.pin_verified || false,
+      // v4.7 TO DO 10.2/10.3: baca balik identitas approver + jejak audit + alasan
+      approverId: row.approver_id || undefined,
+      approverName: row.approver_name || undefined,
+      approverRole: row.approver_role || undefined,
+      approvedAt: row.approved_at || undefined,
+      deviceId: row.device_id || undefined,
+      adjustmentReason: row.adjustment_reason || undefined,
       notes: row.notes || undefined,
     })) || null;
   } catch {

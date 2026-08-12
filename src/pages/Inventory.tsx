@@ -6,6 +6,7 @@ import { useAuditLogStore } from '../store/auditLogStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { subscribeToStockOpnames, unsubscribeChannel } from '../lib/cloudSync';
 import { formatRupiah } from '../utils/format';
+import type { ParsedImportRow } from '../utils/stockImport';
 import type { InventoryItem } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -27,7 +28,7 @@ import {
 } from 'lucide-react';
 
 export default function Inventory() {
-  const { items: inventory, addItem, updateItem, deleteItem, loadFromCloud } = useInventoryStore();
+  const { items: inventory, addItem, updateItem, deleteItem, importItems, loadFromCloud } = useInventoryStore();
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const [activeTab, setActiveTab] = useState<'inventory' | 'opname'>('inventory');
@@ -190,25 +191,25 @@ export default function Inventory() {
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       const lines = text.split('\n').slice(1); // skip header
+      // v4.7 TO DO 9.4: batch import — 1 setState + 1 syncInventoryStock bulk + log 'import' (9.1)
+      const rows: ParsedImportRow[] = [];
       lines
         .filter((l) => l.trim())
         .forEach((line) => {
           const parts = line.match(/(".*?"|[^,]+)/g) || [];
           const clean = (s: string) => s.replace(/^"|"$/g, '');
-          const id = clean(parts[0] || '');
-          const name = clean(parts[1] || '');
-          const stock = parseFloat(parts[2]) || 0;
-          const unit = clean(parts[3] || 'kg');
-          const costPerUnit = parseFloat(parts[4]) || 0;
-          const minStock = parseFloat(parts[5]) || 3;
-
-          const existing = inventory.find((i) => i.id === id);
-          if (existing) {
-            updateItem(id, { name, stock, unit, costPerUnit, minStock });
-          } else {
-            addItem({ id, name, stock, unit, costPerUnit, minStock });
-          }
+          rows.push({
+            id: clean(parts[0] || ''),
+            name: clean(parts[1] || ''),
+            stock: parseFloat(parts[2]) || 0,
+            unit: clean(parts[3] || 'kg'),
+            costPerUnit: parseFloat(parts[4]) || 0,
+            minStock: parseFloat(parts[5]) || 3,
+          });
         });
+      if (rows.length > 0) {
+        importItems(rows);
+      }
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'update_inventory', `Import bahan baku dari CSV`);
       }

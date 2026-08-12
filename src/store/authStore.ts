@@ -7,6 +7,7 @@ import { seedUsers } from '../utils/seed';
 import { useAuditLogStore } from './auditLogStore';
 import { syncUser, deleteUserCloud, fetchUsersFromCloud } from '../lib/cloudSync';
 import { useCartStore } from './cartStore';
+import { authenticateManager } from '../utils/pinAuth';
 
 interface AuthState {
   users: User[];
@@ -14,6 +15,8 @@ interface AuthState {
   passwordsHashed: boolean; // flag to track migration
   login: (username: string, password: string) => User | null;
   logout: () => void;
+  // v4.7 TO DO 10.2: validasi kredensial Manager TANPA mengubah sesi (quick-approval opname).
+  verifyManagerCredentials: (username: string, password: string) => User | null;
   addUser: (user: User) => void;
   updateUser: (id: string, data: Partial<User>) => void;
   deleteUser: (id: string) => void;
@@ -42,6 +45,11 @@ export const useAuthStore = create<AuthState>()(
         });
         set({ users, passwordsHashed: true });
       },
+
+      // v4.7 TO DO 10.2: approval opname harus dari akun Manager — verifikasi kredensial
+      // tanpa efek samping (tidak login, tidak ganti currentUser, tidak ubah activeSessionId).
+      verifyManagerCredentials: (username, password) =>
+        authenticateManager(get().users, username, password),
 
       login: (username, password) => {
         const user = get().users.find((u) => u.username === username);
