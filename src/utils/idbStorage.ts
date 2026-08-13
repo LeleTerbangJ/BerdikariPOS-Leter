@@ -197,6 +197,29 @@ export const idbStorage: StateStorage = {
 };
 
 /**
+ * Hapus beberapa key dari IndexedDB sekaligus (await) — dipakai Data Manager
+ * (Bersihkan Data / Reset / Factory Reset) sebelum `window.location.reload()` agar
+ * transaksi delete selesai sebelum halaman di-unload (jika tidak, data bisa "ghost"
+ * kembali karena delete IDB bersifat async). Juga membersihkan cache in-memory dan
+ * lapisan localStorage (fallback) untuk key yang sama.
+ */
+export async function clearIdbKeys(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  for (const k of keys) cache.delete(k);
+  keys.forEach((k) => safeStorage.removeItem(k)); // lapisan localStorage (fallback) ikut bersih
+  const db = await openDb();
+  if (!db) return; // IDB tidak tersedia → tidak ada data di IDB
+  try {
+    const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(IDB_STORE_NAME);
+    for (const k of keys) store.delete(k);
+    await txDone(tx);
+  } catch {
+    /* noop — clear tidak boleh gagal */
+  }
+}
+
+/**
  * Reset state adapter (cache + koneksi). Dipakai test / hot-reload — data IndexedDB
  * itu sendiri TIDAK dihapus.
  */

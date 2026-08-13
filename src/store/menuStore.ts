@@ -7,6 +7,7 @@ import { syncMenu, deleteMenuCloud, fetchMenusFromCloud, syncCustomCategories, f
 import { fetchComponentsFromCloud, syncComponentToCloud, deleteComponentFromCloud } from '../lib/bundleRepository';
 import { useAuditLogStore } from './auditLogStore';
 import { useAuthStore } from './authStore';
+import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
 
 interface MenuState {
   menus: Menu[];
@@ -202,6 +203,10 @@ export const useMenuStore = create<MenuState>()(
                 menuComponents: componentsList,
               };
             });
+          } else if (isFactoryResetSeedSkip()) {
+            // v4.7 TO DO 12.1.3: setelah Factory Reset, jangan push seed demo lokal ke
+            // cloud (cloud sengaja dikosongkan dari katalog demo). Flag dipakai sekali.
+            clearFactoryResetSeedSkip();
           } else {
             const localMenus = get().menus;
             for (const menu of localMenus) {

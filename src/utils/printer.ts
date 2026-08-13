@@ -39,6 +39,11 @@ export interface ReceiptData {
   receiptFooter?: string;
   isReprint?: boolean;
   showLogoOnReceipt?: boolean;
+  // v4.7 TO DO 12.2.7 (P-A7): nama promo/voucher di struk — hanya diisi bila promo
+  // benar-benar memberi diskon (promoAmount > 0; promo eksklusif yang kalah best-deal tidak tampil).
+  promoName?: string;
+  promoCode?: string;
+  promoAmount?: number;
 }
 
 export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettings, isReprint: boolean = false): ReceiptData {
@@ -64,6 +69,10 @@ export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettin
     receiptFooter: settings.receiptFooter,
     isReprint,
     showLogoOnReceipt: settings.showLogoOnReceipt !== false,
+    // v4.7 TO DO 12.2.7 (P-A7): tampilkan promo hanya bila memberi diskon (P-A3 snapshot promoAmount)
+    promoName: tx.promoAmount ? tx.promoName : undefined,
+    promoCode: tx.promoAmount ? tx.voucherCode : undefined,
+    promoAmount: tx.promoAmount,
   };
 }
 
@@ -496,6 +505,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
       <div style="font-size: 95%;">
         <div class="flex-between"><span>Subtotal</span><span>${formatRupiah(data.subtotal)}</span></div>
         ${data.discount > 0 ? `<div class="flex-between"><span>Diskon</span><span>-${formatRupiah(data.discount)}</span></div>` : ''}
+        ${data.promoName ? `<div class="flex-between"><span>Promo</span><span>${data.promoName}${data.promoCode ? ` (${data.promoCode})` : ''}</span></div>` : ''}
         ${data.tax && data.tax > 0 ? `<div class="flex-between"><span>Pajak</span><span>${formatRupiah(data.tax)}</span></div>` : ''}
         <div class="flex-between font-bold" style="font-size: 105%; margin-top: 2px;"><span>TOTAL</span><span>${formatRupiah(data.total)}</span></div>
       </div>
@@ -639,6 +649,11 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   commands.push(...encoder.encode(leftRight('Subtotal', formatRupiah(data.subtotal), width) + '\n'));
   if (data.discount > 0) {
     commands.push(...encoder.encode(leftRight('Diskon', `-${formatRupiah(data.discount)}`, width) + '\n'));
+  }
+  // v4.7 TO DO 12.2.7 (P-A7): nama promo/voucher di struk thermal (ESC/POS) — potong bila panjang
+  if (data.promoName) {
+    const promoLabel = `Promo: ${data.promoName}${data.promoCode ? ` (${data.promoCode})` : ''}`;
+    commands.push(...encoder.encode(promoLabel.slice(0, maxChars) + '\n'));
   }
   if (data.tax && data.tax > 0) {
     commands.push(...encoder.encode(leftRight('Pajak', formatRupiah(data.tax), width) + '\n'));

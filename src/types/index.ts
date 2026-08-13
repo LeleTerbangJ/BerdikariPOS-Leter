@@ -179,6 +179,11 @@ export interface Transaction {
   appliedPromoId?: string;       // ID promo yang diterapkan
   voucherCode?: string;          // Kode voucher (untuk ditampilkan ulang saat resume)
 
+  // v4.7 TO DO 12.2.4 (P-A3): snapshot performa promo — NAMA & nominal diskon promo saat
+  // checkout di-snapshot agar laporan performa promo akurat walau promo diedit/dihapus nanti.
+  promoName?: string;            // Nama promo (snapshot saat checkout)
+  promoAmount?: number;          // Nominal diskon promo yang diterapkan (snapshot saat checkout)
+
   // v4.7 TO DO 11.2 (P0.2): refund/retur penuh — transaksi Selesai yang dikembalikan.
   // Stok & kunjungan pelanggan sudah di-revert saat refund; Kas Keluar 'Refund' dicatat
   // di Rekap Kas (akuntabel). Transaksi refunded TIDAK dihitung sebagai penjualan di laporan.
@@ -226,6 +231,9 @@ export interface AtomicCheckoutParams {
   // v4.5 TO DO 5.5: rekam promo/voucher pada transaksi PENDING (di-restore saat resume)
   appliedPromoId?: string;
   voucherCode?: string;
+  // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo saat checkout
+  promoName?: string;
+  promoAmount?: number;
 }
 
 // Split Bill Interfaces
@@ -277,6 +285,9 @@ export interface Customer {
   notes?: string;
   totalSpent: number;
   visitCount: number;
+  // v4.7 TO DO 12.2.2 (P-A8): poin loyalty — didapat saat checkout (earn) & bisa ditukar jadi
+  // diskon (redeem). Dihitung dari LoyaltySettings.pointsPerTransaction + total/pointsPerRupiah.
+  loyaltyPoints?: number;
   lastVisit?: string;
   createdAt: string;
 }
@@ -373,7 +384,7 @@ export interface CashierShift {
 
 
 // Promo & Voucher
-export type PromoType = 'percentage' | 'fixed'; // persentase atau nominal tetap
+export type PromoType = 'percentage' | 'fixed' | 'bogo'; // persentase, nominal tetap, atau BOGO (beli N gratis M)
 export type PromoScope = 'all' | 'category' | 'menu' | 'loyalty'; // berlaku untuk apa
 
 export interface Promo {
@@ -392,6 +403,29 @@ export interface Promo {
   usageLimit?: number; // maks penggunaan
   usageCount: number; // sudah dipakai berapa kali
   loyaltyMinVisits?: number; // min kunjungan untuk promo loyalty
+  // v4.7 TO DO 12.2.3 (P-A4): boleh digabung dengan diskon lain (manual/loyalty)?
+  // undefined = true (legacy: perilaku lama yang menumpuk semua diskon).
+  // false = promo EKSKLUSIF → mesin diskon POS otomatis memberi best-deal
+  // (pelanggan dapat yang lebih besar antara promo vs manual+loyalty, tidak keduanya).
+  stackable?: boolean;
+
+  // v4.7 TO DO 12.2.5 (P-A5): BOGO & min-qty
+  // BOGO (type='bogo'): beli `bogoBuyQty` → gratis `bogoFreeQty` unit; `bogoPercent` = diskon %
+  // per unit gratis (0/undefined = gratis penuh, mis. 50 = item ke-N diskon 50%).
+  bogoBuyQty?: number;   // beli N (min 2)
+  bogoFreeQty?: number;  // gratis M (min 1, default 1)
+  bogoPercent?: number;  // diskon % per unit gratis (0-100)
+  // Min-qty discount (type percentage/fixed): diskon hanya berlaku bila total qty item target
+  // (scope menu/category, atau seluruh keranjang bila scope all) >= minQty.
+  minQty?: number;
+
+  // v4.7 TO DO 12.2.6 (P-A6): batas pemakaian PER PELANGGAN
+  // usageLimitPerCustomer = maks pemakaian per pelanggan (mis. 1 = "1 voucher per pelanggan").
+  // Mewajibkan pelanggan terpilih di POS saat promo diterapkan (tanpa pelanggan → tidak berlaku).
+  usageLimitPerCustomer?: number;
+  // Pencatatan pemakaian per pelanggan: { customerId: jumlahPakai }. Disinkronkan bersama promo
+  // (pola sama dengan usageCount global). undefined = belum pernah dipakai.
+  usageByCustomer?: Record<string, number>;
   createdAt: string;
 }
 
@@ -417,6 +451,8 @@ export type AuditAction =
   | 'refund_transaction'
   // v4.7 TO DO 11.2 (P0.4): struk digital (WA/email)
   | 'send_digital_receipt'
+  // v4.7 TO DO 12.1.3 / P-A1: aksi reset/manajemen data (dicatat ke cloud agar survive reload)
+  | 'reset_data'
   | 'create_menu' | 'update_menu' | 'delete_menu' | 'toggle_menu'
   | 'create_user' | 'update_user' | 'delete_user'
   | 'create_inventory' | 'update_inventory' | 'delete_inventory' | 'deduct_inventory'

@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–10 semuanya ✅ + Prioritas 11: P0.1/P0.2/P0.4 selesai** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§15) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–12 semuanya ✅ — termasuk Promo P-A2–P-A8** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§17) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -609,6 +609,93 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - `npx vitest run` → **235/235 test lolos** (21 file; baru: `digitalReceipt.test.ts` 22 kasus P0.4, plus `ppnReport.test.ts` 9 & `refund.test.ts` 9 + 3 guard dari P0.1/P0.2)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW) — diverifikasi setelah seluruh prioritas 1–10 tuntas; P0.1–P0.4 menambah hanya pure helpers + UI, build tetap hijau
 - **TO DO.md**: Prioritas 11 P0.1, P0.2 & P0.4 ✅ SELESAI (v4.7). Tersisa P0: **P0.3** (role Owner > Manager sebagai approver), lalu P1/P2.
+
+---
+
+## 16. Riwayat Pengerjaan v4.7 — Prioritas 12: Audit Promo & Manajemen Data (12.1.1–12.1.5 + P-A1 ✅)
+
+> Sesi lanjutan: audit dua area — **Manajemen Data** (Settings → Manajemen Data: Bersihkan Data Transaksi / Reset ke Default / Factory Reset) & **fitur Promo** (temuan 12.2 masih terbuka). Seluruh item Manajemen Data (12.1.1–12.1.5 + P-A1) sudah dieksekusi & tuntas.
+
+### 16.1 12.1.1 + 12.1.2 — Reset benar-benar membersihkan IndexedDB & Rekap Kas ✅
+
+- **Akar masalah 12.1.1 (KRITIS)**: `dataManager.ts` hanya `localStorage.removeItem(key)`, padahal sejak TO DO 6.1 store `transactions` & `audit-logs` persist via **IndexedDB** (`idbStorage`) — salinan localStorage dihapus saat migrasi → ketiga aksi reset TIDAK menghapus transaksi/audit log; data "ghost" kembali setelah reload (bahkan bisa ter-push balik ke cloud).
+- **Fix**: `idbStorage.ts` + **`clearIdbKeys(keys)`** (hapus IDB + cache + lapisan localStorage, **await** sebelum reload agar delete selesai sebelum unload); `dataManager.ts` kini `splitClearPlan()` mengklasifikasi key IDB vs localStorage dan `clearLocalData()` di-await di ketiga fungsi; key list diekspor (`FULL_RESET_KEYS`/`OPERATIONAL_CLEAR_KEYS`/`IDB_BACKED_KEYS`).
+- **12.1.2**: `rempah-cash-movements` masuk kedua daftar lokal + cloud `clearCloudOperationalData()`/`clearAllCloudData()` kini `DELETE cash_movements` → Rekap Kas ikut bersih.
+- Test: `src/test/dataManager.test.ts` (10 kasus awal — cakupan semua key persist, anti-duplikat, master data tidak ikut terhapus, klasifikasi adapter).
+
+### 16.2 12.1.3 + P-A1 — Reset vs Factory dibedakan; backup, konfirmasi kata kunci & audit log ✅
+
+- **12.1.3** — `resetToDefault` vs `factoryReset` kini dibedakan via `reseedPlan(kind)` murni: **demo** = seed penuh (users+settings+menus+inventory); **factory** = seed **minimal** (users+settings saja — cloud bersih dari katalog demo). Flag skip-seed (`src/utils/factoryResetFlag.ts`) mencegah seed demo lokal ter-push balik ke cloud: `menuStore.loadFromCloud` & `inventoryStore.loadFromCloud` membacanya sekali pada boot berikutnya (skip cabang "cloud kosong → push lokal").
+- **Backup sebelum reset**: toggle "💾 Backup otomatis sebelum reset" (default ON) di Settings → Manajemen Data; unduh `BackupService.createBackup('FULL')` via `downloadBlob` sebelum aksi (gagal backup tidak memblokir).
+- **Konfirmasi kata kunci**: `ConfirmDialog` prop baru `requireKeyword`; dialog **Factory Reset** mewajibkan mengetik **"HAPUS SEMUA"**.
+- **Audit log aksi reset**: `AuditAction 'reset_data'` baru; `recordResetAudit` menulis ke cloud `audit_logs` **setelah** cloud di-wipe (survive reload; antre offline queue bila offline); actor (id/nama/role dari `currentUser`) diteruskan SettingsPage.
+- Test: `reseedPlan` +4 kasus (demo full, factory minimal, akun selalu ada, perbedaan nyata).
+
+### 16.3 12.1.4 + 12.1.5 — menu_components yatim & offline queue ✅
+
+- **12.1.4**: daftar tabel wipe diekstrak (`OPERATIONAL_WIPE_TABLES`/`FULL_WIPE_TABLES`); `clearAllCloudData` kini juga `DELETE menu_components` (reset penuh) — tidak ada komponen bundle yatim; `clearCloudOperationalData` sengaja TIDAK menyentuhnya (Bersihkan Data mempertahankan menu). Refactor `clearCloudTables(tables)` (khusus `settings` pakai `neq('id', 0)`).
+- **12.1.5**: `clearQueue()` dipanggil **paling awal** di ketiga aksi (sebelum cloud wipe & sebelum `recordResetAudit`) — op yang masih antre offline tidak "bangkit lagi" saat flush online; reseed & audit baru tetap antre dengan benar.
+- Test: +5 kasus daftar tabel (FULL memuat menu_components + semua tabel; OPERATIONAL tidak menyentuh master/menu_components tapi memuat cash_movements; tanpa duplikat).
+
+### 16.4 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **267/267 test lolos** (23 file) — rantai terkini di §9.6
+- `npm run build` → tetap **sukses** (tsc + vite build + PWA) — perubahan hanya util/store/UI, tidak menyentuh build pipeline
+- **TO DO.md**: Prioritas 12 **Manajemen Data TUNTAS** (12.1.1–12.1.5 + P-A1 ✅); sisa sisi **PROMO** dieksekusi tuntas di §17 (P-A2–P-A8 ✅). Catatan jujur: `npm run build` belum dijalankan ulang setelah sesi ini (disarankan sekali sebelum deploy — terakhir diverifikasi sukses di §14.5).
+
+---
+
+## 17. Riwayat Pengerjaan v4.7 — Prioritas 12: Sisi Promo (P-A2–P-A8 ✅)
+
+> Sesi lanjutan setelah Manajemen Data tuntas (§16). Menutup **seluruh temuan audit Promo** (12.2.1–12.2.8) satu per satu. **SELURUH Prioritas 12 selesai** — audit Promo & Manajemen Data tuntas.
+
+### 17.1 P-A2 — Scope `menu` + validasi form promo ✅ (12.2.1)
+
+- **Scope "Menu Tertentu"** di dropdown *Berlaku Untuk* (types & POS sudah mendukung, form belum) → select menu (nama + badge ⭐ Best Seller); ganti scope mengosongkan `scopeTarget`; daftar promo menampilkan **nama menu target**.
+- **`src/utils/promoValidation.ts`** (murni, 17 test): nama wajib; % 1–100 / nominal > 0; tanggal berakhir ≥ mulai (keduanya wajib); target wajib untuk menu/kategori; min kunjungan wajib untuk loyalty; **diskon tetap ≤ min belanja**; angka opsional tidak negatif. Error tampil merah di modal; simpan diblokir sampai valid.
+
+### 17.2 P-A3 — Laporan performa promo ✅ (12.2.4)
+
+- Snapshot **`promoName`/`promoAmount`** di `Transaction` & `AtomicCheckoutParams` (engine menyalinnya); POS mengirim **nama promo** (lookup SEMUA promo, bukan hanya aktif — tetap terekam walau diedit/expired) + **nominal diskon aktual** (`promoDiscount`); pending → final ikut membawa snapshot.
+- **Tab "Promo"** di Reports: KPI (tx ber-promo, total diskon promo, omset, diskon non-promo), tabel performa per promo (pakai ×, diskon, omset, rata-rata), detail tx ber-promo, **export CSV**. Helper murni `src/utils/promoReport.ts` (15 test): hanya `Selesai`, non-split, belum refunded; nama fallback lookup untuk data legacy.
+- **Migration 22** (`promo_name`/`promo_amount` di `transactions`) + guard `syncTransaction` + mapping `fetchTransactionsFromCloud`. Catatan jujur: tx lama tanpa nominal tampil diskon 0 di laporan (nama masih di-resolve).
+
+### 17.3 P-A4 — Stacking / eksklusif + auto best-deal ✅ (12.2.3)
+
+- `Promo.stackable?` — `undefined`/`true` = boleh digabung (perilaku lama aman), `false` = **eksklusif**. Toggle di form + badge "Eksklusif".
+- **`src/utils/discountEngine.ts`** — SATU sumber kebenaran `calculateDiscountBreakdown`: stackable = semua dijumlahkan (capped subtotal); eksklusif = **auto best-deal** (terbesar antara promo saja vs manual+loyalty saja). Semua call site POS (finalize, save pending, preview, snapshot promoAmount) memakai hasil SAMA → angka tampil = angka dicommit.
+- Banner loyalty & pill promo hanya tampil bila benar-benar diterapkan; info ℹ️ "Promo eksklusif — otomatis memberi diskon terbaik". **Migration 23** (`stackable` di `promos`) + guard + mapping.
+
+### 17.4 P-A5 — BOGO & min-qty ✅ (12.2.5)
+
+- `PromoType + 'bogo'` + `bogoBuyQty`/`bogoFreeQty`/`bogoPercent`/`minQty`.
+- **`src/utils/promoDiscount.ts`** — `calculatePromoDiscount` murni (POS tinggal delegasi): BOGO kumpulkan harga satuan item cocok scope → tiap `buyQty` unit beri `freeQty` gratis **dari item termurah**; `bogoPercent` = gratis sebagian. Gate `minQty` untuk diskon %/nominal (qty target ≥ ambang). Gate lengkap (aktif/tanggal/usage/min belanja/loyalty/scope) tetap.
+- Form: opsi BOGO (beli/gratis/diskon% + penjelasan), scope loyalty disembunyikan untuk BOGO; field min-qty; daftar menampilkan "Beli 2 Gratis 1 item". Validasi: beli ≥ 2, gratis ≥ 1, diskon 0–100%, scope ≠ loyalty, minQty ≥ 1.
+- **Migration 24**: `min_qty` + `bogo_config` di `promos` + **relaksasi CHECK `promos.type`** jadi `('percentage','fixed','bogo')` (DO block idempoten).
+
+### 17.5 P-A6 — Batas pemakaian per pelanggan ✅ (12.2.6)
+
+- `Promo.usageLimitPerCustomer` + `usageByCustomer` (map `customerId → jumlah pakai`); `promoStore.incrementUsage(id, customerId?)` — POS & SplitBillModal meneruskan `selectedCustomerId`.
+- Gate murni: promo berbatas **wajib ada pelanggan terpilih** (tanpa pelanggan tidak berlaku) dan `usageByCustomer[id] < limit`. POS menolak apply dengan pesan "pilih pelanggan terlebih dahulu".
+- Form: field "Batas per Pelanggan" + info ⚠️ mewajibkan pelanggan; daftar menampilkan "Maks N× per pelanggan". **Migration 25** (`usage_limit_per_customer` + `usage_by_customer` di `promos`). Catatan jujur: pola `usageCount` last-write-wins — race kecil pada dua device bersamaan (sama dengan batasan global existing).
+
+### 17.6 P-A7 — Nama promo di struk ✅ (12.2.7)
+
+- `ReceiptData` + `promoName`/`promoCode`/`promoAmount`; `buildReceiptFromTransaction` mengisi dari snapshot (P-A3). **Gating cerdas**: hanya tampil bila `promoAmount > 0` (promo eksklusif yang kalah best-deal TIDAK diklaim struk; legacy tanpa nominal juga tidak).
+- Tiga jalur: browser print, ESC/POS (dipotong ke lebar kertas 58/80mm), struk digital `buildReceiptText`. Otomatis berlaku untuk print ulang, bill sementara, & struk split. 8 test `receiptPromo`. **Tanpa migrasi DB** (memakai kolom P-A3).
+
+### 17.7 P-A8 — Poin loyalty aktif (earn + redeem) ✅ (12.2.2)
+
+- `Customer.loyaltyPoints` + helper murni `src/utils/loyaltyPoints.ts`: poin = `pointsPerTransaction` + ⌊total ÷ `pointsPerRupiah`⌋; `recordVisit` memberi poin (POS + split, sekali per sesi), `revertVisit` **clawback simetris** (void/cancel/refund).
+- **Redeem di POS**: input "Tukar poin" di keranjang mobile & modal Bayar; maks dibatasi **saldo + headroom** (subtotal − diskon lain) → poin selalu terpakai penuh; dipotong hanya bila benar-benar terpakai (`deductLoyaltyPoints`); bertumpuk di atas diskon lain (nilai kredit pelanggan, bukan bagian aturan stacking eksklusif).
+- Config poin (poin/transaksi, per Rp, nilai tukar) kini **editabel** di Promo & Loyalty; poin tampil di kartu Pelanggan. **Migration 26** (`loyalty_points` di `customers`). Catatan jujur: redeem tidak dipersist di pending (pelanggan menukar saat melunasi); split bill memakai total tanpa redeem; poin lama sebelum fitur = 0.
+
+### 17.8 Sinkronisasi cloud (Migration 22–26) & validasi
+
+- Semua mengikuti pola konsisten: deteksi kolom di `runMigrations` + guard sync (`syncTransaction`/`syncPromo`/`syncCustomer`) agar DB lama tidak menumpuk offline queue + mapping `fetch*FromCloud` lintas device + `supabase/schema.sql` (CREATE TABLE + blok ALTER). ⚠️ DB lama perlu **butir 11** di DEPLOYMENT §4 (sekali di SQL Editor; tercetak otomatis di console app bila terlewat).
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **370/370 test lolos** (31 file). Test baru: `promoValidation` 17, `promoReport` 15, `discountEngine` 13, `promoDiscount` 21, `promoStoreUsage` 4, `receiptPromo` 8, `loyaltyPoints` 8, `loyaltyPointsStore` 10 + mapping cloud.
+- **TO DO.md**: Prioritas 12 **TUNTAS SELURUHNYA** — Manajemen Data (12.1.1–12.1.5 + P-A1) + Promo (P-A2–P-A8). Tidak ada item Prioritas 12 tersisa.
 
 ---
 

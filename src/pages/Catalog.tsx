@@ -475,11 +475,11 @@ export default function Catalog() {
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={formShowSugarLevel} onChange={(e) => setFormShowSugarLevel(e.target.checked)} className="w-4 h-4 rounded" />
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-350">Level Gula 🍬</span>
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Level Gula 🍬</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={formShowTemperature} onChange={(e) => setFormShowTemperature(e.target.checked)} className="w-4 h-4 rounded" />
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-350">Pilihan Suhu 🌡️</span>
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Pilihan Suhu 🌡️</span>
               </label>
             </div>
           </div>

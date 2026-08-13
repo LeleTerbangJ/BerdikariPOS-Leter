@@ -123,6 +123,8 @@ export function buildReceiptText(data: ReceiptData): string {
   // Total
   lines.push(padLeftRight('Subtotal', formatRupiah(data.subtotal), 32));
   if (data.discount > 0) lines.push(padLeftRight('Diskon', `-${formatRupiah(data.discount)}`, 32));
+  // v4.7 TO DO 12.2.7 (P-A7): nama promo/voucher di struk digital (WA/email)
+  if (data.promoName) lines.push(`Promo: ${data.promoName}${data.promoCode ? ` (${data.promoCode})` : ''}`);
   if (data.tax && data.tax > 0) lines.push(padLeftRight('Pajak', formatRupiah(data.tax), 32));
   lines.push(padLeftRight('TOTAL', formatRupiah(data.total), 32));
   lines.push(dashLine());

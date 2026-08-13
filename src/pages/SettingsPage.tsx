@@ -7,7 +7,8 @@ import { useAuditLogStore } from '../store/auditLogStore';
 import { useShiftStore } from '../store/shiftStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { connectBluetoothPrinter, disconnectBluetoothPrinter, isBluetoothConnected, CASHIER_PRINTER_ID, getBluetoothStatus, getDuplicateDeviceInfo, testPrintBluetooth } from '../utils/printer';
-import { resetToDefault, clearOperationalData, factoryReset } from '../utils/dataManager';
+import { resetToDefault, clearOperationalData, factoryReset, type ResetActor } from '../utils/dataManager';
+import { BackupService, downloadBlob } from '../lib/backupService';
 import type { User, Role } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -41,6 +42,9 @@ export default function SettingsPage() {
   const { settings, updateSettings } = useSettingsStore();
   const { addLog } = useAuditLogStore();
   const { shifts } = useShiftStore();
+
+  // v4.7 TO DO 12.1.3 / P-A1: backup otomatis sebelum aksi reset (default ON)
+  const [backupBeforeReset, setBackupBeforeReset] = useState(true);
 
   // Real-time sync for users
   useEffect(() => {
@@ -89,6 +93,39 @@ export default function SettingsPage() {
       );
     }
     alert('Pengaturan pajak berhasil disimpan! 🎉');
+  };
+
+  // ============================================================
+  // v4.7 TO DO 12.1.3 / P-A1: aksi Manajemen Data (reset) — backup dulu + audit log
+  // ============================================================
+  const resetActor: ResetActor | undefined = currentUser
+    ? { id: currentUser.id, name: currentUser.name, role: currentUser.role }
+    : undefined;
+
+  // Unduh backup FULL sebelum reset bila opsi dicentang (gagal backup tidak memblokir reset)
+  const runBackupIfRequested = async () => {
+    if (!backupBeforeReset) return;
+    try {
+      const b = await BackupService.createBackup('FULL');
+      downloadBlob(b.blob, b.filename);
+    } catch (e) {
+      console.warn('[Settings] Backup sebelum reset gagal — melanjutkan reset:', e);
+    }
+  };
+
+  const handleClearData = async () => {
+    await runBackupIfRequested();
+    await clearOperationalData(resetActor);
+  };
+
+  const handleResetDefault = async () => {
+    await runBackupIfRequested();
+    await resetToDefault(resetActor);
+  };
+
+  const handleFactoryReset = async () => {
+    await runBackupIfRequested();
+    await factoryReset(resetActor);
   };
 
   // UI Theme Settings
@@ -1583,6 +1620,25 @@ tersalin ke struk digital.
           </div>
         ) : (
           <div className="space-y-4">
+            {/* v4.7 TO DO 12.1.3 / P-A1: backup otomatis sebelum aksi destruktif */}
+            <div className="flex items-center justify-between p-4 bg-emerald-50 dark:bg-emerald-950/20 rounded-xl border border-emerald-200 dark:border-emerald-800/40">
+              <div>
+                <p className="font-medium text-sm">💾 Backup otomatis sebelum reset</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Unduh file backup lengkap (FULL) sebelum aksi bersihkan/reset di bawah dijalankan.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                <input
+                  type="checkbox"
+                  checked={backupBeforeReset}
+                  onChange={(e) => setBackupBeforeReset(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
             {/* Demo Mode Toggle */}
             <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
               <div>
@@ -1680,9 +1736,9 @@ tersalin ke struk digital.
       <ConfirmDialog
         open={showClearConfirm}
         onClose={() => setShowClearConfirm(false)}
-        onConfirm={clearOperationalData}
+        onConfirm={handleClearData}
         title="Bersihkan Data Transaksi"
-        message="Semua transaksi, shift, pelanggan, promo, dan log akan dihapus permanen (lokal + cloud). Menu, inventaris, user, dan settings tetap dipertahankan. Lanjutkan?"
+        message={`Semua transaksi, shift, pelanggan, promo, rekap kas, dan log akan dihapus permanen (lokal + cloud). Menu, inventaris, user, dan settings tetap dipertahankan.${backupBeforeReset ? ' Backup otomatis akan diunduh dulu.' : ''} Lanjutkan?`}
         confirmText="Ya, Bersihkan"
         variant="warning"
       />
@@ -1690,9 +1746,9 @@ tersalin ke struk digital.
       <ConfirmDialog
         open={showResetConfirm}
         onClose={() => setShowResetConfirm(false)}
-        onConfirm={resetToDefault}
-        title="Reset ke Default"
-        message="Semua data (lokal + cloud) akan dikembalikan ke keadaan awal (demo). Akun, menu, dan settings kembali ke default. Lanjutkan?"
+        onConfirm={handleResetDefault}
+        title="Reset ke Default (Demo)"
+        message={`Semua data (lokal + cloud) akan dikembalikan ke seed demo penuh (akun, menu, inventaris, settings).${backupBeforeReset ? ' Backup otomatis akan diunduh dulu.' : ''} Lanjutkan?`}
         confirmText="Ya, Reset"
         variant="warning"
       />
@@ -1700,11 +1756,12 @@ tersalin ke struk digital.
       <ConfirmDialog
         open={showFactoryConfirm}
         onClose={() => setShowFactoryConfirm(false)}
-        onConfirm={factoryReset}
-        title="⚠️ Factory Reset"
-        message="SEMUA DATA akan dihapus permanen (lokal + cloud). Akun default (manager, kasir, acaraki), menu demo, dan settings default akan di-restore. Tindakan ini TIDAK BISA dibatalkan. Yakin?"
+        onConfirm={handleFactoryReset}
+        title="⚠️ Factory Reset (Fresh Start)"
+        message={`SEMUA DATA akan dihapus permanen (lokal + cloud). Cloud hanya di-seed ulang dengan AKUN LOGIN DEFAULT + SETTINGS (tanpa katalog/inventaris demo) — cocok untuk serah terima klien baru.${backupBeforeReset ? ' Backup otomatis akan diunduh dulu.' : ''} Tindakan ini TIDAK BISA dibatalkan.`}
         confirmText="HAPUS SEMUA"
         variant="danger"
+        requireKeyword="HAPUS SEMUA"
       />
       </div>
       )}

@@ -69,6 +69,8 @@ vi.mock('../lib/supabase', () => {
       paid_amount: null,
       applied_promo_id: 'promo-x',
       voucher_code: 'HEM10',
+      promo_name: 'Diskon 10%',
+      promo_amount: 5000,
     },
     // Sub-bill split FRESH: tanpa split_parent_id, hanya split_index/total_split_count
     {
@@ -158,5 +160,19 @@ describe('fetchTransactionsFromCloud mapping (TO DO 5.10 — is_pending lintas d
     const t1 = result!.find((t) => t.id === 't1')!;
     expect(t1.appliedPromoId).toBeUndefined();
     expect(t1.voucherCode).toBeUndefined();
+  });
+
+  it('TO DO 12.2.4 (P-A3): promoName & promoAmount terpetakan dari cloud (snapshot performa promo)', async () => {
+    const result = await fetchTransactionsFromCloud();
+    expect(result).not.toBeNull();
+
+    const t2 = result!.find((t) => t.id === 't2')!;
+    expect(t2.promoName).toBe('Diskon 10%');
+    expect(t2.promoAmount).toBe(5000);
+
+    // Transaksi tanpa snapshot promo → undefined (bukan null)
+    const t1 = result!.find((t) => t.id === 't1')!;
+    expect(t1.promoName).toBeUndefined();
+    expect(t1.promoAmount).toBeUndefined();
   });
 });

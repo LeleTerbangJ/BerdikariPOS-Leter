@@ -174,6 +174,9 @@ export class AtomicTransactionEngine {
         // v4.5 TO DO 5.5: rekam promo/voucher pada transaksi pending agar bisa di-restore saat resume
         appliedPromoId: params.appliedPromoId,
         voucherCode: params.voucherCode,
+        // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo untuk laporan performa promo
+        promoName: params.promoName,
+        promoAmount: params.promoAmount,
         lifecycleState: 'COMMITTED',
       };
 
