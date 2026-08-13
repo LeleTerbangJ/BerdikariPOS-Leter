@@ -8,6 +8,7 @@ import { useStockLogStore } from './stockLogStore';
 import type { StockLogEntry } from './stockLogStore';
 import { useToastStore } from './toastStore';
 import { syncInventoryItem, syncInventoryStock, deleteInventoryCloud, fetchInventoryFromCloud } from '../lib/cloudSync';
+import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
 import { findNegativeStocksAfterDeduction, type NegativeStockAlert } from '../utils/stockCheck';
 import { planCsvImportRow, type ParsedImportRow } from '../utils/stockImport';
 
@@ -243,6 +244,10 @@ export const useInventoryStore = create<InventoryState>()(
               }
               return { items: [...cloudItems, ...localOnly] };
             });
+          } else if (isFactoryResetSeedSkip()) {
+            // v4.7 TO DO 12.1.3: setelah Factory Reset, jangan push stok demo lokal ke
+            // cloud (cloud sengaja dikosongkan). Flag dipakai sekali.
+            clearFactoryResetSeedSkip();
           } else {
             // Cloud is empty, seed it with local items
             const localItems = get().items;

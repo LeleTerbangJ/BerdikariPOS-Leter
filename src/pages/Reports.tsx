@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import { useMenuStore } from '../store/menuStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { usePromoStore } from '../store/promoStore';
 import { formatRupiah, formatDate } from '../utils/format';
 import { splitContributionDivisor } from '../utils/splitAllocation';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
@@ -13,6 +14,8 @@ import { useCashMovementStore } from '../store/cashMovementStore';
 import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF, exportPpnPDF } from '../utils/pdfExport';
 // v4.7 TO DO 11.2 (P0.1): Laporan PPN bulanan — logika murni
 import { isTaxableTransaction, toPpnRow, summarizePpn, aggregatePpnByDay } from '../utils/ppnReport';
+// v4.7 TO DO 12.2.4 (P-A3): Laporan performa promo — logika murni
+import { aggregatePromoPerformance, toPromoDetailRow } from '../utils/promoReport';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -39,11 +42,12 @@ import {
   Wallet,
   ClipboardCheck,
   Receipt,
+  Tag,
 } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement);
 
-type ReportTab = 'pnl' | 'transactions' | 'inventory' | 'shift' | 'cash' | 'opname' | 'tax';
+type ReportTab = 'pnl' | 'transactions' | 'inventory' | 'shift' | 'cash' | 'opname' | 'tax' | 'promo';
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Reports() {
@@ -60,6 +64,7 @@ export default function Reports() {
   const { shifts } = useShiftStore();
   const { settings } = useSettingsStore();
   const { records: opnameRecords } = useStockOpnameStore();
+  const { promos } = usePromoStore();
 
   // Filter transactions by date
   const filteredTx = useMemo(() => {
@@ -208,6 +213,15 @@ export default function Reports() {
     () => ppnTaxable.map(toPpnRow).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)),
     [ppnTaxable]
   );
+
+  // v4.7 TO DO 12.2.4 (P-A3): performa promo — agregasi per promo + detail transaksi ber-promo
+  const promoReport = useMemo(
+    () => aggregatePromoPerformance(filteredTx, promos),
+    [filteredTx, promos]
+  );
+  const promoRows = promoReport.rows;
+  const promoDetails = promoReport.details;
+  const promoSummary = promoReport.summary;
 
   const { movements } = useCashMovementStore();
 
@@ -517,6 +531,29 @@ export default function Reports() {
     downloadCSV(rows, 'laporan-ppn.csv');
   };
 
+  // v4.7 TO DO 12.2.4 (P-A3): export CSV laporan performa promo
+  const exportPromoExcel = () => {
+    const rows = [
+      ['LAPORAN PERFORMA PROMO'],
+      ['Periode', getDateLabel()],
+      [''],
+      ['RINGKASAN'],
+      ['Transaksi Memakai Promo', promoSummary.promoUsageCount],
+      ['Total Diskon Promo', promoSummary.totalPromoDiscount],
+      ['Total Omset Transaksi Promo', promoSummary.totalPromoRevenue],
+      ['Diskon Manual/Loyalty (Non-Promo)', promoSummary.manualDiscount],
+      [''],
+      ['PERFORMA PER PROMO'],
+      ['Promo', 'Jumlah Pakai', 'Total Diskon', 'Total Omset', 'Rata-rata Diskon/Tx'],
+      ...promoRows.map((r) => [r.promoName, r.usageCount, r.totalDiscount, r.totalRevenue, r.avgDiscount]),
+      [''],
+      ['DETAIL TRANSAKSI BER-PROMO'],
+      ['No. Antrean', 'Tanggal', 'Kasir', 'Pelanggan', 'Promo', 'Diskon Promo', 'Total'],
+      ...promoDetails.map((d) => [`#${d.queueNumber}`, formatDate(d.date), d.cashierName, d.customerName || '-', d.promoName, d.promoAmount, d.totalAmount]),
+    ];
+    downloadCSV(rows, 'laporan-performa-promo.csv');
+  };
+
   const exportTransactionsExcel = () => {
     const rows = [
       ['LAPORAN TRANSAKSI'],
@@ -573,6 +610,7 @@ export default function Reports() {
     { id: 'transactions' as ReportTab, label: 'Transaksi', icon: FileText },
     { id: 'cash' as ReportTab, label: 'Kas Kasir', icon: Wallet },
     { id: 'tax' as ReportTab, label: 'PPN', icon: Receipt },
+    { id: 'promo' as ReportTab, label: 'Promo', icon: Tag },
     { id: 'inventory' as ReportTab, label: 'Stok Bahan', icon: Package },
     { id: 'shift' as ReportTab, label: 'Shift', icon: Users },
     { id: 'opname' as ReportTab, label: 'Stock Opname', icon: ClipboardCheck },
@@ -647,6 +685,11 @@ export default function Reports() {
               rows: ppnRows.map((r) => ({ queue: `#${r.queueNumber}`, date: formatDate(r.date), dpp: formatRupiah(r.dpp), ppn: formatRupiah(r.ppn), total: formatRupiah(r.total) })),
             })} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
               <FileText size={14} /> PDF
+            </button>
+          )}
+          {activeTab === 'promo' && (
+            <button onClick={exportPromoExcel} className="btn-secondary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
+              <Download size={14} /> CSV
             </button>
           )}
         </div>
@@ -789,7 +832,7 @@ export default function Reports() {
             <div className="space-y-3">
               <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-700">
                 <span className="text-slate-600 dark:text-slate-400">Total Pendapatan Kotor (Revenue Gross)</span>
-                <span className="font-bold text-slate-750 dark:text-slate-300">{formatRupiah(totalGrossRevenue)}</span>
+                <span className="font-bold text-slate-700 dark:text-slate-300">{formatRupiah(totalGrossRevenue)}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-700 pl-4">
                 <span className="text-slate-500 dark:text-slate-400">- Diskon yang diberikan</span>
@@ -1080,6 +1123,145 @@ export default function Reports() {
                         <td className="p-3 text-right font-mono">{formatRupiah(r.dpp)}</td>
                         <td className="p-3 text-right font-mono text-brand-700 font-semibold">{formatRupiah(r.ppn)}</td>
                         <td className="p-3 text-right font-medium">{formatRupiah(r.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Promo Performance Tab (v4.7 TO DO 12.2.4 — P-A3) */}
+      {activeTab === 'promo' && (
+        <div className="space-y-6">
+          {/* KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="card p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+                  <Tag className="text-purple-600 dark:text-purple-400" size={22} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Transaksi Memakai Promo</p>
+                  <p className="text-xl font-bold">{promoSummary.promoUsageCount}</p>
+                </div>
+              </div>
+            </div>
+            <div className="card p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <TrendingDown className="text-red-600 dark:text-red-400" size={22} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Total Diskon Promo</p>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{formatRupiah(promoSummary.totalPromoDiscount)}</p>
+                </div>
+              </div>
+            </div>
+            <div className="card p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                  <TrendingUp className="text-green-600 dark:text-green-400" size={22} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Omset Transaksi Promo</p>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{formatRupiah(promoSummary.totalPromoRevenue)}</p>
+                </div>
+              </div>
+            </div>
+            <div className="card p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                  <AlertTriangle className="text-amber-600 dark:text-amber-400" size={22} />
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Diskon Non-Promo (Manual/Loyalty)</p>
+                  <p className="text-xl font-bold text-amber-600 dark:text-amber-400">{formatRupiah(promoSummary.manualDiscount)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Perfoma per promo */}
+          <div className="card overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="font-bold">Performa per Promo</h3>
+              <span className="text-xs text-slate-400">Diurutkan total diskon tertinggi • data lama tanpa promoAmount = 0</span>
+            </div>
+            {promoRows.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <Tag size={40} className="mx-auto mb-2 opacity-30" />
+                <p className="text-sm">Belum ada transaksi memakai promo pada periode ini</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0">
+                    <tr>
+                      <th className="text-left p-3 font-semibold">Promo</th>
+                      <th className="text-center p-3 font-semibold">Jumlah Pakai</th>
+                      <th className="text-right p-3 font-semibold">Total Diskon</th>
+                      <th className="text-right p-3 font-semibold">Total Omset</th>
+                      <th className="text-right p-3 font-semibold">Rata-rata Diskon/Tx</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {promoRows.map((r) => (
+                      <tr key={r.promoId} className="border-b border-slate-50 dark:border-slate-700/40 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <td className="p-3 font-medium">{r.promoName}</td>
+                        <td className="p-3 text-center">
+                          <span className="badge bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300">
+                            {r.usageCount}×
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-semibold text-red-600 dark:text-red-400">{formatRupiah(r.totalDiscount)}</td>
+                        <td className="p-3 text-right font-medium">{formatRupiah(r.totalRevenue)}</td>
+                        <td className="p-3 text-right text-slate-500 dark:text-slate-400">{formatRupiah(r.avgDiscount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Detail transaksi ber-promo */}
+          <div className="card overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="font-bold">Detail Transaksi Ber-Promo</h3>
+            </div>
+            {promoDetails.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <p className="text-sm">Belum ada data</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700 sticky top-0">
+                    <tr>
+                      <th className="text-left p-3 font-semibold">No.</th>
+                      <th className="text-left p-3 font-semibold">Tanggal</th>
+                      <th className="text-left p-3 font-semibold">Kasir</th>
+                      <th className="text-left p-3 font-semibold">Pelanggan</th>
+                      <th className="text-left p-3 font-semibold">Promo</th>
+                      <th className="text-right p-3 font-semibold">Diskon Promo</th>
+                      <th className="text-right p-3 font-semibold">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {promoDetails.map((d) => (
+                      <tr key={d.transactionId} className="border-b border-slate-50 dark:border-slate-700/40">
+                        <td className="p-3 font-bold text-brand-700">#{d.queueNumber}</td>
+                        <td className="p-3 text-xs text-slate-500">{formatDate(d.date)}</td>
+                        <td className="p-3 text-sm">{d.cashierName}</td>
+                        <td className="p-3 text-sm text-slate-500 dark:text-slate-400">{d.customerName || '-'}</td>
+                        <td className="p-3 text-sm font-medium">{d.promoName}</td>
+                        <td className="p-3 text-right font-semibold text-red-600 dark:text-red-400">
+                          {d.promoAmount > 0 ? `-${formatRupiah(d.promoAmount)}` : formatRupiah(0)}
+                        </td>
+                        <td className="p-3 text-right font-medium">{formatRupiah(d.totalAmount)}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -10,7 +10,7 @@ interface PromoState {
   addPromo: (promo: Promo) => void;
   updatePromo: (id: string, data: Partial<Promo>) => void;
   deletePromo: (id: string) => void;
-  incrementUsage: (id: string) => void;
+  incrementUsage: (id: string, customerId?: string) => void;
   getActivePromos: () => Promo[];
   getPromoByCode: (code: string) => Promo | undefined;
   updateLoyaltySettings: (data: Partial<LoyaltySettings>) => void;
@@ -54,11 +54,18 @@ export const usePromoStore = create<PromoState>()(
         set((s) => ({ promos: s.promos.filter((p) => p.id !== id) }));
       },
 
-      incrementUsage: (id) => {
+      // v4.7 TO DO 12.2.6 (P-A6): ikut mencatat pemakaian per pelanggan bila customerId diberikan
+      // (transaksi memakai promo dengan batas per pelanggan). Map usageByCustomer disinkronkan
+      // bersama promo — pola sama dengan usageCount global (last-write-wins lintas device).
+      incrementUsage: (id, customerId) => {
         set((s) => ({
-          promos: s.promos.map((p) =>
-            p.id === id ? { ...p, usageCount: p.usageCount + 1 } : p
-          ),
+          promos: s.promos.map((p) => {
+            if (p.id !== id) return p;
+            const usageByCustomer = customerId
+              ? { ...(p.usageByCustomer || {}), [customerId]: (p.usageByCustomer?.[customerId] || 0) + 1 }
+              : p.usageByCustomer;
+            return { ...p, usageCount: p.usageCount + 1, usageByCustomer };
+          }),
         }));
         const updated = get().promos.find((p) => p.id === id);
         if (updated) syncPromo(updated);

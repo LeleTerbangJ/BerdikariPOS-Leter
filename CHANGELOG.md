@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§15) dan `TO DO.md` (Prioritas 7–10 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§17) dan `TO DO.md` (Prioritas 7–12 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -130,7 +130,17 @@ END $$;
 - Tombol **"Struk Digital"** di riwayat transaksi → modal kirim struk: **kontak pelanggan terisi otomatis dari CRM** (nomor WhatsApp & email, bisa diubah manual) + **pratinjau struk** sebelum kirim.
 - **Kirim WhatsApp** — struk lengkap (nama toko, alamat, header/footer dari Settings, daftar item, total) otomatis terisi di `wa.me` — tinggal kirim. **Kirim Email** — struk sebagai body `mailto:`.
 - **Auto-kirim pasca-checkout**: opsi di Settings (Pengaturan Struk) — setelah checkout berhasil, struk dibuka di WhatsApp dengan nomor pelanggan terisi otomatis (hanya bila transaksi memakai pelanggan dengan nomor HP valid).
-- Setiap pengiriman tercatat di **audit log** (channel, tujuan, no. transaksi). (Settings → Backup):
+- Setiap pengiriman tercatat di **audit log** (channel, tujuan, no. transaksi).
+
+**Promo & Loyalty Lengkap (Prioritas 12 — P-A2–P-A8):**
+- **Promo per menu** — scope "Menu Tertentu" kini bisa dipilih di form (sebelumnya hanya bisa dibuat via database).
+- **Validasi form promo** — nama, persentase 1–100%, tanggal mulai ≤ selesai, target wajib, diskon tetap tidak melebihi minimal belanja (mencegah promo "rugi").
+- **Laporan Performa Promo** (tab baru di Laporan) — jumlah pakai, total diskon, omset, rata-rata diskon per promo + detail transaksi ber-promo + export CSV. Snapshot `promoName`/`promoAmount` tersimpan di tiap transaksi saat checkout (tetap akurat walau promo diedit/dihapus kemudian).
+- **Stacking diskon terkontrol** — opsi per promo: boleh digabung (manual + promo + loyalty) atau **Eksklusif** (otomatis **best-deal**: pelanggan mendapat diskon terbesar antara promo saja vs manual+loyalty saja — tidak pernah ganda). Satu mesin diskon untuk finalize/pending/preview: angka yang tampil = angka yang dicommit.
+- **BOGO / Beli N Gratis M** — beli N dapat M gratis (diambil dari item termurah), opsi diskon % per unit gratis; dan **min-qty** (diskon hanya berlaku bila qty item ≥ ambang).
+- **Batas pemakaian per pelanggan** — kuota voucher per pelanggan (mis. 1× per orang) dengan pencatatan `usageByCustomer`; promo berbatas mewajibkan pelanggan dipilih di POS.
+- **Nama promo di struk** — baris `Promo: Nama (KODE)` di struk termal (browser & ESC/POS) dan struk digital WA/email; hanya tampil bila promo benar-benar memberi diskon (promo eksklusif yang kalah best-deal tidak diklaim struk).
+- **Poin Loyalty aktif** — poin didapat saat checkout (poin/transaksi + 1 poin per Rp), **ditukar jadi diskon** di POS (maks dibatasi saldo & headroom agar selalu terpakai penuh), dikembalikan (clawback) saat void/cancel/refund. Konfigurasi poin kini editabel di Promo & Loyalty; saldo tampil di kartu Pelanggan. (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
 - Restore **2 mode**: **Merge** (gabung dengan data lama) atau **Replace/Snapshot** (sinkron penuh — data zombie tidak kembali lintas device).
 - Foto menu & logo toko ikut di-backup & di-restore (tidak lagi hilang).
@@ -180,6 +190,23 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_name TEXT;
 
 -- Kolom Struk Digital (v4.7 — P0.4) — WAJIB bila memakai fitur auto-kirim WA
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;
+
+-- Kolom Promo & Loyalty (v4.7 — P-A3 s.d. P-A8) — WAJIB bila memakai fitur Promo/Loyalty
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_name TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_amount FLOAT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS stackable BOOLEAN DEFAULT TRUE;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS bogo_config JSONB;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS min_qty INT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_limit_per_customer INT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_by_customer JSONB DEFAULT '{}';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS loyalty_points INT DEFAULT 0;
+-- Perluas tipe promo agar menerima 'bogo' (idempoten — hapus CHECK lama bila ada)
+DO $$ DECLARE cname TEXT; BEGIN
+  SELECT conname INTO cname FROM pg_constraint
+  WHERE conrelid = 'promos'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%percentage%';
+  IF cname IS NOT NULL THEN EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname); END IF;
+END $$;
+ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage', 'fixed', 'bogo'));
 ```
 
 Opsional — **hanya jika memakai Auto Backup dengan destinasi Supabase Cloud Storage**:
@@ -190,12 +217,12 @@ CREATE POLICY "Allow anon upload backups" ON storage.objects FOR INSERT TO anon 
 CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon USING (bucket_id = 'backups');
 ```
 
-> **Catatan**: aplikasi otomatis mendeteksi kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19 — opname, Migration 20 — refund, Migration 21 — struk digital) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
+> **Catatan**: aplikasi otomatis mendeteksi kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19 — opname, Migration 20 — refund, Migration 21 — struk digital, Migration 22–26 — fitur promo & loyalty) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
 
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **235/235 test lolos** (21 file)
+- `npx vitest run` → **370/370 test lolos** (31 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

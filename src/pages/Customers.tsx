@@ -192,6 +192,10 @@ export default function Customers() {
                   <p className="text-slate-500">Kunjungan</p>
                   <p className="font-semibold">{c.visitCount}x</p>
                 </div>
+                <div>
+                  <p className="text-slate-500">Poin</p>
+                  <p className="font-semibold text-amber-600">⭐ {c.loyaltyPoints || 0}</p>
+                </div>
               </div>
               {c.notes && (
                 <p className="text-xs text-slate-400 mt-2 italic">"{c.notes}"</p>

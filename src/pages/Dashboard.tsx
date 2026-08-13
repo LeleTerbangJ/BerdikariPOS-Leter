@@ -757,7 +757,7 @@ export default function Dashboard() {
                     {menuProfitability.slice(0, 10).map((menu, idx) => {
                       const isLowMargin = menu.margin < 30;
                       return (
-                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-850 hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
+                        <tr key={idx} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
                           <td className="py-2.5 px-2 font-medium text-slate-700 dark:text-slate-200 truncate max-w-[120px]" title={menu.name}>
                             {menu.name}
                           </td>
@@ -765,7 +765,7 @@ export default function Dashboard() {
                             {Number.isInteger(menu.qty) ? menu.qty : menu.qty.toFixed(1)}x
                           </td>
                           <td className="py-2.5 px-2 text-right text-slate-500 dark:text-slate-400">{formatRupiah(menu.revenue)}</td>
-                          <td className="py-2.5 px-2 text-right font-bold text-green-700 dark:text-green-450">{formatRupiah(menu.profit)}</td>
+                          <td className="py-2.5 px-2 text-right font-bold text-green-700 dark:text-green-400">{formatRupiah(menu.profit)}</td>
                           <td className="py-2.5 px-2 text-center">
                             <span
                               className={`badge ${
@@ -851,7 +851,7 @@ export default function Dashboard() {
                       </div>
 
                       <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-slate-450 dark:text-slate-400">
+                        <span className="text-slate-500 dark:text-slate-400">
                           Rata-rata: {item.dailyUsage.toFixed(2)} {item.unit}/hari
                         </span>
                         <span className={`badge border ${badgeColor}`}>

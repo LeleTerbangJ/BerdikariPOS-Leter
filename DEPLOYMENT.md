@@ -137,7 +137,7 @@ Setiap klien (toko) yang membeli aplikasi ini perlu:
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` (v4.7) — selesai.
 > Untuk **meng-upgrade database yang sudah ada** ke v4.7, jalankan seluruh blok berikut di Supabase SQL Editor. Aman dijalankan berulang (`IF NOT EXISTS` / DO block idempoten).
-> **v4.7 menambah empat hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), (b) butir 9 — kolom Refund transaksi (WAJIB bila memakai fitur Refund/Retur), (c) butir 10 — kolom `auto_send_digital_receipt` di `settings` (WAJIB bila memakai fitur Struk Digital / auto-kirim WA), dan (d) §4b — bucket Storage untuk Auto Backup cloud (opsional).
+> **v4.7 menambah lima hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), (b) butir 9 — kolom Refund transaksi (WAJIB bila memakai fitur Refund/Retur), (c) butir 10 — kolom `auto_send_digital_receipt` di `settings` (WAJIB bila memakai fitur Struk Digital / auto-kirim WA), (d) butir 11 — kolom Promo & Loyalty (WAJIB bila memakai fitur Promo/Loyalty), dan (e) §4b — bucket Storage untuk Auto Backup cloud (opsional).
 
 ```sql
 -- ============================================================
@@ -249,6 +249,26 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_name TEXT;
 -- gagal (anti offline queue). Fitur ini menutup celah "struk digital" sebagian (pengiriman
 -- masih via deep-link wa.me/mailto dengan struk terisi otomatis, bukan server broadcast).
 ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;
+
+-- 11. ⚠️ v4.7 WAJIB (fitur Promo & Loyalty) — kolom promo/loyalty (TO DO 12.2 / P-A3 s.d. P-A8)
+-- syncTransaction menulis promo_name/promo_amount; syncPromo menulis stackable/bogo_config/
+-- min_qty/usage_limit_per_customer/usage_by_customer; syncCustomer menulis loyalty_points.
+-- Wajib ada agar upsert pada DB lama tidak gagal (anti penumpukan offline queue).
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_name TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_amount FLOAT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS stackable BOOLEAN DEFAULT TRUE;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS bogo_config JSONB;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS min_qty INT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_limit_per_customer INT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_by_customer JSONB DEFAULT '{}';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS loyalty_points INT DEFAULT 0;
+-- Perluas tipe promo agar menerima 'bogo' (idempoten — hapus CHECK lama bila ada)
+DO $$ DECLARE cname TEXT; BEGIN
+  SELECT conname INTO cname FROM pg_constraint
+  WHERE conrelid = 'promos'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%percentage%';
+  IF cname IS NOT NULL THEN EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname); END IF;
+END $$;
+ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage', 'fixed', 'bogo'));
 ```
 
 > [!NOTE] **Self-healing di sisi app**
@@ -258,6 +278,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN 
 > - **Migration 19 (v4.7)** mendeteksi kolom otorisasi opname yang kurang di `stock_opnames` (approver_id / approver_name / approver_role / approved_at / device_id / adjustment_reason) dan mencetak SQL butir 8.
 > - **Migration 20 (v4.7)** mendeteksi kolom refund yang kurang di `transactions` (refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name) dan mencetak SQL butir 9.
 > - **Migration 21 (v4.7)** mendeteksi kolom `auto_send_digital_receipt` yang kurang di `settings` dan mencetak SQL butir 10.
+> - **Migration 22 (v4.7)** mendeteksi kolom `promo_name`/`promo_amount` yang kurang di `transactions`; **Migration 23** — `stackable` di `promos`; **Migration 24** — `min_qty`/`bogo_config` di `promos` (+ relaksasi CHECK `promos.type` agar menerima `'bogo'`); **Migration 25** — `usage_limit_per_customer`/`usage_by_customer` di `promos`; **Migration 26** — `loyalty_points` di `customers`. Semuanya mencetak SQL butir 11.
 > Jadi jika ada yang terlewat, console browser akan menunjukkan persis apa yang perlu dijalankan.
 
 ### 4b. (v4.7) Supabase Storage — bucket untuk Auto Backup cloud
@@ -363,12 +384,15 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] **Laporan PPN bulanan (v4.7 — P0.1)** — tab PPN di Laporan: ringkasan DPP/PPN, rekap harian, detail transaksi, export CSV & PDF
 - [x] **Refund/Retur penuh (v4.7 — P0.2)** — revert stok + kunjungan, Kas Keluar 'Refund' otomatis di Rekap Kas, eksklusi dari penjualan, anti double-refund, otorisasi PIN Manager
 - [x] **Struk Digital (v4.7 — P0.4)** — kirim struk ke WhatsApp/email pelanggan dari halaman Transaksi (kontak CRM otomatis + pratinjau + audit log); toggle Settings "auto-kirim WA" pasca-checkout (pre-open window anti popup blocker, skip idempotent replay)
-- [x] Validasi otomatis: tsc 0 error, **235/235 test**, build produksi sukses (diverifikasi ulang v4.7)
+- [x] **Promo lengkap (v4.7 — P-A2 s.d. P-A8)** — scope menu di form, validasi form, laporan performa promo (snapshot `promoName`/`promoAmount` + tab di Laporan + CSV), stacking/eksklusif dengan auto best-deal, BOGO & min-qty, batas pemakaian per pelanggan, nama promo di struk termal & digital, poin loyalty (earn + redeem + clawback)
+- [x] Validasi otomatis: tsc 0 error, **370/370 test** (31 file), build produksi sukses (diverifikasi v4.7)
+
+> **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./TESTING-DEMO-SALES.md)**.
 
 ### 🔲 Sebelum Serah Terima ke Klien
 - [ ] Ganti password default semua akun
 - [ ] Buat Supabase project terpisah per klien (Opsi B) dan isi env vars yang benar
-- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 — termasuk butir 8 kolom otorisasi opname, butir 9 kolom Refund, & butir 10 kolom Struk Digital — + §4b bucket Auto Backup untuk DB lama)
+- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 — termasuk butir 8 kolom otorisasi opname, butir 9 kolom Refund, butir 10 kolom Struk Digital, & butir 11 kolom Promo/Loyalty — + §4b bucket Auto Backup untuk DB lama)
 - [ ] (Opsional) Buat bucket `backups` + policy Storage (§4b) bila klien memakai Auto Backup cloud
 - [ ] Verifikasi sync antar 2 device (kasir + dapur): pesanan, stok, promo, Rekap Kas
 - [ ] Uji offline: matikan internet → catat kas/transaksi → badge "Belum Sync" → online → data muncul di device lain
@@ -383,12 +407,14 @@ Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL ya
 
 | Versi | Ringkasan |
 |---|---|
-| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh** & **Struk Digital (WA/email + auto-kirim)** |
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)** & **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)** |
 | **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
 | **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
 | **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |
 
 > **Prosedur rilis berikutnya**: tambahkan bagian baru di `CHANGELOG.md` → perbarui blok upgrade DB di §4 dokumen ini → jalankan validasi (tsc, vitest, build) → merge ke `main`.
+
+> **Rilis v4.7**: ringkasan siap-dikirim ke klien (fitur + perbaikan + langkah SQL) ada di **[`RELEASE-v4.7.md`](./RELEASE-v4.7.md)**.
 
 ---
 

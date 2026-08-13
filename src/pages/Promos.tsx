@@ -4,6 +4,7 @@ import { usePromoStore } from '../store/promoStore';
 import { useMenuStore } from '../store/menuStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
+import { validatePromoForm } from '../utils/promoValidation';
 import type { Promo, PromoType, PromoScope } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -21,7 +22,7 @@ import {
 
 export default function Promos() {
   const { promos, addPromo, updatePromo, deletePromo, loyaltySettings, updateLoyaltySettings, loadFromCloud } = usePromoStore();
-  const { getCategories } = useMenuStore();
+  const { getCategories, menus } = useMenuStore();
 
   // Real-time sync for promos
   useEffect(() => {
@@ -54,6 +55,17 @@ export default function Promos() {
   const [formEndDate, setFormEndDate] = useState('');
   const [formUsageLimit, setFormUsageLimit] = useState('');
   const [formLoyaltyMinVisits, setFormLoyaltyMinVisits] = useState('');
+  // v4.7 TO DO 12.2.5 (P-A5): BOGO & min-qty
+  const [formBogoBuyQty, setFormBogoBuyQty] = useState('');
+  const [formBogoFreeQty, setFormBogoFreeQty] = useState('');
+  const [formBogoPercent, setFormBogoPercent] = useState('');
+  const [formMinQty, setFormMinQty] = useState('');
+  // v4.7 TO DO 12.2.6 (P-A6): batas pemakaian per pelanggan
+  const [formUsageLimitPerCustomer, setFormUsageLimitPerCustomer] = useState('');
+  // v4.7 TO DO 12.2.3 (P-A4): boleh digabung dengan diskon lain (manual/loyalty)
+  const [formStackable, setFormStackable] = useState(true);
+  // v4.7 TO DO 12.2 / P-A2: pesan validasi form (ditampilkan merah di modal)
+  const [formErrors, setFormErrors] = useState<string[]>([]);
 
   const categories = getCategories();
 
@@ -63,6 +75,10 @@ export default function Promos() {
     setFormScope('all'); setFormScopeTarget(''); setFormMinPurchase('');
     setFormMaxDiscount(''); setFormStartDate(''); setFormEndDate('');
     setFormUsageLimit(''); setFormLoyaltyMinVisits('');
+    setFormBogoBuyQty(''); setFormBogoFreeQty(''); setFormBogoPercent(''); setFormMinQty('');
+    setFormUsageLimitPerCustomer('');
+    setFormStackable(true);
+    setFormErrors([]);
     setShowForm(true);
   };
 
@@ -74,15 +90,48 @@ export default function Promos() {
     setFormMaxDiscount(String(p.maxDiscount || ''));
     setFormStartDate(p.startDate.split('T')[0]); setFormEndDate(p.endDate.split('T')[0]);
     setFormUsageLimit(String(p.usageLimit || '')); setFormLoyaltyMinVisits(String(p.loyaltyMinVisits || ''));
+    setFormBogoBuyQty(String(p.bogoBuyQty || '')); setFormBogoFreeQty(String(p.bogoFreeQty || ''));
+    setFormBogoPercent(String(p.bogoPercent ?? '')); setFormMinQty(String(p.minQty || ''));
+    setFormUsageLimitPerCustomer(String(p.usageLimitPerCustomer || ''));
+    setFormStackable(p.stackable !== false);
+    setFormErrors([]);
     setShowForm(true);
   };
 
   const handleSave = () => {
+    // v4.7 TO DO 12.2 / P-A2: validasi form sebelum simpan (nama, nilai, tanggal, target scope)
+    const result = validatePromoForm({
+      name: formName,
+      type: formType,
+      value: formType === 'bogo' ? 0 : (parseFloat(formValue) || 0),
+      scope: formScope,
+      scopeTarget: formScopeTarget || undefined,
+      minPurchase: parseInt(formMinPurchase) || undefined,
+      maxDiscount: parseInt(formMaxDiscount) || undefined,
+      startDate: formStartDate,
+      endDate: formEndDate,
+      usageLimit: parseInt(formUsageLimit) || undefined,
+      loyaltyMinVisits: parseInt(formLoyaltyMinVisits) || undefined,
+      // P-A5: BOGO & min-qty
+      bogoBuyQty: parseInt(formBogoBuyQty) || undefined,
+      bogoFreeQty: parseInt(formBogoFreeQty) || undefined,
+      bogoPercent: formBogoPercent !== '' ? (parseInt(formBogoPercent) || 0) : undefined,
+      minQty: parseInt(formMinQty) || undefined,
+      // P-A6: batas pemakaian per pelanggan
+      usageLimitPerCustomer: parseInt(formUsageLimitPerCustomer) || undefined,
+    });
+    if (!result.valid) {
+      setFormErrors(result.errors);
+      return;
+    }
+    setFormErrors([]);
+
     const data: Omit<Promo, 'id' | 'usageCount' | 'createdAt'> = {
       name: formName,
       code: formCode || undefined,
       type: formType,
-      value: parseFloat(formValue) || 0,
+      // BOGO: value tidak dipakai (dihitung per item) — simpan 0 (kolom DB NOT NULL)
+      value: formType === 'bogo' ? 0 : (parseFloat(formValue) || 0),
       scope: formScope,
       scopeTarget: formScopeTarget || undefined,
       minPurchase: parseInt(formMinPurchase) || undefined,
@@ -92,6 +141,15 @@ export default function Promos() {
       isActive: true,
       usageLimit: parseInt(formUsageLimit) || undefined,
       loyaltyMinVisits: parseInt(formLoyaltyMinVisits) || undefined,
+      // v4.7 TO DO 12.2.3 (P-A4): default true — undefined = legacy tetap bisa digabung
+      stackable: formStackable,
+      // v4.7 TO DO 12.2.5 (P-A5): BOGO & min-qty
+      bogoBuyQty: formType === 'bogo' ? (parseInt(formBogoBuyQty) || 2) : undefined,
+      bogoFreeQty: formType === 'bogo' ? (parseInt(formBogoFreeQty) || 1) : undefined,
+      bogoPercent: formType === 'bogo' && formBogoPercent !== '' ? (parseInt(formBogoPercent) || 0) : undefined,
+      minQty: formType !== 'bogo' && formMinQty ? (parseInt(formMinQty) || undefined) : undefined,
+      // v4.7 TO DO 12.2.6 (P-A6): batas pemakaian per pelanggan
+      usageLimitPerCustomer: formUsageLimitPerCustomer ? (parseInt(formUsageLimitPerCustomer) || undefined) : undefined,
     };
 
     if (editId) {
@@ -159,8 +217,13 @@ export default function Promos() {
                         {!isExpired(p) && !isUpcoming(p) && p.isActive && <span className="badge bg-green-100 text-green-700">Aktif</span>}
                       </div>
                       <p className="text-sm text-slate-600">
-                        {p.type === 'percentage' ? `${p.value}%` : formatRupiah(p.value)} off
-                        {p.scope === 'all' ? ' • Semua menu' : p.scope === 'category' ? ` • Kategori: ${p.scopeTarget}` : p.scope === 'loyalty' ? ` • Loyalty (min ${p.loyaltyMinVisits} visit)` : ` • Menu tertentu`}
+                        {p.type === 'bogo'
+                          ? `Beli ${p.bogoBuyQty || 2} ${p.bogoPercent && p.bogoPercent > 0 ? `diskon ${p.bogoPercent}% utk ` : 'Gratis '}${p.bogoFreeQty || 1} item`
+                          : p.type === 'percentage' ? `${p.value}%` : formatRupiah(p.value) + ' off'}
+                        {p.scope === 'all' ? ' • Semua menu' : p.scope === 'category' ? ` • Kategori: ${p.scopeTarget}` : p.scope === 'loyalty' ? ` • Loyalty (min ${p.loyaltyMinVisits} visit)` : ` • Menu: ${menus.find((m) => m.id === p.scopeTarget)?.name || 'Menu tertentu'}`}
+                        {p.minQty ? ` • Min ${p.minQty} item` : ''}
+                        {p.usageLimitPerCustomer ? ` • Maks ${p.usageLimitPerCustomer}× per pelanggan` : ''}
+                        {p.stackable === false && ' • Eksklusif (tidak digabung diskon lain)'}
                       </p>
                       <p className="text-xs text-slate-400 mt-1">
                         <Calendar size={11} className="inline mr-1" />
@@ -253,6 +316,30 @@ export default function Promos() {
                   </div>
                 </div>
 
+                {/* v4.7 TO DO 12.2.2 (P-A8): konfigurasi poin loyalty — earn & redeem */}
+                <div className="p-4 bg-purple-50 dark:bg-purple-950/30 rounded-xl border border-purple-200 dark:border-purple-900/40">
+                  <p className="text-xs text-purple-700 dark:text-purple-300 font-semibold mb-3">⭐ Poin Loyalty — Earn &amp; Redeem</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="text-xs text-slate-500">Poin per Transaksi</label>
+                      <input type="number" value={loyaltySettings.pointsPerTransaction} onChange={(e) => updateLoyaltySettings({ pointsPerTransaction: parseInt(e.target.value) || 0 })} className="input text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500">1 Poin per Rp</label>
+                      <input type="number" value={loyaltySettings.pointsPerRupiah} onChange={(e) => updateLoyaltySettings({ pointsPerRupiah: parseInt(e.target.value) || 0 })} className="input text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500">1 Poin = Rp (diskon)</label>
+                      <input type="number" value={loyaltySettings.redeemPointsValue} onChange={(e) => updateLoyaltySettings({ redeemPointsValue: parseInt(e.target.value) || 0 })} className="input text-sm" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                    Poin otomatis didapat pelanggan saat checkout ({loyaltySettings.pointsPerTransaction} + total ÷ Rp {loyaltySettings.pointsPerRupiah})
+                    dan bisa ditukar kasir jadi diskon di layar Bayar (1 poin = Rp {loyaltySettings.redeemPointsValue}).
+                    Poin pelanggan tampil saat memilih pelanggan di POS.
+                  </p>
+                </div>
+
                 <p className="text-xs text-slate-400">
                   Diskon loyalty otomatis diterapkan saat pelanggan dipilih di POS berdasarkan jumlah kunjungan mereka.
                 </p>
@@ -282,21 +369,46 @@ export default function Promos() {
               <select value={formType} onChange={(e) => setFormType(e.target.value as PromoType)} className="input">
                 <option value="percentage">Persentase (%)</option>
                 <option value="fixed">Nominal Tetap (Rp)</option>
+                <option value="bogo">BOGO / Beli N Gratis M (per item)</option>
               </select>
             </div>
-            <div>
-              <label className="label">Nilai {formType === 'percentage' ? '(%)' : '(Rp)'}</label>
-              <input value={formValue} onChange={(e) => setFormValue(e.target.value)} className="input" type="number" />
-            </div>
+            {formType !== 'bogo' ? (
+              <div>
+                <label className="label">Nilai {formType === 'percentage' ? '(%)' : '(Rp)'}</label>
+                <input value={formValue} onChange={(e) => setFormValue(e.target.value)} className="input" type="number" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="label">Beli</label>
+                  <input value={formBogoBuyQty} onChange={(e) => setFormBogoBuyQty(e.target.value.replace(/\D/g, ''))} className="input" type="number" placeholder="2" />
+                </div>
+                <div>
+                  <label className="label">Gratis</label>
+                  <input value={formBogoFreeQty} onChange={(e) => setFormBogoFreeQty(e.target.value.replace(/\D/g, ''))} className="input" type="number" placeholder="1" />
+                </div>
+                <div>
+                  <label className="label">Diskon %</label>
+                  <input value={formBogoPercent} onChange={(e) => setFormBogoPercent(e.target.value.replace(/\D/g, ''))} className="input" type="number" placeholder="0" />
+                </div>
+              </div>
+            )}
           </div>
+          {formType === 'bogo' && (
+            <p className="text-xs text-slate-400">
+              Contoh: Beli 2, Gratis 1 = gratis penuh 1 item termurah. Diskon % &gt; 0 = item gratis hanya
+              dipotong sebagian (mis. 50 = item ke-N diskon 50%). Gratis selalu diambil dari item TERMURAH.
+            </p>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Berlaku Untuk</label>
-              <select value={formScope} onChange={(e) => setFormScope(e.target.value as PromoScope)} className="input">
+              <select value={formScope} onChange={(e) => { setFormScope(e.target.value as PromoScope); setFormScopeTarget(''); }} className="input">
                 <option value="all">Semua Menu</option>
                 <option value="category">Kategori Tertentu</option>
-                <option value="loyalty">Pelanggan Loyal</option>
+                <option value="menu">Menu Tertentu</option>
+                {formType !== 'bogo' && <option value="loyalty">Pelanggan Loyal</option>}
               </select>
             </div>
             {formScope === 'category' && (
@@ -305,6 +417,15 @@ export default function Promos() {
                 <select value={formScopeTarget} onChange={(e) => setFormScopeTarget(e.target.value)} className="input">
                   <option value="">Pilih kategori</option>
                   {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            {formScope === 'menu' && (
+              <div>
+                <label className="label">Menu</label>
+                <select value={formScopeTarget} onChange={(e) => setFormScopeTarget(e.target.value)} className="input">
+                  <option value="">Pilih menu</option>
+                  {menus.map((m) => <option key={m.id} value={m.id}>{m.name}{m.isBestSeller ? ' ⭐' : ''}</option>)}
                 </select>
               </div>
             )}
@@ -327,7 +448,7 @@ export default function Promos() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <label className="label">Min. Belanja (Rp)</label>
               <input value={formMinPurchase} onChange={(e) => setFormMinPurchase(e.target.value)} className="input" type="number" placeholder="0" />
@@ -340,11 +461,57 @@ export default function Promos() {
               <label className="label">Batas Penggunaan</label>
               <input value={formUsageLimit} onChange={(e) => setFormUsageLimit(e.target.value)} className="input" type="number" placeholder="Unlimited" />
             </div>
+            <div>
+              <label className="label">Batas per Pelanggan (opsional)</label>
+              <input value={formUsageLimitPerCustomer} onChange={(e) => setFormUsageLimitPerCustomer(e.target.value.replace(/\D/g, ''))} className="input" type="number" placeholder="Contoh: 1 = 1× per pelanggan" />
+            </div>
           </div>
+
+          <p className="text-xs text-slate-400 -mt-2">
+            {formUsageLimitPerCustomer ? '⚠️ Promo ini mewajibkan pelanggan dipilih di POS (pemakaian dicatat per pelanggan).' : 'Batas per pelanggan: kosongkan bila semua pelanggan boleh memakai berulang kali.'}
+          </p>
+
+          {/* v4.7 TO DO 12.2.5 (P-A5): min-qty gate untuk diskon %/nominal */}
+          {formType !== 'bogo' && (
+            <div>
+              <label className="label">Min. Qty Item (opsional)</label>
+              <input value={formMinQty} onChange={(e) => setFormMinQty(e.target.value.replace(/\D/g, ''))} className="input" type="number" placeholder="Contoh: 3 = diskon hanya jika beli ≥ 3 item target" />
+              <p className="text-xs text-slate-400 mt-1">
+                Diskon hanya berlaku bila total qty item target (menu/kategori, atau seluruh keranjang
+                untuk "Semua Menu") mencapai jumlah ini.
+              </p>
+            </div>
+          )}
+
+          {/* v4.7 TO DO 12.2.3 (P-A4): opsi stacking per promo */}
+          <label className="flex items-start gap-3 p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={formStackable}
+              onChange={(e) => setFormStackable(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-brand-600"
+            />
+            <div>
+              <p className="text-sm font-medium">Boleh digabung dengan diskon lain (manual / loyalty)</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Jika dinonaktifkan, promo bersifat <b>eksklusif</b> — POS otomatis memberi diskon
+                terbaik: pelanggan mendapat <b>promo ini</b> ATAU <b>diskon manual + loyalty</b>,
+                tidak keduanya.
+              </p>
+            </div>
+          </label>
+
+          {formErrors.length > 0 && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-xl space-y-1">
+              {formErrors.map((err) => (
+                <p key={err} className="text-xs text-red-600 dark:text-red-400">⚠️ {err}</p>
+              ))}
+            </div>
+          )}
 
           <div className="flex gap-3 pt-3 border-t border-slate-100">
             <button onClick={() => setShowForm(false)} className="btn-secondary flex-1">Batal</button>
-            <button onClick={handleSave} className="btn-primary flex-1" disabled={!formName || !formValue || !formStartDate || !formEndDate}>
+            <button onClick={handleSave} className="btn-primary flex-1" disabled={!formName || (formType !== 'bogo' && !formValue) || !formStartDate || !formEndDate}>
               {editId ? 'Simpan' : 'Tambah'}
             </button>
           </div>

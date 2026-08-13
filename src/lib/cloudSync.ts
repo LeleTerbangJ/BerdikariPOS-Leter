@@ -295,6 +295,97 @@ export async function runMigrations() {
       migrationNeeded.autoSendDigitalReceipt = true;
     }
 
+    // Migration 22 (v4.7 TO DO 12.2.4 / P-A3): kolom performa promo di transactions.
+    // syncTransaction menulis promo_name/promo_amount — deteksi agar upsert pada DB lama tidak
+    // gagal (mencegah penumpukan offline queue), konsisten dengan pola Migration 17.
+    const promoPerfColumns = ['promo_name', 'promo_amount'];
+    const { error: promoPerfError } = await supabase
+      .from('transactions')
+      .select(promoPerfColumns.join(','))
+      .limit(1);
+    const promoPerfMissing =
+      !!promoPerfError &&
+      promoPerfColumns.some((c) => promoPerfError.message?.includes(c));
+    if (promoPerfMissing) {
+      console.warn('[Migration] Kolom performa promo belum ada di transactions (TO DO 12.2.4 / P-A3): promo_name / promo_amount.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_name TEXT;');
+      console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_amount FLOAT;');
+      migrationNeeded.promoName = true;
+      migrationNeeded.promoAmount = true;
+    }
+
+    // Migration 23 (v4.7 TO DO 12.2.3 / P-A4): kolom stackable di promos.
+    // syncPromo menulis stackable — deteksi agar upsert pada DB lama tidak gagal.
+    const { error: stackableColError } = await supabase
+      .from('promos')
+      .select('stackable')
+      .limit(1);
+    if (stackableColError && stackableColError.message?.includes('stackable')) {
+      console.warn('[Migration] Kolom stackable belum ada di promos (TO DO 12.2.3 / P-A4).');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE promos ADD COLUMN IF NOT EXISTS stackable BOOLEAN DEFAULT TRUE;');
+      migrationNeeded.promoStackable = true;
+    }
+
+    // Migration 24 (v4.7 TO DO 12.2.5 / P-A5): BOGO & min-qty di promos.
+    // syncPromo menulis min_qty/bogo_config dan type='bogo' (CHECK constraint lama hanya
+    // percentage/fixed) — deteksi kolom agar upsert pada DB lama tidak gagal, dan cetak
+    // SQL relax constraint type (idempoten, pola sama dengan migrasi tx_status).
+    const bogoColumns = ['min_qty', 'bogo_config'];
+    const { error: bogoColError } = await supabase
+      .from('promos')
+      .select(bogoColumns.join(','))
+      .limit(1);
+    const bogoColumnsMissing =
+      !!bogoColError &&
+      bogoColumns.some((c) => bogoColError.message?.includes(c));
+    if (bogoColumnsMissing) {
+      console.warn('[Migration] Kolom BOGO/min-qty belum ada di promos (TO DO 12.2.5 / P-A5): min_qty / bogo_config + izinkan type bogo.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE promos ADD COLUMN IF NOT EXISTS min_qty INT;');
+      console.warn('  ALTER TABLE promos ADD COLUMN IF NOT EXISTS bogo_config JSONB;');
+      console.warn('  DO $$ DECLARE cname TEXT; BEGIN');
+      console.warn("    SELECT conname INTO cname FROM pg_constraint WHERE conrelid = 'promos'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%percentage%';");
+      console.warn("    IF cname IS NOT NULL THEN EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname); END IF;");
+      console.warn('  END $$;');
+      console.warn("  ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage', 'fixed', 'bogo'));");
+      migrationNeeded.promoMinQty = true;
+      migrationNeeded.promoBogoConfig = true;
+    }
+
+    // Migration 25 (v4.7 TO DO 12.2.6 / P-A6): batas pemakaian per pelanggan di promos.
+    // syncPromo menulis usage_limit_per_customer/usage_by_customer — deteksi agar upsert
+    // pada DB lama tidak gagal (mencegah penumpukan offline queue).
+    const perCustomerColumns = ['usage_limit_per_customer', 'usage_by_customer'];
+    const { error: perCustomerColError } = await supabase
+      .from('promos')
+      .select(perCustomerColumns.join(','))
+      .limit(1);
+    const perCustomerColumnsMissing =
+      !!perCustomerColError &&
+      perCustomerColumns.some((c) => perCustomerColError.message?.includes(c));
+    if (perCustomerColumnsMissing) {
+      console.warn('[Migration] Kolom batas per pelanggan belum ada di promos (TO DO 12.2.6 / P-A6): usage_limit_per_customer / usage_by_customer.');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_limit_per_customer INT;');
+      console.warn("  ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_by_customer JSONB DEFAULT '{}';");
+      migrationNeeded.promoUsagePerCustomer = true;
+    }
+
+    // Migration 26 (v4.7 TO DO 12.2.2 / P-A8): kolom poin loyalty di customers.
+    // syncCustomer menulis loyalty_points — deteksi agar upsert pada DB lama tidak gagal.
+    const { error: loyaltyColError } = await supabase
+      .from('customers')
+      .select('loyalty_points')
+      .limit(1);
+    if (loyaltyColError && loyaltyColError.message?.includes('loyalty_points')) {
+      console.warn('[Migration] Kolom loyalty_points belum ada di customers (TO DO 12.2.2 / P-A8).');
+      console.warn('[Migration] Please run this SQL in Supabase SQL Editor:');
+      console.warn('  ALTER TABLE customers ADD COLUMN IF NOT EXISTS loyalty_points INT DEFAULT 0;');
+      migrationNeeded.loyaltyPoints = true;
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -346,7 +437,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -416,6 +507,13 @@ export async function syncTransaction(tx: Transaction) {
   }
   if (!migrationNeeded.voucherCode) {
     data.voucher_code = tx.voucherCode || null;
+  }
+  // v4.7 TO DO 12.2.4 (P-A3): snapshot performa promo (nama & nominal diskon promo saat checkout)
+  if (!migrationNeeded.promoName) {
+    data.promo_name = tx.promoName || null;
+  }
+  if (!migrationNeeded.promoAmount) {
+    data.promo_amount = tx.promoAmount ?? null;
   }
   await smartUpsert('transactions', data);
 }
@@ -513,6 +611,8 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       paidAmount: row.paid_amount || undefined,
       appliedPromoId: row.applied_promo_id || undefined,
       voucherCode: row.voucher_code || undefined,
+      promoName: row.promo_name || undefined,
+      promoAmount: row.promo_amount || undefined,
     })) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);
@@ -739,7 +839,7 @@ export async function deleteMenuCloud(id: string) {
 
 export async function syncCustomer(customer: Customer) {
   if (!isSupabaseConfigured) return;
-  await smartUpsert('customers', {
+  const data: Record<string, any> = {
     id: customer.id,
     name: customer.name,
     phone: customer.phone,
@@ -749,7 +849,12 @@ export async function syncCustomer(customer: Customer) {
     visit_count: customer.visitCount,
     last_visit: customer.lastVisit,
     created_at: customer.createdAt,
-  });
+  };
+  // v4.7 TO DO 12.2.2 (P-A8): poin loyalty — hanya ditulis jika kolom sudah ada di DB
+  if (!migrationNeeded.loyaltyPoints) {
+    data.loyalty_points = customer.loyaltyPoints || 0;
+  }
+  await smartUpsert('customers', data);
 }
 
 export async function deleteCustomerCloud(id: string) {
@@ -978,6 +1083,7 @@ export async function fetchCustomersFromCloud(): Promise<Customer[] | null> {
       notes: row.notes || undefined,
       totalSpent: row.total_spent || 0,
       visitCount: row.visit_count || 0,
+      loyaltyPoints: row.loyalty_points || 0,
       lastVisit: row.last_visit || undefined,
       createdAt: row.created_at,
     })) || null;
@@ -1085,7 +1191,7 @@ export async function fetchUsersFromCloud(): Promise<User[] | null> {
 
 export async function syncPromo(promo: Promo) {
   if (!isSupabaseConfigured) return;
-  await smartUpsert('promos', {
+  const data: Record<string, any> = {
     id: promo.id,
     name: promo.name,
     code: promo.code || null,
@@ -1103,7 +1209,31 @@ export async function syncPromo(promo: Promo) {
     loyalty_min_visits: promo.loyaltyMinVisits || null,
     // BUG-NEW-07 fix: Include createdAt to prevent null column in cloud
     created_at: promo.createdAt || new Date().toISOString(),
-  });
+  };
+  // v4.7 TO DO 12.2.3 (P-A4): flag stacking promo — hanya ditulis jika kolom sudah ada di DB
+  if (!migrationNeeded.promoStackable) {
+    data.stackable = promo.stackable !== false;
+  }
+  // v4.7 TO DO 12.2.5 (P-A5): BOGO & min-qty — hanya ditulis jika kolom sudah ada di DB
+  if (!migrationNeeded.promoMinQty) {
+    data.min_qty = promo.minQty || null;
+  }
+  if (!migrationNeeded.promoBogoConfig) {
+    data.bogo_config =
+      promo.type === 'bogo'
+        ? {
+            buyQty: promo.bogoBuyQty || 2,
+            freeQty: promo.bogoFreeQty || 1,
+            percent: promo.bogoPercent ?? 0,
+          }
+        : null;
+  }
+  // v4.7 TO DO 12.2.6 (P-A6): batas pemakaian per pelanggan — hanya ditulis jika kolom ada
+  if (!migrationNeeded.promoUsagePerCustomer) {
+    data.usage_limit_per_customer = promo.usageLimitPerCustomer || null;
+    data.usage_by_customer = promo.usageByCustomer || {};
+  }
+  await smartUpsert('promos', data);
 }
 
 export async function deletePromoCloud(id: string) {
@@ -1132,6 +1262,15 @@ export async function fetchPromosFromCloud(): Promise<Promo[] | null> {
       usageLimit: row.usage_limit || undefined,
       usageCount: row.usage_count || 0,
       loyaltyMinVisits: row.loyalty_min_visits || undefined,
+      stackable: row.stackable !== false,
+      // v4.7 TO DO 12.2.5 (P-A5): BOGO & min-qty (bogo_config JSONB di cloud)
+      minQty: row.min_qty || undefined,
+      bogoBuyQty: row.bogo_config?.buyQty || undefined,
+      bogoFreeQty: row.bogo_config?.freeQty || undefined,
+      bogoPercent: row.bogo_config?.percent ?? undefined,
+      // v4.7 TO DO 12.2.6 (P-A6): batas pemakaian per pelanggan
+      usageLimitPerCustomer: row.usage_limit_per_customer || undefined,
+      usageByCustomer: row.usage_by_customer || undefined,
       createdAt: row.created_at,
     })) || null;
   } catch {

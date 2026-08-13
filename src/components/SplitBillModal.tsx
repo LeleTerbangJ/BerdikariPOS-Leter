@@ -440,7 +440,7 @@ export default function SplitBillModal({
           recordVisit(selectedCustomerId, totalAmount);
         }
         if (appliedPromoId) {
-          incrementUsage(appliedPromoId);
+          incrementUsage(appliedPromoId, selectedCustomerId || undefined);
         }
       }
     } else {
@@ -450,7 +450,7 @@ export default function SplitBillModal({
           recordVisit(selectedCustomerId, totalAmount);
         }
         if (appliedPromoId) {
-          incrementUsage(appliedPromoId);
+          incrementUsage(appliedPromoId, selectedCustomerId || undefined);
         }
       }
     }
@@ -745,7 +745,7 @@ export default function SplitBillModal({
                                 cash: String(val),
                               },
                             })}
-                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-650 transition"
+                            className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-600 transition"
                           >
                             {formatRupiah(val)}
                           </button>

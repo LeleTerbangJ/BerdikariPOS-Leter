@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- Promo pending (v4.5 TO DO 5.5) — di-restore saat resume agar total konsisten lintas device
   applied_promo_id TEXT,
   voucher_code TEXT,
+  -- v4.7 TO DO 12.2.4 (P-A3): snapshot performa promo — nama & nominal diskon promo saat checkout
+  promo_name TEXT,
+  promo_amount FLOAT,
   -- v4.7 TO DO 11.2 (P0.2): refund/retur penuh — stok & kunjungan di-revert, kas keluar 'Refund' di Rekap Kas
   refunded BOOLEAN DEFAULT false,
   refunded_at TIMESTAMPTZ,
@@ -115,6 +118,9 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS paid_amount FLOAT;
 -- v4.5 TO DO 5.5: kolom promo pending
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS applied_promo_id TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;
+-- v4.7 TO DO 12.2.4 (P-A3): kolom performa promo (snapshot nama & nominal diskon saat checkout)
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_name TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_amount FLOAT;
 
 -- Safe migration: izinkan status 'Pending' pada tx_status (di-drop lalu di-add ulang dengan nilai yang sama, aman dijalankan berulang)
 DO $$
@@ -142,9 +148,14 @@ CREATE TABLE IF NOT EXISTS customers (
   notes TEXT,
   total_spent FLOAT DEFAULT 0,
   visit_count INT DEFAULT 0,
+  -- v4.7 TO DO 12.2.2 (P-A8): poin loyalty (earn saat checkout, redeem jadi diskon)
+  loyalty_points INT DEFAULT 0,
   last_visit TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- v4.7 TO DO 12.2.2 (P-A8): kolom poin loyalty (migrasi DB lama)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS loyalty_points INT DEFAULT 0;
 
 -- 6. Shifts table
 CREATE TABLE IF NOT EXISTS shifts (
@@ -167,7 +178,7 @@ CREATE TABLE IF NOT EXISTS promos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   code TEXT,
-  type TEXT NOT NULL CHECK (type IN ('percentage', 'fixed')),
+  type TEXT NOT NULL CHECK (type IN ('percentage', 'fixed', 'bogo')),
   value FLOAT NOT NULL,
   scope TEXT NOT NULL DEFAULT 'all' CHECK (scope IN ('all', 'category', 'menu', 'loyalty')),
   scope_target TEXT,
@@ -179,8 +190,43 @@ CREATE TABLE IF NOT EXISTS promos (
   usage_limit INT,
   usage_count INT DEFAULT 0,
   loyalty_min_visits INT,
+  -- v4.7 TO DO 12.2.3 (P-A4): boleh digabung dengan diskon lain (manual/loyalty)?
+  -- false = eksklusif → POS otomatis memberi best-deal (promo ATAU manual+loyalty)
+  stackable BOOLEAN DEFAULT TRUE,
+  -- v4.7 TO DO 12.2.5 (P-A5): BOGO (beli N gratis M, dikonfigurasi di bogo_config JSONB)
+  -- & min-qty gate untuk diskon %/nominal (min_qty)
+  bogo_config JSONB,
+  min_qty INT,
+  -- v4.7 TO DO 12.2.6 (P-A6): batas pemakaian per pelanggan
+  usage_limit_per_customer INT,
+  usage_by_customer JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- v4.7 TO DO 12.2.3 (P-A4): kolom stacking promo (migrasi DB lama)
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS stackable BOOLEAN DEFAULT TRUE;
+-- v4.7 TO DO 12.2.5 (P-A5): kolom BOGO & min-qty (migrasi DB lama)
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS bogo_config JSONB;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS min_qty INT;
+-- v4.7 TO DO 12.2.6 (P-A6): kolom batas pemakaian per pelanggan (migrasi DB lama)
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_limit_per_customer INT;
+ALTER TABLE promos ADD COLUMN IF NOT EXISTS usage_by_customer JSONB DEFAULT '{}';
+-- v4.7 TO DO 12.2.5 (P-A5): izinkan type 'bogo' (relax CHECK constraint promos.type — idempoten)
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  SELECT conname INTO cname
+  FROM pg_constraint
+  WHERE conrelid = 'promos'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) LIKE '%percentage%';
+  IF cname IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname);
+  END IF;
+END $$;
+ALTER TABLE promos ADD CONSTRAINT promos_type_check
+  CHECK (type IN ('percentage', 'fixed', 'bogo'));
 
 -- 8. Audit logs table
 CREATE TABLE IF NOT EXISTS audit_logs (

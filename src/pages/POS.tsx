@@ -22,6 +22,12 @@ import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 import { buildReceiptText, buildWhatsAppUrl, autoSendReceiptTarget } from '../utils/digitalReceipt';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
 import { buildCategoryTabs, reorderTabs } from '../utils/categoryOrder';
+// v4.7 TO DO 12.2.3 (P-A4): satu sumber kebenaran total diskon (stacking vs best-deal promo eksklusif)
+import { calculateDiscountBreakdown } from '../utils/discountEngine';
+// v4.7 TO DO 12.2.5 (P-A5): satu sumber kebenaran diskon PROMO (percentage/fixed/BOGO + min-qty)
+import { calculatePromoDiscount as calcPromoDiscount } from '../utils/promoDiscount';
+// v4.7 TO DO 12.2.2 (P-A8): poin loyalty — earn (di customerStore.recordVisit) & redeem di POS
+import { calculateMaxRedeemablePoints, calculateRedeemDiscount } from '../utils/loyaltyPoints';
 import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType, Transaction, AtomicCheckoutParams } from '../types';
 import Modal from '../components/Modal';
 import PendingPaymentsModal from '../components/PendingPaymentsModal';
@@ -53,10 +59,10 @@ export default function POS() {
   const cart = useCartStore();
   const { addTransaction, getNextQueueNumber } = useTransactionStore();
   const { currentUser } = useAuthStore();
-  const { customers, recordVisit } = useCustomerStore();
+  const { customers, recordVisit, deductLoyaltyPoints } = useCustomerStore();
   const { settings } = useSettingsStore();
   const { addToast } = useToastStore();
-  const { getActivePromos, getPromoByCode, incrementUsage, getCustomerDiscount } = usePromoStore();
+  const { promos, getActivePromos, getPromoByCode, incrementUsage, getCustomerDiscount, loyaltySettings } = usePromoStore();
   const { addLog } = useAuditLogStore();
 
   // Order type & Table features state
@@ -100,10 +106,11 @@ export default function POS() {
       return;
     }
 
-    const manualDiscount = getManualDiscountValue();
-    const rawTotalDiscount = Math.round(manualDiscount + promoDiscount + loyaltyDiscount);
     const subtotal = Math.round(cart.getSubtotal());
-    const totalDiscount = Math.round(Math.min(rawTotalDiscount, subtotal));
+    // v4.7 TO DO 12.2.3 (P-A4): total diskon dari discount engine (stacking / best-deal), capped subtotal
+    // v4.7 TO DO 12.2.2 (P-A8): + diskon redeem poin loyalty (selalu bertumpuk di atas diskon lain,
+    // dibatasi headroom oleh maxRedeemPoints sehingga terpakai penuh tanpa potongan parsial poin).
+    const totalDiscount = Math.min(discountCalc.totalDiscount + redeemDiscount, subtotal);
     const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
     const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
     const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
@@ -141,6 +148,9 @@ export default function POS() {
       // v4.5 TO DO 5.5: rekam promo/voucher agar total resume konsisten lintas device
       appliedPromoId: appliedPromoId || undefined,
       voucherCode: voucherCode || undefined,
+      // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo (laporan performa promo)
+      promoName: appliedPromo?.name,
+      promoAmount: appliedPromoId ? discountCalc.promoApplied : undefined,
       // v4.1 FIX (TO DO 1.3 & 1.4): izinkan update ulang dengan ID sama (bypass idempotency),
       // deduksi stok DELTA (hanya item baru yang dipotong, item dihapus dikembalikan).
       // Status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang; item sama → pertahankan.
@@ -160,6 +170,7 @@ export default function POS() {
       // v4.5 TO DO 5.5: promo tidak boleh bocor ke keranjang berikutnya (clearPromo = id + kode + error)
       clearPromo();
       setCashReceived('');
+      setRedeemPointsInput('');
       setSelectedCustomerId(null);
       setTableNumber('');
       setCheckoutTxId(uuid());
@@ -354,6 +365,8 @@ export default function POS() {
   const [appliedPromoId, setAppliedPromoId] = useState<string | null>(null);
   const [promoError, setPromoError] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  // v4.7 TO DO 12.2.2 (P-A8): poin loyalty yang ingin ditukar pelanggan (diinput kasir)
+  const [redeemPointsInput, setRedeemPointsInput] = useState('');
 
   // Reset clear confirmation after 3 seconds (BUG-M4 fix)
   useEffect(() => {
@@ -369,43 +382,22 @@ export default function POS() {
   const activePromos = getActivePromos();
 
   // Calculate promo discount - memoized with useCallback (BUG-M2 fix)
+  // v4.7 TO DO 12.2.5 (P-A5): delegasi ke helper murni promoDiscount.ts (percentage/fixed/BOGO + minQty)
   const calculatePromoDiscount = useCallback((promoId: string | null, subtotal: number): number => {
     if (!promoId) return 0;
     const promo = activePromos.find((p) => p.id === promoId);
     if (!promo) return 0;
-
-    // Check min purchase
-    if (promo.minPurchase && subtotal < promo.minPurchase) return 0;
-
-    // Check loyalty requirement
-    if (promo.scope === 'loyalty' && promo.loyaltyMinVisits) {
-      if (!selectedCustomer || selectedCustomer.visitCount < promo.loyaltyMinVisits) return 0;
-    }
-
-    // LOGIC-3 fix: Validate promo scope against cart items
-    if (promo.scope === 'category' && promo.scopeTarget) {
-      const hasMatchingCategory = cart.items.some((item) => {
-        const menu = menus.find((m) => m.id === item.menuId);
-        return menu && menu.category === promo.scopeTarget;
-      });
-      if (!hasMatchingCategory) return 0;
-    }
-    if (promo.scope === 'menu' && promo.scopeTarget) {
-      const hasMatchingMenu = cart.items.some((item) => item.menuId === promo.scopeTarget);
-      if (!hasMatchingMenu) return 0;
-    }
-
-    let discount = 0;
-    if (promo.type === 'percentage') {
-      discount = Math.round(subtotal * promo.value / 100);
-      if (promo.maxDiscount && discount > promo.maxDiscount) discount = promo.maxDiscount;
-    } else {
-      discount = promo.value;
-    }
-    return discount;
+    return calcPromoDiscount(promo, subtotal, { cartItems: cart.items, menus, selectedCustomer });
   }, [activePromos, selectedCustomer, cart.items, menus]);
 
   const promoDiscount = useMemo(() => calculatePromoDiscount(appliedPromoId, cart.getSubtotal()), [appliedPromoId, cart.items, calculatePromoDiscount]);
+
+  // v4.7 TO DO 12.2.4 (P-A3): snapshot nama promo untuk laporan performa — lookup dari SEMUA promo
+  // (bukan hanya active) agar nama tetap terekam walau promo expired/diubah di tengah keranjang.
+  const appliedPromo = useMemo(
+    () => (appliedPromoId ? promos.find((p) => p.id === appliedPromoId) : undefined),
+    [promos, appliedPromoId]
+  );
 
   const applyVoucherCode = () => {
     setPromoError('');
@@ -419,6 +411,11 @@ export default function POS() {
       setPromoError(`Min. belanja ${formatRupiah(promo.minPurchase)}`);
       return;
     }
+    // v4.7 TO DO 12.2.6 (P-A6): promo berbatas per pelanggan wajib ada pelanggan terpilih
+    if (promo.usageLimitPerCustomer && promo.usageLimitPerCustomer > 0 && !selectedCustomerId) {
+      setPromoError('Voucher ini memiliki batas per pelanggan — pilih pelanggan terlebih dahulu.');
+      return;
+    }
     setAppliedPromoId(promo.id);
     const disc = calculatePromoDiscount(promo.id, cart.getSubtotal());
     addToast(`Voucher "${promo.name}" diterapkan! -${formatRupiah(disc)}`, 'success');
@@ -427,6 +424,12 @@ export default function POS() {
   const selectPromo = (promoId: string) => {
     if (promoId === '') {
       setAppliedPromoId(null);
+      return;
+    }
+    // v4.7 TO DO 12.2.6 (P-A6): promo berbatas per pelanggan wajib ada pelanggan terpilih
+    const promo = promos.find((p) => p.id === promoId);
+    if (promo?.usageLimitPerCustomer && promo.usageLimitPerCustomer > 0 && !selectedCustomerId) {
+      addToast('Pilih pelanggan terlebih dahulu untuk promo dengan batas per pelanggan.', 'warning');
       return;
     }
     setAppliedPromoId(promoId);
@@ -448,6 +451,37 @@ export default function POS() {
     if (pct <= 0) return 0;
     return Math.round(cart.getSubtotal() * pct / 100);
   }, [selectedCustomer, cart.items, getCustomerDiscount]);
+
+  // v4.7 TO DO 12.2.3 (P-A4): SATU sumber kebenaran total diskon — promo stackable dijumlahkan,
+  // promo eksklusif (stackable=false) auto best-deal. Semua call site (finalize, save pending,
+  // preview) memakai hasil ini sehingga angka tampil = angka yang dicommit.
+  const discountCalc = useMemo(
+    () =>
+      calculateDiscountBreakdown({
+        subtotal: Math.round(cart.getSubtotal()),
+        manualDiscount: getManualDiscountValue(),
+        promoDiscount,
+        loyaltyDiscount,
+        promoStackable: appliedPromo?.stackable,
+      }),
+    [cart, getManualDiscountValue, promoDiscount, loyaltyDiscount, appliedPromo]
+  );
+
+  // v4.7 TO DO 12.2.2 (P-A8): redeem poin loyalty — maks dibatasi saldo & headroom diskon
+  // (subtotal - diskon lain) agar poin yang ditukar SELALU terpakai penuh (tanpa potongan parsial).
+  const availablePoints = selectedCustomer?.loyaltyPoints || 0;
+  const maxRedeemPoints = useMemo(() => {
+    if (!selectedCustomer || !loyaltySettings.enabled) return 0;
+    const headroom = Math.max(0, Math.round(cart.getSubtotal()) - discountCalc.totalDiscount);
+    return calculateMaxRedeemablePoints(availablePoints, headroom, loyaltySettings);
+  }, [selectedCustomer, loyaltySettings, availablePoints, cart, discountCalc]);
+  const redeemPoints = Math.min(parseInt(redeemPointsInput) || 0, maxRedeemPoints);
+  const redeemDiscount = useMemo(
+    () => calculateRedeemDiscount(redeemPoints, loyaltySettings),
+    [redeemPoints, loyaltySettings]
+  );
+  // Bagian diskon redeem yang benar-benar terpakai (≤ headroom; dengan maxRedeemPoints selalu penuh)
+  const redeemApplied = Math.min(redeemDiscount, Math.max(0, Math.round(cart.getSubtotal()) - discountCalc.totalDiscount));
 
   // Preview queue number for checkout modal (read-only, no side effects)
   const queuePreview = useMemo(() => {
@@ -554,11 +588,10 @@ export default function POS() {
       addToast('Silakan pilih nomor meja terlebih dahulu!', 'warning');
       return;
     }
-    const manualDiscount = getManualDiscountValue();
-    const rawTotalDiscount = Math.round(manualDiscount + promoDiscount + loyaltyDiscount);
     const subtotal = Math.round(cart.getSubtotal());
     // LOGIC-2 & LOGIC-05 fix: Cap total discount to never exceed subtotal & round to whole integer
-    const totalDiscount = Math.round(Math.min(rawTotalDiscount, subtotal));
+    // v4.7 TO DO 12.2.3 (P-A4): total diskon dari discount engine (stacking / best-deal promo eksklusif)
+    const totalDiscount = discountCalc.totalDiscount;
     const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
     
     // GAP-3 & LOGIC-05 fix: Calculate tax rounded to whole integer Rupiah
@@ -633,6 +666,9 @@ export default function POS() {
       // agar laporan promo/transaksi tidak kehilangan metadata yang tersimpan saat save pending.
       appliedPromoId: appliedPromoId || undefined,
       voucherCode: voucherCode || undefined,
+      // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo (laporan performa promo)
+      promoName: appliedPromo?.name,
+      promoAmount: appliedPromoId ? discountCalc.promoApplied : undefined,
       ...pendingFinalizeParams,
     });
 
@@ -659,9 +695,15 @@ export default function POS() {
       recordVisit(selectedCustomerId, total);
     }
 
-    // Increment promo usage
+    // Increment promo usage (v4.7 TO DO 12.2.6 / P-A6: ikut catat per pelanggan bila ada)
     if (appliedPromoId) {
-      incrementUsage(appliedPromoId);
+      incrementUsage(appliedPromoId, selectedCustomerId || undefined);
+    }
+
+    // v4.7 TO DO 12.2.2 (P-A8): potong poin loyalty yang ditukar (hanya bila benar-benar terpakai —
+    // redeemApplied ≥ redeemDiscount karena maxRedeemPoints sudah membatasi headroom)
+    if (selectedCustomerId && redeemApplied > 0) {
+      deductLoyaltyPoints(selectedCustomerId, Math.floor(redeemApplied / Math.max(1, loyaltySettings.redeemPointsValue || 0)) || 0);
     }
 
     // Clear cart & reset state with fresh transaction ID for next checkout
@@ -671,6 +713,7 @@ export default function POS() {
     setDiscountType('rp');
     setVoucherCode('');
     setCashReceived('');
+    setRedeemPointsInput('');
     setSelectedCustomerId(null);
     setTableNumber('');
     setCheckoutTxId(uuid());
@@ -703,9 +746,14 @@ export default function POS() {
   const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
   const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
   // LOGIC-ERR-02 fix: Use same capping formula as finalizeTransaction()
-  const rawPreviewDiscount = getManualDiscountValue() + promoDiscount + loyaltyDiscount;
-  const cappedPreviewDiscount = Math.min(rawPreviewDiscount, cart.getSubtotal());
-  const netSubtotal = Math.max(0, cart.getSubtotal() - cappedPreviewDiscount);
+  // v4.7 TO DO 12.2.3 (P-A4): preview memakai discount engine yang SAMA dengan commit
+  const cappedPreviewDiscount = discountCalc.totalDiscount;
+  // v4.7 TO DO 12.2.2 (P-A8): preview total ikut memasukkan diskon redeem poin
+  // (split bill TIDAK memakai redeem — guna `splitTotalAmount` di bawah, agar tidak ada diskon gratis).
+  const previewTotalDiscount = Math.min(cappedPreviewDiscount + redeemDiscount, Math.round(cart.getSubtotal()));
+  const netSubtotal = Math.max(0, Math.round(cart.getSubtotal()) - previewTotalDiscount);
+  const splitNet = Math.max(0, Math.round(cart.getSubtotal()) - cappedPreviewDiscount);
+  const splitTotalAmount = splitNet + Math.round((splitNet * taxPercent) / 100);
   const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
   const finalTotal = netSubtotal + taxAmount;
 
@@ -863,7 +911,7 @@ export default function POS() {
       {mobileCartOpen && (
         <div className="lg:hidden fixed inset-0 z-40 flex flex-col">
           <div className="absolute inset-0 bg-black/30" onClick={() => setMobileCartOpen(false)} />
-          <div className="relative mt-auto bg-white dark:bg-slate-850 rounded-t-2xl max-h-[85vh] flex flex-col shadow-xl animate-in slide-in-from-bottom duration-200">
+          <div className="relative mt-auto bg-white dark:bg-slate-800 rounded-t-2xl max-h-[85vh] flex flex-col shadow-xl animate-in slide-in-from-bottom duration-200">
             {/* Cart Header */}
             <div className="p-4 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
               <h2 className="font-bold text-lg flex items-center gap-2">
@@ -887,7 +935,7 @@ export default function POS() {
                     className={`p-2 rounded-lg transition ${
                       confirmClear
                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
-                        : 'hover:bg-red-50 dark:hover:bg-red-950/20 text-red-400 hover:text-red-650'
+                        : 'hover:bg-red-50 dark:hover:bg-red-950/20 text-red-400 hover:text-red-500'
                     }`}
                     title={confirmClear ? "Klik lagi untuk Konfirmasi" : "Kosongkan Keranjang"}
                   >
@@ -959,13 +1007,13 @@ export default function POS() {
                 <div key={item.lineId} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3">
                   <div className="flex justify-between items-start mb-1">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm text-slate-850 dark:text-slate-200 truncate">{item.name}</p>
+                      <p className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate">{item.name}</p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}
                         {item.addons.length > 0 && ` • +${item.addons.map((a) => a.name).join(', ')}`}
                       </p>
                     </div>
-                    <button onClick={() => cart.removeItem(item.lineId)} className="p-1 text-red-400 hover:text-red-650 transition">
+                    <button onClick={() => cart.removeItem(item.lineId)} className="p-1 text-red-400 hover:text-red-500 transition">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -1016,9 +1064,12 @@ export default function POS() {
                 )}
                 {appliedPromoId && (
                   <div className="flex items-center justify-between p-2 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900/30 rounded-lg text-xs">
-                    <span className="text-green-700 dark:text-green-400 font-medium">✓ {activePromos.find(p => p.id === appliedPromoId)?.name} (-{formatRupiah(promoDiscount)})</span>
+                    <span className="text-green-700 dark:text-green-400 font-medium">✓ {appliedPromo?.name} (-{formatRupiah(discountCalc.promoApplied)})</span>
                     <button onClick={clearPromo} className="text-red-500 hover:underline">Hapus</button>
                   </div>
+                )}
+                {appliedPromo?.stackable === false && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400">ℹ️ Promo eksklusif — otomatis memberi diskon terbaik (promo ATAU manual/loyalty)</p>
                 )}
                 {promoError && <p className="text-xs text-red-500">{promoError}</p>}
               </div>
@@ -1069,9 +1120,36 @@ export default function POS() {
                 </div>
               </div>
               {/* BUG-NEW-06 fix: Show loyalty discount in mobile cart */}
-              {loyaltyDiscount > 0 && (
+              {/* v4.7 TO DO 12.2.3 (P-A4): hanya tampil bila loyalty benar-benar diterapkan (promo eksklusif bisa mengalahkannya) */}
+              {discountCalc.loyaltyApplied > 0 && (
                 <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-lg text-xs text-amber-700 dark:text-amber-400 font-medium">
-                  👑 Loyalty discount: -{formatRupiah(loyaltyDiscount)}
+                  👑 Loyalty discount: -{formatRupiah(discountCalc.loyaltyApplied)}
+                </div>
+              )}
+
+              {/* v4.7 TO DO 12.2.2 (P-A8): tukar poin loyalty (mobile cart) */}
+              {selectedCustomer && loyaltySettings.enabled && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">⭐ Poin {selectedCustomer.name}: {availablePoints}</span>
+                    {redeemDiscount > 0 && <span className="text-red-500 dark:text-red-400 font-semibold">-{formatRupiah(redeemDiscount)}</span>}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={redeemPointsInput}
+                      onChange={(e) => setRedeemPointsInput(e.target.value.replace(/\D/g, ''))}
+                      placeholder={`Tukar poin (maks ${maxRedeemPoints} = ${formatRupiah(calculateRedeemDiscount(maxRedeemPoints, loyaltySettings))})`}
+                      className="input text-xs flex-1"
+                    />
+                    {redeemPoints > 0 && (
+                      <button onClick={() => setRedeemPointsInput('')} className="btn-secondary text-xs px-2.5 py-1.5 text-red-500">Batal</button>
+                    )}
+                  </div>
+                  {redeemPointsInput && maxRedeemPoints === 0 && (
+                    <p className="text-[10px] text-red-500">Tidak ada poin yang bisa ditukar (saldo 0 / nilai tukar nonaktif).</p>
+                  )}
                 </div>
               )}
               {taxPercent > 0 && (
@@ -1117,7 +1195,7 @@ export default function POS() {
       <div className="hidden lg:flex w-96 bg-white dark:bg-slate-800 border-l border-slate-100 dark:border-slate-700/50 flex-col">
         <div className="p-4 border-b border-slate-100 dark:border-slate-700/50">
           <div className="flex items-center justify-between">
-            <h2 className="font-bold text-lg flex items-center gap-2 text-slate-850 dark:text-slate-200">
+            <h2 className="font-bold text-lg flex items-center gap-2 text-slate-800 dark:text-slate-200">
               <ShoppingBag size={20} className="text-brand-600 dark:text-brand-400" />
               Keranjang
               {cart.items.length > 0 && (
@@ -1235,7 +1313,7 @@ export default function POS() {
                     </div>
                     <button
                       onClick={() => cart.removeItem(item.lineId)}
-                      className="p-1 text-red-400 hover:text-red-650 transition"
+                      className="p-1 text-red-400 hover:text-red-500 transition"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -1293,8 +1371,11 @@ export default function POS() {
               </div>
               {appliedPromoId && (
                 <p className="text-[11px] text-green-600 dark:text-green-400 font-medium">
-                  ✓ Promo berhasil diterapkan (-{formatRupiah(promoDiscount)})
+                  ✓ Promo berhasil diterapkan (-{formatRupiah(discountCalc.promoApplied)})
                 </p>
+              )}
+              {appliedPromo?.stackable === false && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400">ℹ️ Promo eksklusif — otomatis memberi diskon terbaik (promo ATAU manual/loyalty)</p>
               )}
             </div>
 
@@ -1350,10 +1431,37 @@ export default function POS() {
 
 
               {/* Loyalty Discount Banner */}
-              {selectedCustomer && loyaltyDiscount > 0 && (
+              {/* v4.7 TO DO 12.2.3 (P-A4): hanya tampil bila loyalty benar-benar diterapkan */}
+              {selectedCustomer && discountCalc.loyaltyApplied > 0 && (
                 <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 rounded-lg text-xs text-amber-700 dark:text-amber-400 font-medium flex justify-between items-center">
                   <span>👑 Loyalty ({selectedCustomer.name}):</span>
-                  <span className="font-bold">-{formatRupiah(loyaltyDiscount)}</span>
+                  <span className="font-bold">-{formatRupiah(discountCalc.loyaltyApplied)}</span>
+                </div>
+              )}
+
+              {/* v4.7 TO DO 12.2.2 (P-A8): tukar poin loyalty (checkout modal) */}
+              {selectedCustomer && loyaltySettings.enabled && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-500 dark:text-slate-400">⭐ Poin {selectedCustomer.name}: {availablePoints}</span>
+                    {redeemDiscount > 0 && <span className="text-red-500 dark:text-red-400 font-semibold">-{formatRupiah(redeemDiscount)}</span>}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={redeemPointsInput}
+                      onChange={(e) => setRedeemPointsInput(e.target.value.replace(/\D/g, ''))}
+                      placeholder={`Tukar poin (maks ${maxRedeemPoints} = ${formatRupiah(calculateRedeemDiscount(maxRedeemPoints, loyaltySettings))})`}
+                      className="input text-xs flex-1 py-1.5"
+                    />
+                    {redeemPoints > 0 && (
+                      <button onClick={() => setRedeemPointsInput('')} className="btn-secondary text-xs px-2.5 py-1.5 text-red-500">Batal</button>
+                    )}
+                  </div>
+                  {redeemPointsInput && maxRedeemPoints === 0 && (
+                    <p className="text-[10px] text-red-500">Tidak ada poin yang bisa ditukar (saldo 0 / nilai tukar nonaktif).</p>
+                  )}
                 </div>
               )}
             </div>
@@ -1363,7 +1471,7 @@ export default function POS() {
                 <span className="text-slate-500 dark:text-slate-400">Subtotal</span>
                 <span className="font-medium text-slate-800 dark:text-slate-200">{formatRupiah(cart.getSubtotal())}</span>
               </div>
-              {(parseInt(discountInput) > 0 || promoDiscount > 0 || loyaltyDiscount > 0) && (
+              {discountCalc.totalDiscount > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-red-500">Total Diskon</span>
                   <span className="text-red-500">-{formatRupiah(cappedPreviewDiscount)}</span>
@@ -1487,14 +1595,14 @@ export default function POS() {
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => setQty(Math.max(1, qty - 1))}
-                  className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-750 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center transition"
+                  className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center transition"
                 >
                   <Minus size={16} />
                 </button>
                 <span className="text-xl font-bold w-8 text-center text-slate-800 dark:text-slate-200">{qty}</span>
                 <button
                   onClick={() => setQty(qty + 1)}
-                  className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-750 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center transition"
+                  className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 flex items-center justify-center transition"
                 >
                   <Plus size={16} />
                 </button>
@@ -1698,7 +1806,7 @@ export default function POS() {
         maxWidth="max-w-md"
       >
         <div className="space-y-4">
-          <p className="text-sm text-slate-650 dark:text-slate-350">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
             Beberapa bahan baku tidak mencukupi untuk pesanan ini:
           </p>
           <div className="space-y-2 max-h-48 overflow-y-auto">
@@ -1706,7 +1814,7 @@ export default function POS() {
               <div key={w.ingredientId} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-xl">
                 <div>
                   <p className="font-medium text-sm text-red-800 dark:text-red-300">{w.ingredientName}</p>
-                  <p className="text-xs text-red-650 dark:text-red-400">
+                  <p className="text-xs text-red-500 dark:text-red-400">
                     Butuh: {w.required.toFixed(2)} {w.unit} • Tersedia: {w.available.toFixed(2)} {w.unit}
                   </p>
                 </div>
@@ -1740,7 +1848,9 @@ export default function POS() {
         subtotal={cart.getSubtotal()}
         discount={cappedPreviewDiscount}
         taxAmount={taxAmount}
-        totalAmount={finalTotal}
+        // v4.7 TO DO 12.2.2 (P-A8): split bill memakai total TANPA redeem poin (poin hanya
+        // terpotong saat finalize; sub-bill yang membawa diskon redeem tanpa potong poin = diskon gratis)
+        totalAmount={splitTotalAmount}
         orderType={orderType}
         tableNumber={tableNumber}
         parentTx={currentPendingTx}

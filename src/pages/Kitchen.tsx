@@ -150,8 +150,8 @@ export default function Kitchen() {
         <div className="flex items-center gap-2 justify-center w-full sm:w-auto">
           {overdueCount > 0 && (
             <div className="flex items-center gap-2 px-4 py-2 bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-700 rounded-xl animate-pulse">
-              <AlertTriangle size={18} className="text-red-650" />
-              <span className="text-sm font-bold text-red-750 dark:text-red-400">
+              <AlertTriangle size={18} className="text-red-500" />
+              <span className="text-sm font-bold text-red-700 dark:text-red-400">
                 {overdueCount} pesanan menunggu &gt; 5 menit!
               </span>
             </div>
