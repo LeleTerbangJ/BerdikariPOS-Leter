@@ -178,6 +178,16 @@ export interface Transaction {
   // agar totalAmount final konsisten dengan nominal pending (lintas restart / device).
   appliedPromoId?: string;       // ID promo yang diterapkan
   voucherCode?: string;          // Kode voucher (untuk ditampilkan ulang saat resume)
+
+  // v4.7 TO DO 11.2 (P0.2): refund/retur penuh — transaksi Selesai yang dikembalikan.
+  // Stok & kunjungan pelanggan sudah di-revert saat refund; Kas Keluar 'Refund' dicatat
+  // di Rekap Kas (akuntabel). Transaksi refunded TIDAK dihitung sebagai penjualan di laporan.
+  refunded?: boolean;            // true = sudah di-refund (guard anti double-refund & double-revert)
+  refundedAt?: string;           // ISO timestamp refund
+  refundedAmount?: number;       // Nominal yang dikembalikan (full = totalAmount)
+  refundNote?: string;           // Catatan/alasan refund
+  refundedById?: string;         // User yang mengotorisasi refund
+  refundedByName?: string;       // Nama approver refund
 }
 
 export interface AtomicCheckoutParams {
@@ -324,6 +334,9 @@ export interface AppSettings {
   autoPrintReceipt?: boolean;
   autoPrintKitchen?: boolean;
   showLogoOnReceipt?: boolean;
+  // v4.7 TO DO 11.2 (P0.4): struk digital — kirim otomatis struk ke WhatsApp pelanggan
+  // setelah checkout berhasil (hanya jika transaksi punya pelanggan dengan nomor HP valid).
+  autoSendDigitalReceipt?: boolean;
 }
 
 // Cash Movement (Rekap Kas: Kas Masuk & Kas Keluar)
@@ -400,6 +413,10 @@ export interface LoyaltySettings {
 export type AuditAction =
   | 'login' | 'logout'
   | 'create_transaction' | 'void_transaction' | 'delete_transaction'
+  // v4.7 TO DO 11.2 (P0.2): refund/retur penuh
+  | 'refund_transaction'
+  // v4.7 TO DO 11.2 (P0.4): struk digital (WA/email)
+  | 'send_digital_receipt'
   | 'create_menu' | 'update_menu' | 'delete_menu' | 'toggle_menu'
   | 'create_user' | 'update_user' | 'delete_user'
   | 'create_inventory' | 'update_inventory' | 'delete_inventory' | 'deduct_inventory'

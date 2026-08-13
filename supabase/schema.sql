@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- Promo pending (v4.5 TO DO 5.5) — di-restore saat resume agar total konsisten lintas device
   applied_promo_id TEXT,
   voucher_code TEXT,
+  -- v4.7 TO DO 11.2 (P0.2): refund/retur penuh — stok & kunjungan di-revert, kas keluar 'Refund' di Rekap Kas
+  refunded BOOLEAN DEFAULT false,
+  refunded_at TIMESTAMPTZ,
+  refunded_amount FLOAT,
+  refund_note TEXT,
+  refunded_by_id TEXT,
+  refunded_by_name TEXT,
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -228,7 +235,9 @@ CREATE TABLE IF NOT EXISTS settings (
   receipt_header TEXT,
   receipt_footer TEXT,
   receipt_ascii_only BOOLEAN DEFAULT false,
-  auto_print_receipt BOOLEAN DEFAULT false
+  auto_print_receipt BOOLEAN DEFAULT false,
+  -- v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim struk ke WhatsApp pelanggan setelah checkout
+  auto_send_digital_receipt BOOLEAN DEFAULT false
 );
 
 -- Insert default settings row

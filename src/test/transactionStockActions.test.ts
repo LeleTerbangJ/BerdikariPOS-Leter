@@ -166,6 +166,43 @@ describe('Guard split (isSplit)', () => {
   });
 });
 
+// ============================================================
+// P0.2 — guard transaksi refunded (stok & kunjungan sudah di-revert saat refund)
+// ============================================================
+
+describe('Guard refunded (P0.2 — anti double-revert)', () => {
+  it('refunded=true → TIDAK ADA efek untuk Cancel/Demo/Delete (stok sudah dikembalikan saat refund)', () => {
+    for (const to of ['Cancel', 'Demo', 'DELETE'] as const) {
+      const actions = makeActions();
+      applyStatusStockEffects(
+        makeTarget({ refunded: true }),
+        to,
+        false,
+        () => DEDUCTIONS,
+        actions
+      );
+      expect(actions.revertStock).not.toHaveBeenCalled();
+      expect(actions.deductStock).not.toHaveBeenCalled();
+      expect(actions.revertVisit).not.toHaveBeenCalled();
+      expect(actions.recordVisit).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refunded=true + DELETE → revertStock TIDAK dipanggil (sebelumnya Selesai → DELETE revert 2×)', () => {
+    const actions = makeActions();
+    applyStatusStockEffects(makeTarget({ refunded: true }), 'DELETE', false, () => DEDUCTIONS, actions);
+    expect(actions.revertStock).not.toHaveBeenCalled();
+    expect(actions.revertVisit).not.toHaveBeenCalled();
+  });
+
+  it('refunded=false → perilaku normal tetap berjalan (regresi)', () => {
+    const actions = makeActions();
+    applyStatusStockEffects(makeTarget({ refunded: false }), 'DELETE', false, () => DEDUCTIONS, actions);
+    expect(actions.revertStock).toHaveBeenCalledTimes(1);
+    expect(actions.revertVisit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('Edge cases', () => {
   it('tanpa customerId → tidak memanggil recordVisit/revertVisit', () => {
     const actions = makeActions();

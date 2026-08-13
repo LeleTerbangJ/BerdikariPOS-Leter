@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–10 semuanya ✅** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§14) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–10 semuanya ✅ + Prioritas 11: P0.1/P0.2/P0.4 selesai** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§15) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -565,6 +565,50 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - `npx vitest run` → **192/192 test lolos** (18 file; baru di Prioritas 9–10: `stockImport.test.ts` — CSV import/drift/gate/blind/clamp/reason, `inventoryBatch.test.ts` — rename log + bulk, `pinAuth.test.ts` — role-gate/kredensial/device marker)
 - `npm run build` → **sukses** (`tsc && vite build` + PWA generateSW, 50 entry precache) — diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7)
 - **TO DO.md**: Prioritas 9 tuntas (9.1–9.4 ✅) & **Prioritas 10 tuntas (10.1–10.5 ✅) — SELURUH prioritas 1–10 selesai, tidak ada prioritas tersisa.**
+
+---
+
+## 15. Riwayat Pengerjaan v4.7 — Fitur Komersialisasi P0.1–P0.4 (Laporan PPN, Refund & Struk Digital)
+
+> Sesi lanjutan setelah Prioritas 1–10 tuntas. Mulai mengeksekusi **Prioritas 11 di `TO DO.md`** (celah spesifikasi & arah komersialisasi) dari rekomendasi **P0 — sebelum dijual ke klien**: P0.1 (laporan PPN formal), P0.2 (refund/retur penuh), & P0.4 (struk digital WA/email).
+
+### 15.1 P0.1 — Laporan PPN bulanan ✅
+
+- **Tab baru "PPN" di Laporan** (`Reports.tsx`, id `tax`): 4 kartu ringkasan (PPN Terkumpul / DPP / transaksi kena pajak / non-pajak), **rekap per hari**, dan **detail transaksi kena pajak** (no. antrean, tanggal, kasir, DPP, PPN, total) — tabel scrollable + sticky header.
+- **Export CSV & PDF** (`exportPpnExcel` + `exportPpnPDF` di `pdfExport.ts`) — format konsisten dengan laporan lain.
+- **Semantik** (selaras POS/engine): **DPP = subtotal − diskon** (net sales, clamp ≥ 0), **PPN = `t.tax`** (dibulatkan saat checkout), Total = DPP + PPN; hanya transaksi `Selesai` non-split dengan `tax > 0`; sisanya dihitung exempt.
+- Helper murni **`src/utils/ppnReport.ts`** (`isTaxableTransaction`/`toPpnRow`/`summarizePpn`/`aggregatePpnByDay`); 9 test baru.
+
+### 15.2 P0.2 — Refund / Retur Penuh ✅
+
+- **Tombol Refund** di halaman Transaksi (transaksi `Selesai` yang bisa di-refund) → modal konfirmasi nominal penuh + alasan opsional; **otorisasi**: Manager langsung eksekusi, role lain via **PIN Manager** (konsisten void/delete).
+- **Eksekusi 5 langkah akuntabel**: (1) revert stok via `calculateItemDeductions` (recipeSnapshot tersimpan), (2) revert kunjungan pelanggan, (3) **Kas Keluar 'Refund' otomatis di Rekap Kas** (offline queue + retry), (4) tandai `refunded*` + sync cloud lintas device, (5) audit log `refund_transaction`.
+- **Guard**: hanya `Selesai` non-split, belum refunded, nominal > 0 (`isRefundableTransaction` murni); `applyStatusStockEffects` menerima `refunded` → **anti double-revert** (Cancel/Demo/Delete pada transaksi refunded tidak menyentuh stok lagi); tombol ubah status disembunyikan untuk transaksi refunded.
+- **Eksklusi omset**: `Reports.filteredTx` & 8 filter revenue di `Dashboard.tsx` tidak menghitung transaksi refunded sebagai penjualan (laci kas tetap seimbang via Kas Keluar).
+- **DB**: kolom `refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name` di `transactions` (schema.sql + **Migration 20** idempoten di runMigrations; `syncTransactionMeta` diperluas; `fetchTransactionsFromCloud` baca balik). ⚠️ Klien perlu ALTER TABLE butir 9 sekali di SQL Editor.
+- Helper murni **`src/utils/refund.ts`** (`isRefundableTransaction`/`refundAmount`/`refundMovementNotes`/`buildRefundCashMovement`); 9 test baru + 3 guard di `transactionStockActions.test.ts`.
+
+### 15.3 P0.4 — Struk Digital (WA/Email) ✅
+
+- **Modal kirim struk digital di halaman Transaksi**: tombol "Struk Digital" per transaksi → modal dengan kontak pelanggan **terisi otomatis dari CRM** (`findCustomerContact`), override manual, **pratinjau struk live**, tombol **Kirim WhatsApp** (deep-link `wa.me/<nomor>?text=<struk>`) & **Kirim Email** (`mailto:` dengan struk sebagai body) — menggantikan pendekatan `wa.me` manual generik. Validasi nomor (≥ 9 digit) / email; audit log `send_digital_receipt` (channel, tujuan, transactionId).
+- **Helper murni `src/utils/digitalReceipt.ts`**: `buildReceiptText` (struk teks polos layout thermal — memakai **nama toko/alamat/header/footer dari Settings**), `normalizePhone` (0xx → 62), `buildWhatsAppUrl` / `buildMailtoUrl`, `findCustomerContact`, `autoSendReceiptTarget`.
+- **Settings** (`SettingsPage.tsx`, bagian *Pengaturan Format & Preview Struk*): toggle **"Kirim Struk Digital Otomatis via WhatsApp"** (`autoSendDigitalReceipt`).
+- **Auto-kirim pasca-checkout** (`POS.tsx`): pre-open window WA **sebelum** `await executeCheckout` (anti popup blocker, pola sama dengan cetak struk) hanya jika `autoSendReceiptTarget` non-null (setting aktif + pelanggan punya nomor valid); setelah sukses window diisi struk lengkap; **skip idempotent replay** (tidak ada struk ganda).
+- **Sinkronisasi lintas device** (pola fix 2.6/2.7): kolom `auto_send_digital_receipt` di `settings` (schema.sql + **Migration 21** idempoten + `syncSettings` guard agar DB lama tidak menumpuk offline queue + `fetchSettingsFromCloud` baca balik; TIDAK masuk `LOCAL_PRINTER_KEYS` → tersinkron antar device). ⚠️ Klien DB lama: `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;` sekali di SQL Editor.
+- Test: `digitalReceipt.test.ts` → **22 kasus** (normalizePhone 5, URL builders 4, buildReceiptText 6, findCustomerContact 3, autoSendReceiptTarget 4).
+
+### 15.4 Dokumentasi rilis disinkronkan
+
+- **CHANGELOG.md** v4.7: + blok Laporan PPN & Refund (fitur baru), SQL refund (Migration 20), validasi **213/213**.
+- **DEPLOYMENT.md**: butir 9 SQL refund (WAJIB fitur Refund) + Migration 20 di self-healing note + checklist teknis P0.1/P0.2 + baris v4.7 di §8.
+- ⚠️ **P0.4 belum disinkronkan ke CHANGELOG/DEPLOYMENT** (TO DO.md sudah); catatan: butir 10 SQL `auto_send_digital_receipt` (Migration 21) saat dokumen rilis diupdate.
+
+### 15.5 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**
+- `npx vitest run` → **235/235 test lolos** (21 file; baru: `digitalReceipt.test.ts` 22 kasus P0.4, plus `ppnReport.test.ts` 9 & `refund.test.ts` 9 + 3 guard dari P0.1/P0.2)
+- `npm run build` → **sukses** (tsc + vite build + PWA generateSW) — diverifikasi setelah seluruh prioritas 1–10 tuntas; P0.1–P0.4 menambah hanya pure helpers + UI, build tetap hijau
+- **TO DO.md**: Prioritas 11 P0.1, P0.2 & P0.4 ✅ SELESAI (v4.7). Tersisa P0: **P0.3** (role Owner > Manager sebagai approver), lalu P1/P2.
 
 ---
 

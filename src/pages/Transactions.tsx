@@ -7,12 +7,17 @@ import { useInventoryStore } from '../store/inventoryStore';
 import { useCustomerStore } from '../store/customerStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
+import { useCashMovementStore } from '../store/cashMovementStore';
 import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
 import { applyStatusStockEffects, type StockEffectStatus } from '../utils/transactionStockActions';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
+// v4.7 TO DO 11.2 (P0.2): refund/retur penuh
+import { isRefundableTransaction, refundAmount, refundMovementNotes, REFUND_CASH_CATEGORY } from '../utils/refund';
+// v4.7 TO DO 11.2 (P0.4): struk digital (WA/email)
+import { buildReceiptText, buildWhatsAppUrl, buildMailtoUrl, findCustomerContact } from '../utils/digitalReceipt';
 import type { TxStatus, Transaction } from '../types';
 import PinModal from '../components/PinModal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -34,12 +39,15 @@ import {
   ChevronRight,
   Printer,
   Clock,
+  RotateCcw,
+  MessageCircle,
+  Mail,
 } from 'lucide-react';
 
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Transactions() {
-  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud } = useTransactionStore();
+  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta } = useTransactionStore();
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const { menus } = useMenuStore();
@@ -47,11 +55,23 @@ export default function Transactions() {
   const { recordVisit, revertVisit } = useCustomerStore();
   const { settings } = useSettingsStore();
   const { addToast } = useToastStore();
+  const { addMovement } = useCashMovementStore();
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pinAction, setPinAction] = useState<{ type: 'status' | 'delete'; id: string; status?: TxStatus } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: 'status' | 'delete'; id: string; status?: TxStatus; queueNumber?: number } | null>(null);
   const [reprintTx, setReprintTx] = useState<Transaction | null>(null);
+  // v4.7 TO DO 11.2 (P0.2): refund penuh — modal alasan + otorisasi (Manager langsung, selain itu PIN)
+  const [refundTx, setRefundTx] = useState<Transaction | null>(null);
+  const [refundNote, setRefundNote] = useState('');
+  const [showRefundPin, setShowRefundPin] = useState(false);
+  const [refundPending, setRefundPending] = useState<{ tx: Transaction; note: string } | null>(null);
+
+  // v4.7 TO DO 11.2 (P0.4): struk digital — kirim ke WA/email pelanggan
+  const { customers } = useCustomerStore();
+  const [digitalTx, setDigitalTx] = useState<Transaction | null>(null);
+  const [digitalPhone, setDigitalPhone] = useState('');
+  const [digitalEmail, setDigitalEmail] = useState('');
 
   // BUG-03 fix: Date range, search, status filters & pagination
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
@@ -149,7 +169,8 @@ export default function Transactions() {
   // Summary statistics for active filtered view
   const stats = useMemo(() => {
     // v4.1 TO DO 1.6: Sub-bill hasil split (anak) tidak dihitung omset — sudah tercatat di transaksi induk (parent)
-    const completed = filteredTx.filter((t) => t.txStatus === 'Selesai' && !t.splitParentId);
+    // v4.7 TO DO 11.2 (P0.2): transaksi yang sudah di-refund tidak lagi dihitung sebagai omset.
+    const completed = filteredTx.filter((t) => t.txStatus === 'Selesai' && !t.splitParentId && !t.refunded);
     const totalOmset = completed.reduce((a, t) => a + t.totalAmount, 0);
     const cancelCount = filteredTx.filter((t) => t.txStatus === 'Cancel').length;
     // Predicate sama dengan isPendingTransaction() di store agar angka konsisten
@@ -259,6 +280,65 @@ export default function Transactions() {
     setPinAction(null);
   };
 
+  // ============================================================
+  // v4.7 TO DO 11.2 (P0.2) — Refund / Retur Penuh
+  // ============================================================
+  const handleRefund = (tx: Transaction) => {
+    setRefundTx(tx);
+    setRefundNote('');
+  };
+
+  // Otorisasi: Manager langsung eksekusi; role lain lewat PIN (seperti void/delete).
+  const confirmRefund = () => {
+    if (!refundTx) return;
+    const note = refundNote.trim();
+    if (currentUser?.role === 'Manager') {
+      executeRefund(refundTx, note);
+      setRefundTx(null);
+    } else {
+      setRefundPending({ tx: refundTx, note });
+      setRefundTx(null);
+      setShowRefundPin(true);
+    }
+  };
+
+  // Eksekusi refund penuh: revert stok + kunjungan, Kas Keluar 'Refund' di Rekap Kas,
+  // tandai refunded (sync cloud lintas device), audit log.
+  const executeRefund = (tx: Transaction, note: string) => {
+    if (!currentUser) return;
+    if (!isRefundableTransaction(tx, hasSplitChildren(tx))) return;
+    const amount = refundAmount(tx);
+
+    // 1) Stok dikembalikan (full) — pakai recipeSnapshot tersimpan via calculateItemDeductions
+    const deductions = calculateDeductions(tx);
+    if (Object.keys(deductions).length > 0) {
+      revertStock(deductions, `Refund transaksi #${tx.queueNumber}`);
+    }
+
+    // 2) Kunjungan pelanggan dikembalikan
+    if (tx.customerId) revertVisit(tx.customerId, tx.totalAmount);
+
+    // 3) Kas Keluar 'Refund' — akuntabel di Rekap Kas (online langsung / offline antre + retry)
+    addMovement('out', amount, REFUND_CASH_CATEGORY, refundMovementNotes(tx, note), currentUser.id, currentUser.name);
+
+    // 4) Tandai refunded + sync ke cloud (device lain melihat status refund & eksklusi omset)
+    updateTxMeta(tx.id, {
+      refunded: true,
+      refundedAt: new Date().toISOString(),
+      refundedAmount: amount,
+      refundNote: note || undefined,
+      refundedById: currentUser.id,
+      refundedByName: currentUser.name,
+    });
+
+    // 5) Audit log
+    addLog(currentUser.id, currentUser.name, currentUser.role, 'refund_transaction',
+      `Refund transaksi #${tx.queueNumber} sebesar ${formatRupiah(amount)}${note ? ` — ${note}` : ''}`,
+      { transactionId: tx.id, refundedAmount: amount, note: note || undefined });
+
+    addToast(`Refund transaksi #${tx.queueNumber} berhasil (${formatRupiah(amount)})`, 'success');
+  };
+
   const handleReprintConfirm = async (target: 'cashier' | 'all') => {
     if (!reprintTx) return;
     const receiptData = buildReceiptFromTransaction(reprintTx, settings, true);
@@ -266,6 +346,61 @@ export default function Transactions() {
     addToast(`Struk #${reprintTx.queueNumber} dikirim ke printer (${target === 'all' ? 'Kasir + Dapur' : 'Kasir Saja'})`, 'success');
     setReprintTx(null);
   };
+
+  // ============================================================
+  // v4.7 TO DO 11.2 (P0.4) — Struk Digital (WhatsApp / Email)
+  // ============================================================
+
+  // Buka modal dengan kontak pelanggan terisi otomatis dari CRM (bisa di-override manual)
+  const openDigitalReceipt = (tx: Transaction) => {
+    const contact = findCustomerContact(tx, customers);
+    setDigitalTx(tx);
+    setDigitalPhone(contact.phone || '');
+    setDigitalEmail(contact.email || '');
+  };
+
+  // Isi struk teks polos (sama untuk WA & email)
+  const digitalReceiptText = (tx: Transaction): string => {
+    const receiptData = buildReceiptFromTransaction(tx, settings);
+    return buildReceiptText(receiptData);
+  };
+
+  // Kirim via WhatsApp: deep-link wa.me dengan struk lengkap sebagai isi pesan
+  const sendDigitalWhatsApp = () => {
+    if (!digitalTx || !currentUser) return;
+    const url = buildWhatsAppUrl(digitalPhone, digitalReceiptText(digitalTx));
+    if (!url) {
+      addToast('Nomor WhatsApp tidak valid. Isi minimal 9 digit.', 'error');
+      return;
+    }
+    window.open(url, '_blank');
+    addLog(currentUser.id, currentUser.name, currentUser.role, 'send_digital_receipt',
+      `Kirim struk digital #${digitalTx.queueNumber} via WhatsApp ke ${normalizeDisplay(digitalPhone)}`,
+      { transactionId: digitalTx.id, channel: 'whatsapp', phone: digitalPhone });
+    addToast(`Struk #${digitalTx.queueNumber} dibuka di WhatsApp`, 'success');
+    setDigitalTx(null);
+  };
+
+  // Kirim via Email: mailto dengan struk sebagai body
+  const sendDigitalEmail = () => {
+    if (!digitalTx || !currentUser) return;
+    const url = buildMailtoUrl(digitalEmail, `Struk #${digitalTx.queueNumber} - ${settings.storeName}`, digitalReceiptText(digitalTx));
+    if (!url) {
+      addToast('Alamat email tidak valid.', 'error');
+      return;
+    }
+    window.open(url, '_blank');
+    addLog(currentUser.id, currentUser.name, currentUser.role, 'send_digital_receipt',
+      `Kirim struk digital #${digitalTx.queueNumber} via email ke ${digitalEmail}`,
+      { transactionId: digitalTx.id, channel: 'email', email: digitalEmail });
+    addToast(`Struk #${digitalTx.queueNumber} dibuka di email client`, 'success');
+    setDigitalTx(null);
+  };
+
+  // Tampilkan nomor seperti aslinya di audit log (bukan hasil normalisasi)
+  function normalizeDisplay(phone: string): string {
+    return phone.trim() || '(tanpa nomor)';
+  }
 
   const statusBadge = (status: TxStatus) => {
     switch (status) {
@@ -465,7 +600,13 @@ export default function Transactions() {
                 </div>
                 <div className="text-right">
                   <p className="font-bold text-brand-700 dark:text-brand-300">{formatRupiah(tx.totalAmount)}</p>
-                  {statusBadge(tx.txStatus)}
+                  <div className="flex items-center justify-end gap-1 flex-wrap">
+                    {statusBadge(tx.txStatus)}
+                    {/* v4.7 TO DO 11.2 (P0.2): badge transaksi yang sudah di-refund */}
+                    {tx.refunded && (
+                      <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"><RotateCcw size={12} /> Refund</span>
+                    )}
+                  </div>
                 </div>
                 {expanded === tx.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>
@@ -512,6 +653,18 @@ export default function Transactions() {
                     ))}
                   </div>
 
+                  {/* v4.7 TO DO 11.2 (P0.2): info refund di detail */}
+                  {tx.refunded && (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-800 dark:text-amber-300 space-y-1">
+                      <p>
+                        <strong>Transaksi ini telah di-refund</strong> — {formatRupiah(tx.refundedAmount ?? tx.totalAmount)}{' '}
+                        {tx.refundedAt ? `pada ${formatDate(tx.refundedAt)}` : ''}
+                        {tx.refundedByName ? ` oleh ${tx.refundedByName}` : ''}. Stok sudah dikembalikan & Kas Keluar 'Refund' tercatat di Rekap Kas.
+                      </p>
+                      {tx.refundNote && <p>Alasan: {tx.refundNote}</p>}
+                    </div>
+                  )}
+
                   {/* Summary & Snapshot HPP */}
                   <div className="space-y-1 pt-1 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700/50">
                     {tx.discount > 0 && (
@@ -555,7 +708,17 @@ export default function Transactions() {
                     >
                       <Printer size={14} /> Cetak Ulang
                     </button>
-                    {tx.txStatus !== 'Selesai' && (
+                    {/* v4.7 TO DO 11.2 (P0.4): struk digital — kirim ke WhatsApp/email pelanggan */}
+                    <button
+                      onClick={() => openDigitalReceipt(tx)}
+                      className="btn-secondary text-xs text-emerald-600 dark:text-emerald-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
+                      title="Kirim struk digital via WhatsApp / Email"
+                    >
+                      <MessageCircle size={14} /> Struk Digital
+                    </button>
+                    {/* v4.7 TO DO 11.2 (P0.2): transaksi refunded tidak boleh diubah statusnya
+                        lagi (stok & kunjungan sudah di-revert) — hanya cetak/hapus. */}
+                    {tx.txStatus !== 'Selesai' && !tx.refunded && (
                       <button
                         onClick={() => handleStatusChange(tx.id, 'Selesai', tx.queueNumber)}
                         className="btn-secondary text-xs flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
@@ -563,7 +726,16 @@ export default function Transactions() {
                         <CheckCircle2 size={14} /> Selesai
                       </button>
                     )}
-                    {tx.txStatus !== 'Cancel' && (
+                    {tx.txStatus === 'Selesai' && isRefundableTransaction(tx, hasSplitChildren(tx)) && (
+                      <button
+                        onClick={() => handleRefund(tx)}
+                        className="btn-secondary text-xs text-amber-600 dark:text-amber-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
+                        title="Refund / Retur penuh — stok dikembalikan & Kas Keluar 'Refund' dicatat"
+                      >
+                        <RotateCcw size={14} /> Refund
+                      </button>
+                    )}
+                    {tx.txStatus !== 'Cancel' && !tx.refunded && (
                       <button
                         onClick={() => handleStatusChange(tx.id, 'Cancel', tx.queueNumber)}
                         className="btn-secondary text-xs text-red-600 dark:text-red-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
@@ -571,7 +743,7 @@ export default function Transactions() {
                         <Ban size={14} /> Cancel (Void)
                       </button>
                     )}
-                    {tx.txStatus !== 'Demo' && (
+                    {tx.txStatus !== 'Demo' && !tx.refunded && (
                       <button
                         onClick={() => handleStatusChange(tx.id, 'Demo', tx.queueNumber)}
                         className="btn-secondary text-xs text-purple-600 dark:text-purple-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
@@ -630,6 +802,43 @@ export default function Transactions() {
         onSuccess={onPinSuccess}
       />
 
+      {/* v4.7 TO DO 11.2 (P0.2): PIN otorisasi refund (role non-Manager) */}
+      <PinModal
+        open={showRefundPin}
+        onClose={() => { setShowRefundPin(false); setRefundPending(null); }}
+        onSuccess={() => {
+          if (refundPending) {
+            executeRefund(refundPending.tx, refundPending.note);
+            setRefundPending(null);
+          }
+          setShowRefundPin(false);
+        }}
+        title="Otorisasi Refund — PIN Manager"
+      />
+
+      {/* v4.7 TO DO 11.2 (P0.2): modal konfirmasi refund */}
+      {refundTx && (
+        <Modal open={!!refundTx} onClose={() => setRefundTx(null)} title={`Refund Transaksi #${refundTx.queueNumber}`} maxWidth="max-w-md">
+          <div className="space-y-4">
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-800 dark:text-amber-300 space-y-1">
+              <p>
+                <strong>Refund penuh {formatRupiah(refundAmount(refundTx))}</strong> untuk transaksi #{refundTx.queueNumber} ({formatDate(refundTx.date)}).
+              </p>
+              <p>Stok bahan baku dikembalikan ke inventory, dan <strong>Kas Keluar 'Refund'</strong> dicatat di Rekap Kas.</p>
+              <p>Transaksi ini tidak lagi dihitung sebagai penjualan di laporan.</p>
+            </div>
+            <div>
+              <label className="label">Alasan Refund (Opsional)</label>
+              <textarea value={refundNote} onChange={(e) => setRefundNote(e.target.value)} className="input" rows={2} placeholder="Mis. pelanggan mengembalikan pesanan..." />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setRefundTx(null)} className="btn-secondary flex-1">Batal</button>
+              <button onClick={confirmRefund} className="btn-primary flex-1">Konfirmasi Refund</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* Confirm Dialog for Manager */}
       <ConfirmDialog
         open={!!confirmAction}
@@ -640,6 +849,71 @@ export default function Transactions() {
         variant={confirmAction?.type === 'delete' || confirmAction?.status === 'Cancel' ? 'danger' : 'warning'}
         onConfirm={onConfirmAction}
       />
+
+      {/* v4.7 TO DO 11.2 (P0.4): modal kirim struk digital (WA/email) */}
+      {digitalTx && (
+        <Modal open={!!digitalTx} onClose={() => setDigitalTx(null)} title={`📱 Kirim Struk Digital #${digitalTx.queueNumber}`} maxWidth="max-w-md">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Struk <strong>#{digitalTx.queueNumber}</strong> ({formatRupiah(digitalTx.totalAmount)}) akan dikirim ke pelanggan{' '}
+              {digitalTx.customerName ? <strong>{digitalTx.customerName}</strong> : '(tanpa nama CRM)'}.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">Nomor WhatsApp</label>
+                <input
+                  type="tel"
+                  value={digitalPhone}
+                  onChange={(e) => setDigitalPhone(e.target.value)}
+                  placeholder="08xx xxxx xxxx"
+                  className="input text-sm"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Terisi otomatis dari data pelanggan (CRM) — bisa diubah manual. Format Indonesia (0xx / +62) otomatis disesuaikan.
+                </p>
+              </div>
+              <div>
+                <label className="label">Email</label>
+                <input
+                  type="email"
+                  value={digitalEmail}
+                  onChange={(e) => setDigitalEmail(e.target.value)}
+                  placeholder="pelanggan@email.com"
+                  className="input text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Pratinjau struk */}
+            <div>
+              <p className="label">Pratinjau Struk</p>
+              <pre className="max-h-48 overflow-auto rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 p-3 text-[10px] leading-relaxed font-mono text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
+                {digitalReceiptText(digitalTx)}
+              </pre>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setDigitalTx(null)} className="btn-secondary flex-1">Batal</button>
+              <button
+                onClick={sendDigitalWhatsApp}
+                className="btn-primary flex-1 bg-green-600 hover:bg-green-700"
+              >
+                <MessageCircle size={16} /> Kirim WhatsApp
+              </button>
+              <button
+                onClick={sendDigitalEmail}
+                className="btn-primary flex-1"
+              >
+                <Mail size={16} /> Kirim Email
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400 text-center">
+              Membuka aplikasi WhatsApp / email client dengan struk sudah terisi — tinggal kirim.
+            </p>
+          </div>
+        </Modal>
+      )}
 
       {/* Modal Dialog Cetak Ulang Struk (Item 5) */}
       {reprintTx && (

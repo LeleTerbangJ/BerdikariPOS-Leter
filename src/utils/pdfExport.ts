@@ -212,6 +212,56 @@ export function exportShiftPDF(data: {
   doc.save(`laporan-shift-${data.period.replace(/\s/g, '-')}.pdf`);
 }
 
+// v4.7 TO DO 11.2 (P0.1): Laporan PPN (Pajak Pertambahan Nilai)
+export function exportPpnPDF(data: {
+  storeName: string;
+  period: string;
+  summary: { totalDpp: number; totalPpn: number; taxableCount: number; exemptCount: number };
+  days: { label: string; txCount: number; dpp: string; ppn: string }[];
+  rows: { queue: string; date: string; dpp: string; ppn: string; total: string }[];
+}) {
+  const doc = createPDF({ title: 'Laporan PPN (Pajak Pertambahan Nilai)', storeName: data.storeName, period: data.period });
+
+  autoTable(doc, {
+    startY: 50,
+    head: [['Ringkasan', 'Jumlah']],
+    body: [
+      ['Dasar Pengenaan Pajak (DPP)', formatRupiah(data.summary.totalDpp)],
+      ['PPN Terkumpul (Kewajiban Setor)', formatRupiah(data.summary.totalPpn)],
+      ['Transaksi Kena Pajak', String(data.summary.taxableCount)],
+      ['Transaksi Non-Pajak (Exempt)', String(data.summary.exemptCount)],
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: [184, 95, 33] },
+  });
+
+  if (data.days.length > 0) {
+    const y1 = (doc as any).lastAutoTable.finalY + 10;
+    autoTable(doc, {
+      startY: y1,
+      head: [['Tanggal', 'Jumlah Tx', 'DPP', 'PPN']],
+      body: data.days.map((d) => [d.label, String(d.txCount), d.dpp, d.ppn]),
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] },
+      styles: { fontSize: 7 },
+    });
+  }
+
+  if (data.rows.length > 0) {
+    const y2 = (doc as any).lastAutoTable.finalY + 10;
+    autoTable(doc, {
+      startY: y2,
+      head: [['No. Antrean', 'Tanggal', 'DPP', 'PPN', 'Total']],
+      body: data.rows.map((r) => [r.queue, r.date, r.dpp, r.ppn, r.total]),
+      theme: 'grid',
+      headStyles: { fillColor: [6, 182, 212] },
+      styles: { fontSize: 7 },
+    });
+  }
+
+  doc.save(`laporan-ppn-${data.period.replace(/\s/g, '-')}.pdf`);
+}
+
 export function exportCashPDF(data: {
   storeName: string;
   shifts: { cashier: string; open: string; close: string; opening: string; expected: string; actual: string; diff: string; sales: string; tx: string }[];

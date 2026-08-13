@@ -32,6 +32,7 @@
 - **Rekap Kas (Kas Masuk/Keluar) tersinkron lintas device** (fix v4.6 — RLS + offline queue + badge "Belum Sync")
 - Penyimpanan lokal IndexedDB untuk transaksi & audit log (kuota tidak lagi jadi batas)
 - **Stock Opname aman (v4.7)** — mode blind tanpa kebocoran oracle, otorisasi dual-control Manager, alasan penyesuaian wajib, clamp stok aktual negatif/NaN
+- **Struk Digital (v4.7)** — kirim struk via WhatsApp/email dari riwayat transaksi + opsi auto-kirim WA pasca-checkout
 
 ### Arsitektur Production:
 ```
@@ -136,7 +137,7 @@ Setiap klien (toko) yang membeli aplikasi ini perlu:
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` (v4.7) — selesai.
 > Untuk **meng-upgrade database yang sudah ada** ke v4.7, jalankan seluruh blok berikut di Supabase SQL Editor. Aman dijalankan berulang (`IF NOT EXISTS` / DO block idempoten).
-> **v4.7 menambah dua hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), dan (b) §4b — bucket Storage untuk Auto Backup cloud (opsional).
+> **v4.7 menambah empat hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), (b) butir 9 — kolom Refund transaksi (WAJIB bila memakai fitur Refund/Retur), (c) butir 10 — kolom `auto_send_digital_receipt` di `settings` (WAJIB bila memakai fitur Struk Digital / auto-kirim WA), dan (d) §4b — bucket Storage untuk Auto Backup cloud (opsional).
 
 ```sql
 -- ============================================================
@@ -232,6 +233,22 @@ ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_role TEXT;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS device_id TEXT;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;
+
+-- 9. ⚠️ v4.7 WAJIB (fitur Refund) — kolom refund transaksi (TO DO 11.2 / P0.2)
+-- updateTxMeta menulis refunded/refunded_at/refunded_amount/refund_note/refunded_by_id/
+-- refunded_by_name — wajib ada agar smartUpdate pada DB lama tidak gagal (anti offline queue).
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded BOOLEAN DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_amount FLOAT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refund_note TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_name TEXT;
+
+-- 10. ⚠️ v4.7 WAJIB (fitur Struk Digital) — auto-kirim struk via WhatsApp (TO DO 11.2 / P0.4)
+-- syncSettings menulis auto_send_digital_receipt — wajib ada agar upsert pada DB lama tidak
+-- gagal (anti offline queue). Fitur ini menutup celah "struk digital" sebagian (pengiriman
+-- masih via deep-link wa.me/mailto dengan struk terisi otomatis, bukan server broadcast).
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;
 ```
 
 > [!NOTE] **Self-healing di sisi app**
@@ -239,6 +256,8 @@ ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;
 > - Mendeteksi kolom yang kurang dan mencetak SQL perbaikannya di console (Migration 1–17).
 > - **Migration 18 (v4.6)** mendeteksi RLS-aktif-tanpa-policy di `cash_movements` via probe INSERT tanpa side-effect, lalu mencetak SQL idempoten untuk dijalankan sekali di SQL Editor.
 > - **Migration 19 (v4.7)** mendeteksi kolom otorisasi opname yang kurang di `stock_opnames` (approver_id / approver_name / approver_role / approved_at / device_id / adjustment_reason) dan mencetak SQL butir 8.
+> - **Migration 20 (v4.7)** mendeteksi kolom refund yang kurang di `transactions` (refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name) dan mencetak SQL butir 9.
+> - **Migration 21 (v4.7)** mendeteksi kolom `auto_send_digital_receipt` yang kurang di `settings` dan mencetak SQL butir 10.
 > Jadi jika ada yang terlewat, console browser akan menunjukkan persis apa yang perlu dijalankan.
 
 ### 4b. (v4.7) Supabase Storage — bucket untuk Auto Backup cloud
@@ -341,12 +360,15 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] **Backup & Restore aman (v4.7)** — checksum berbasis isi (tamper terdeteksi), restore mode Replace (snapshot penuh), media/bundle/StockLogs ikut di-restore & di-sync
 - [x] **Auto Backup berjalan otomatis (v4.7)** — scheduler Daily/Weekly + upload ke Supabase Storage bucket `backups` (opsional)
 - [x] **Stock Opname aman & lengkap (v4.7)** — Prioritas 9 & 10: log import CSV, guard race lintas device (anti lost update), batch sync, mode blind tanpa kebocoran oracle ±10%, otorisasi PIN dual-control (hanya Manager — identitas approver + penanda perangkat tercatat), alasan penyesuaian wajib untuk Staf Gudang, clamp stok aktual negatif/NaN
-- [x] Validasi otomatis: tsc 0 error, **192/192 test**, build produksi sukses (diverifikasi ulang v4.7)
+- [x] **Laporan PPN bulanan (v4.7 — P0.1)** — tab PPN di Laporan: ringkasan DPP/PPN, rekap harian, detail transaksi, export CSV & PDF
+- [x] **Refund/Retur penuh (v4.7 — P0.2)** — revert stok + kunjungan, Kas Keluar 'Refund' otomatis di Rekap Kas, eksklusi dari penjualan, anti double-refund, otorisasi PIN Manager
+- [x] **Struk Digital (v4.7 — P0.4)** — kirim struk ke WhatsApp/email pelanggan dari halaman Transaksi (kontak CRM otomatis + pratinjau + audit log); toggle Settings "auto-kirim WA" pasca-checkout (pre-open window anti popup blocker, skip idempotent replay)
+- [x] Validasi otomatis: tsc 0 error, **235/235 test**, build produksi sukses (diverifikasi ulang v4.7)
 
 ### 🔲 Sebelum Serah Terima ke Klien
 - [ ] Ganti password default semua akun
 - [ ] Buat Supabase project terpisah per klien (Opsi B) dan isi env vars yang benar
-- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 — termasuk butir 8 kolom otorisasi opname — + §4b bucket Auto Backup untuk DB lama)
+- [ ] Jalankan `supabase/schema.sql` v4.7 di project klien (atau blok upgrade §4 — termasuk butir 8 kolom otorisasi opname, butir 9 kolom Refund, & butir 10 kolom Struk Digital — + §4b bucket Auto Backup untuk DB lama)
 - [ ] (Opsional) Buat bucket `backups` + policy Storage (§4b) bila klien memakai Auto Backup cloud
 - [ ] Verifikasi sync antar 2 device (kasir + dapur): pesanan, stok, promo, Rekap Kas
 - [ ] Uji offline: matikan internet → catat kas/transaksi → badge "Belum Sync" → online → data muncul di device lain
@@ -361,7 +383,7 @@ Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL ya
 
 | Versi | Ringkasan |
 |---|---|
-| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud |
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh** & **Struk Digital (WA/email + auto-kirim)** |
 | **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
 | **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
 | **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |

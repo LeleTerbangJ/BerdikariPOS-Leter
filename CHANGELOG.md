@@ -111,13 +111,26 @@ END $$;
 
 ---
 
-## v4.7.0 — Stabilitas Stok, Opname Aman, & Backup Lengkap
+## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§14) dan `TO DO.md` (Prioritas 7–10).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§15) dan `TO DO.md` (Prioritas 7–10 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
-**Backup & Restore lengkap** (Settings → Backup):
+**Laporan PPN (Pajak Pertambahan Nilai):**
+- Tab baru **PPN** di Laporan: kartu ringkasan (PPN Terkumpul / DPP / transaksi kena pajak / non-pajak), **rekap per hari**, dan detail transaksi kena pajak.
+- Export **CSV & PDF** siap untuk arsip/perhitungan pajak. Semantik: **DPP = subtotal − diskon**, **PPN = nominal pajak** yang dibulatkan saat checkout; transaksi yang sudah di-refund otomatis tidak dihitung.
+
+**Refund / Retur Penuh:**
+- Tombol **Refund** di riwayat transaksi (`Selesai`) → konfirmasi nominal penuh + alasan (opsional) → **stok dikembalikan ke inventory**, kunjungan pelanggan di-revert, dan **Kas Keluar 'Refund' tercatat otomatis di Rekap Kas** (akuntabel).
+- Transaksi yang di-refund **tidak lagi dihitung sebagai penjualan** di laporan/dashboard; badge "Refund" + info detail (nominal, waktu, oleh siapa).
+- Otorisasi: Manager langsung eksekusi; role lain perlu **PIN Manager** (seperti void/delete). Anti double-refund & double-revert.
+
+**Struk Digital (WhatsApp / Email):**
+- Tombol **"Struk Digital"** di riwayat transaksi → modal kirim struk: **kontak pelanggan terisi otomatis dari CRM** (nomor WhatsApp & email, bisa diubah manual) + **pratinjau struk** sebelum kirim.
+- **Kirim WhatsApp** — struk lengkap (nama toko, alamat, header/footer dari Settings, daftar item, total) otomatis terisi di `wa.me` — tinggal kirim. **Kirim Email** — struk sebagai body `mailto:`.
+- **Auto-kirim pasca-checkout**: opsi di Settings (Pengaturan Struk) — setelah checkout berhasil, struk dibuka di WhatsApp dengan nomor pelanggan terisi otomatis (hanya bila transaksi memakai pelanggan dengan nomor HP valid).
+- Setiap pengiriman tercatat di **audit log** (channel, tujuan, no. transaksi). (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
 - Restore **2 mode**: **Merge** (gabung dengan data lama) atau **Replace/Snapshot** (sinkron penuh — data zombie tidak kembali lintas device).
 - Foto menu & logo toko ikut di-backup & di-restore (tidak lagi hilang).
@@ -156,6 +169,17 @@ ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approver_role TEXT;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS device_id TEXT;
 ALTER TABLE stock_opnames ADD COLUMN IF NOT EXISTS adjustment_reason TEXT;
+
+-- Kolom Refund transaksi (v4.7 — P0.2) — WAJIB bila memakai fitur Refund
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded BOOLEAN DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_amount FLOAT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refund_note TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_by_name TEXT;
+
+-- Kolom Struk Digital (v4.7 — P0.4) — WAJIB bila memakai fitur auto-kirim WA
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_send_digital_receipt BOOLEAN DEFAULT FALSE;
 ```
 
 Opsional — **hanya jika memakai Auto Backup dengan destinasi Supabase Cloud Storage**:
@@ -166,12 +190,12 @@ CREATE POLICY "Allow anon upload backups" ON storage.objects FOR INSERT TO anon 
 CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon USING (bucket_id = 'backups');
 ```
 
-> **Catatan**: aplikasi otomatis mendeteksi kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
+> **Catatan**: aplikasi otomatis mendeteksi kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19 — opname, Migration 20 — refund, Migration 21 — struk digital) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
 
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **192/192 test lolos** (18 file)
+- `npx vitest run` → **235/235 test lolos** (21 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

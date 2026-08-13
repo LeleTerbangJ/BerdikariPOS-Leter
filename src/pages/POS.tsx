@@ -18,7 +18,10 @@ import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hp
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
+// v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (Settings)
+import { buildReceiptText, buildWhatsAppUrl, autoSendReceiptTarget } from '../utils/digitalReceipt';
 import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
+import { buildCategoryTabs, reorderTabs } from '../utils/categoryOrder';
 import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType, Transaction, AtomicCheckoutParams } from '../types';
 import Modal from '../components/Modal';
 import PendingPaymentsModal from '../components/PendingPaymentsModal';
@@ -44,7 +47,7 @@ import {
 } from 'lucide-react';
 
 export default function POS() {
-  const { menus } = useMenuStore();
+  const { menus, customCategories, reorderCategories } = useMenuStore();
   const { items: inventory } = useInventoryStore();
   const { deductStock } = useInventoryStore();
   const cart = useCartStore();
@@ -311,6 +314,9 @@ export default function POS() {
 
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Semua');
+  // v4.7 (TO DO 11 — fitur baru): drag-and-drop urutan badge kategori
+  const [dragCat, setDragCat] = useState<string | null>(null);
+  const [dropCat, setDropCat] = useState<string | null>(null);
   const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [checkoutTxId, setCheckoutTxId] = useState<string>(() => uuid());
@@ -455,10 +461,25 @@ export default function POS() {
     return state.nextQueueNumber;
   }, [showCheckout]); // recalculate when checkout modal opens
 
-  const categories = useMemo(() => {
-    const cats = ['Semua', 'Best Seller', ...new Set(menus.map((m) => m.category))];
-    return [...new Set(cats)];
-  }, [menus]);
+  // v4.7 (TO DO 11 — fitur baru): urutan badge kategori mengikuti customCategories (bisa diatur
+  // via drag-and-drop), tab sistem 'Semua' & 'Best Seller' tetap di depan.
+  const categories = useMemo(
+    () => buildCategoryTabs(customCategories, menus.map((m) => m.category)),
+    [customCategories, menus]
+  );
+
+  // Pindahkan urutan kategori saat drop — hanya kategori asli (bukan tab sistem).
+  const handleDropOrder = useCallback(
+    (from: string, to: string) => {
+      if (from === to) return;
+      const realTabs = categories.filter((c) => c !== 'Semua' && c !== 'Best Seller');
+      const next = reorderTabs(realTabs, from, to);
+      if (next.join('|') !== realTabs.join('|')) reorderCategories(next);
+      setDragCat(null);
+      setDropCat(null);
+    },
+    [categories, reorderCategories]
+  );
 
   const filteredMenus = useMemo(() => {
     let list = menus.filter((m) => m.isAvailable !== false); // hide unavailable
@@ -571,6 +592,14 @@ export default function POS() {
       preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
     }
 
+    // v4.7 TO DO 11.2 (P0.4): auto-kirim struk digital — pre-open window WA sebelum await
+    // (popup blocker) hanya jika fitur aktif di Settings & pelanggan punya nomor HP valid.
+    const autoSendTarget = autoSendReceiptTarget(settings, selectedCustomer);
+    let preOpenedWaWindow: Window | null = null;
+    if (autoSendTarget) {
+      preOpenedWaWindow = window.open('about:blank', '_blank', 'width=480,height=640');
+    }
+
     // v4.1 FIX (TO DO 1.3 & 1.4): finalisasi pesanan gantung — re-commit dengan ID sama,
     // pertahankan nomor antrean & status dapur, deduksi stok delta (item baru dipotong, item dihapus dikembalikan)
     const pendingFinalizeParams: Partial<AtomicCheckoutParams> = currentPendingTx
@@ -611,6 +640,9 @@ export default function POS() {
       if (preOpenedPrintWindow && !preOpenedPrintWindow.closed) {
         preOpenedPrintWindow.close();
       }
+      if (preOpenedWaWindow && !preOpenedWaWindow.closed) {
+        preOpenedWaWindow.close();
+      }
       if (result.warnings && result.warnings.length > 0) {
         setStockWarnings(result.warnings);
         setShowStockWarning(true);
@@ -646,6 +678,19 @@ export default function POS() {
     setPayMethod('Cash');
     clearPromo();
     setOrderType('Dine In');
+
+    // v4.7 TO DO 11.2 (P0.4): isi window WA yang sudah di-pre-open dengan struk lengkap.
+    // Hanya untuk transaksi BARU (skip idempotent replay agar tidak mengirim struk ganda).
+    if (!result.idempotentReplay && preOpenedWaWindow && !preOpenedWaWindow.closed) {
+      const receiptData = buildReceiptFromTransaction(tx, settings);
+      const waUrl = buildWhatsAppUrl(autoSendTarget!.phone, buildReceiptText(receiptData));
+      if (waUrl) {
+        preOpenedWaWindow.location.href = waUrl;
+        addToast(`Struk #${tx.queueNumber} dibuka di WhatsApp — tinggal kirim ke pelanggan`, 'success');
+      } else {
+        preOpenedWaWindow.close();
+      }
+    }
 
     addToast(
       result.idempotentReplay
@@ -709,19 +754,52 @@ export default function POS() {
             </button>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCategory(cat)}
-                className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition ${
-                  category === cat
-                    ? 'bg-brand-600 text-white'
-                    : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
+            {categories.map((cat) => {
+              const isSystemTab = cat === 'Semua' || cat === 'Best Seller';
+              const isDragging = dragCat === cat;
+              const isDropTarget = dropCat === cat && dragCat && dragCat !== cat;
+              return (
+                <button
+                  key={cat}
+                  draggable={!isSystemTab}
+                  onDragStart={(e) => {
+                    if (isSystemTab) return;
+                    setDragCat(cat);
+                    setDropCat(null);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', cat); // Firefox butuh setData agar drag dimulai
+                  }}
+                  onDragOver={(e) => {
+                    if (!dragCat || isSystemTab || dragCat === cat) return;
+                    e.preventDefault(); // wajib agar onDrop terpicu
+                    setDropCat(cat);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragCat && dragCat !== cat) handleDropOrder(dragCat, cat);
+                    else {
+                      setDragCat(null);
+                      setDropCat(null);
+                    }
+                  }}
+                  onDragEnd={() => {
+                    setDragCat(null);
+                    setDropCat(null);
+                  }}
+                  onClick={() => setCategory(cat)}
+                  title={!isSystemTab ? 'Seret untuk mengatur urutan kategori' : undefined}
+                  className={`whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition select-none ${
+                    !isSystemTab ? 'cursor-grab active:cursor-grabbing' : ''
+                  } ${
+                    category === cat
+                      ? 'bg-brand-600 text-white'
+                      : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  } ${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-brand-500 border-brand-400' : ''}`}
+                >
+                  {cat}
+                </button>
+              );
+            })}
           </div>
         </div>
 

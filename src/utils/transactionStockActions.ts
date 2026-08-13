@@ -34,6 +34,9 @@ export interface StockEffectTarget {
   customerId?: string;
   totalAmount: number;
   queueNumber?: number;
+  // v4.7 TO DO 11.2 (P0.2): transaksi yang sudah di-refund — stok & kunjungan sudah
+  // dikembalikan saat refund, jadi Cancel/Demo/Delete TIDAK boleh revert lagi (double revert).
+  refunded?: boolean;
 }
 
 export function applyStatusStockEffects(
@@ -45,6 +48,8 @@ export function applyStatusStockEffects(
 ): void {
   // Stok transaksi split dikelola sesi split (reserve penuh di sub-bill pertama) — jangan sentuh.
   if (isSplit) return;
+  // P0.2: transaksi refunded sudah di-revert stok & kunjungan saat refund — jangan revert ganda.
+  if (target.refunded) return;
 
   const from = target.txStatus;
   const q = target.queueNumber ?? '?';
