@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **433/433 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **434/434 tes otomatis lolos**.
 
 ---
 
@@ -54,7 +54,7 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 ### 10. UX Kasir Lebih Mulus (Prioritas 15)
 - **Harga Add-on divalidasi** — add-on tidak bisa disimpan dengan harga 0/kosong/bukan angka (peringatan jelas, simpan diblokir — tidak lagi di-drop diam-diam); import CSV katalog ikut divalidasi (add-on invalid dilewati + dilaporkan, JSON rusak tidak menggagalkan import).
 - **Daftar Pending Payment jadi carousel** — card pesanan gantung bergeser kiri/kanan (panah, dot, counter "N dari M", bisa digeser jari) — tidak memakan layar saat banyak pending.
-- **Opsi "Cetak Tanpa Struk"** — checkbox di pembayaran: selesaikan transaksi **tanpa struk** (hemat kertas) tapi **tiket dapur tetap dicetak**; berlaku di checkout normal, **Split Bill**, dan **resume pending**.
+- **Opsi cetak per-transaksi (dua toggle)** — **"Cetak struk kasir"** & **"Cetak tiket dapur"**: skip struk saja (tiket dapur **tetap keluar di awal**) atau skip keduanya (tanpa cetakan); **anti tiket dobel otomatis** saat resume pending; berlaku di checkout normal, **Split Bill**, dan **resume pending**.
 - **Header Inventaris lebih rapi** — tombol bahan baku (Tambah Bahan/Min. Stok/Export/Import) hanya di tab Bahan Baku; tab Stock Opname bersih.
 
 ---
@@ -121,7 +121,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **433/433 test lolos** (41 file)
+- `npx vitest run` → **434/434 test lolos** (41 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA)
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 

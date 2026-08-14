@@ -170,7 +170,7 @@ END $$;
 **Pengalaman Kasir & Validasi (Prioritas 15 — 15.1 s.d. 15.4):**
 - **Harga Add-on divalidasi** — add-on tidak bisa disimpan dengan harga 0 / kosong / bukan angka; form menampilkan peringatan jelas dan **memblokir simpan** (sebelumnya add-on invalid di-drop diam-diam tanpa penjelasan). Import CSV katalog juga divalidasi: add-on tidak valid dilewati + dilaporkan jumlahnya, dan kolom Addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import.
 - **Daftar Pending Payment jadi carousel** — card pesanan gantung bergeser kiri/kanan (panah ◀ ▶, indikator dot, label "N dari M", bisa digeser jari di mobile) — tidak lagi bertumpuk memakan layar saat banyak pesanan gantung. Pencarian, detail, struk sementara, batalkan, dan lanjutkan pembayaran tetap tersedia.
-- **Opsi "Cetak Tanpa Struk" per transaksi** — checkbox **"Cetak struk kasir"** di modal pembayaran: dimatikan → transaksi selesai **tanpa mencetak struk** (menghemat kertas), sedangkan **tiket dapur tetap dicetak** agar dapur tidak kehilangan pesanan. Berlaku konsisten di semua jalur: checkout normal, **Split Bill** (checkbox di Payment Box sub-bill), dan **resume pesanan pending**.
+- **Opsi cetak per-transaksi — dua toggle independen**: checkbox **"Cetak struk kasir"** & **"Cetak tiket dapur"** di modal pembayaran. Kombinasi: cetak semua (default); **skip struk kasir saja** → tiket dapur **tetap keluar di awal** (kasir hemat kertas, dapur tetap dapat pesanan); **skip keduanya** → tidak ada cetakan sama sekali. **Anti tiket DOBEL otomatis**: saat resume pending dengan item tidak berubah, checkbox tiket dapur default **OFF** (tiket sudah tercetak saat Simpan Pending). Berlaku konsisten di semua jalur: checkout normal, **Split Bill** (dua checkbox di Payment Box sub-bill; checkbox dapur hanya tampil saat split fresh), dan **resume pesanan pending**.
 - **Header Inventaris lebih rapi** — tombol Tambah Bahan / Min. Stok / Export / Template CSV / Import hanya tampil di tab **Bahan Baku**; tab **Stock Opname** bersih dari aksi yang tidak relevan (aksi opname dikelola halaman opname sendiri).
 
 (Settings → Backup):
@@ -255,7 +255,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **433/433 test lolos** (41 file)
+- `npx vitest run` → **434/434 test lolos** (41 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

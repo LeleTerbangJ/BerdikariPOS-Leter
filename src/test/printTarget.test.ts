@@ -155,7 +155,7 @@ describe('15.3 — target print all vs kitchen (skipReceiptPrint)', () => {
     expect(createdIframes.length).toBeGreaterThan(0);
   });
 
-  it('printSplitReceipt: skipCashierReceipt=true → struk kasir dilewati, tiket dapur TETAP dicetak', async () => {
+  it('printSplitReceipt: skipCashierPrint=true, skipKitchenPrint=false → struk kasir dilewati, tiket dapur TETAP dicetak', async () => {
     const { doc, createdIframes } = installFakeDom();
     const openSpy = (globalThis as any).window.open;
     const mod = await loadPrinterModule();
@@ -178,14 +178,47 @@ describe('15.3 — target print all vs kitchen (skipReceiptPrint)', () => {
       txStatus: 'Selesai',
     } as any;
 
-    const results = await mod.printSplitReceipt(subTx, null, settings, 'all', [makeFoodItem()], true);
+    const results = await mod.printSplitReceipt(subTx, null, settings, 'all', [makeFoodItem()], true, false);
 
-    // Struk kasir dilewati (window.open tidak dipanggil), tiket dapur tetap (iframe dibuat)
+    // Struk kasir dilewati (window.open tidak dipanggil), tiket dapur TETAP keluar (iframe dibuat)
     expect(openSpy).not.toHaveBeenCalled();
     expect(doc.createElement).toHaveBeenCalledWith('iframe');
     expect(createdIframes.length).toBeGreaterThan(0);
     expect(results.some((r: any) => r.printer === 'Printer Dapur Makanan' && r.status === 'success')).toBe(true);
     expect(results.some((r: any) => r.printer === 'Printer Kasir')).toBe(false);
+  });
+
+  it('printSplitReceipt: skipCashierPrint=true + skipKitchenPrint=true → TIDAK mencetak apa pun (anti tiket dobel)', async () => {
+    const { doc, createdIframes } = installFakeDom();
+    const openSpy = (globalThis as any).window.open;
+    const mod = await loadPrinterModule();
+    const kp = makeKitchenPrinter({ targetCategory: 'Makanan' });
+    const settings = makeBaseSettings({ kitchenPrinters: [kp] });
+    const subTx = {
+      id: 'sub-1',
+      queueNumber: 5,
+      date: new Date().toISOString(),
+      cashierName: 'Kasir',
+      items: [makeFoodItem()],
+      subtotal: 10000,
+      discount: 0,
+      tax: 0,
+      totalAmount: 10000,
+      paymentMethod: 'Cash',
+      orderType: 'Dine In',
+      splitIndex: 1,
+      totalSplitCount: 2,
+      txStatus: 'Selesai',
+    } as any;
+
+    const results = await mod.printSplitReceipt(subTx, null, settings, 'all', [makeFoodItem()], true, true);
+
+    // Tidak ada cetakan sama sekali: struk kasir TIDAK (window.open tidak dipanggil) &
+    // tiket dapur TIDAK (iframe tidak dibuat)
+    expect(results).toHaveLength(0);
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(doc.createElement).not.toHaveBeenCalledWith('iframe');
+    expect(createdIframes.length).toBe(0);
   });
 
   it('printSplitReceipt: tanpa skip (default) → struk kasir + tiket dapur keduanya dicetak', async () => {
