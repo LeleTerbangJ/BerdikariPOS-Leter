@@ -6,7 +6,8 @@ import {
 } from '../utils/menuValidation';
 
 // ============================================================
-// TO DO 15.1 — Validasi harga add-on (form katalog & import CSV)
+// TO DO 15.1 (revisi) — Validasi harga add-on: harga 0 = GRATIS (SAH),
+// negatif / bukan angka diblokir (form katalog & import CSV)
 // ============================================================
 
 describe('validateAddOnForm', () => {
@@ -23,16 +24,25 @@ describe('validateAddOnForm', () => {
     ]);
   });
 
-  it('memblokir add-on harga 0 (bukan drop diam-diam)', () => {
-    const res = validateAddOnForm([{ name: 'Es Batu', price: '0' }]);
-    expect(res.addons).toEqual([]);
-    expect(res.problems).toEqual(['Add-on "Es Batu": harga harus lebih dari 0.']);
+  it('mengizinkan add-on GRATIS (harga 0 / kolom harga kosong)', () => {
+    const res = validateAddOnForm([
+      { name: 'Saus Sambal', price: '0' },
+      { name: 'Saus Keju', price: 0 },
+      { name: 'Saus Tomat', price: '' }, // kosong → 0 (gratis)
+    ]);
+    expect(res.problems).toEqual([]);
+    expect(res.addons).toEqual([
+      { name: 'Saus Sambal', price: 0 },
+      { name: 'Saus Keju', price: 0 },
+      { name: 'Saus Tomat', price: 0 },
+    ]);
   });
 
-  it('memblokir harga negatif & bukan angka', () => {
-    expect(validateAddOnForm([{ name: 'X', price: '-1000' }]).problems.length).toBe(1);
+  it('memblokir harga negatif & bukan angka (bukan drop diam-diam)', () => {
+    const resNeg = validateAddOnForm([{ name: 'X', price: '-1000' }]);
+    expect(resNeg.addons).toEqual([]);
+    expect(resNeg.problems).toEqual(['Add-on "X": harga tidak boleh negatif atau bukan angka.']);
     expect(validateAddOnForm([{ name: 'X', price: 'abc' }]).problems.length).toBe(1);
-    expect(validateAddOnForm([{ name: 'X', price: '' }]).problems.length).toBe(1);
   });
 
   it('memblokir baris dengan harga terisi tapi nama kosong', () => {
@@ -46,14 +56,14 @@ describe('validateAddOnForm', () => {
     expect(res.addons).toEqual([{ name: 'Topping', price: 2501 }]);
   });
 
-  it('mengumpulkan beberapa masalah sekaligus', () => {
+  it('mengumpulkan beberapa masalah sekaligus (harga 0 tidak lagi masalah)', () => {
     const res = validateAddOnForm([
-      { name: 'A', price: '0' },
-      { name: 'B', price: '-1' },
-      { name: '', price: '5000' },
+      { name: 'A', price: '0' }, // gratis — valid
+      { name: 'B', price: '-1' }, // negatif — masalah
+      { name: '', price: '5000' }, // nama kosong — masalah
     ]);
-    expect(res.problems.length).toBe(3);
-    expect(res.addons).toEqual([]);
+    expect(res.problems.length).toBe(2);
+    expect(res.addons).toEqual([{ name: 'A', price: 0 }]);
   });
 });
 
@@ -70,10 +80,10 @@ describe('sanitizeImportedAddOns', () => {
     expect(res.dropped).toBe(0);
   });
 
-  it('menghitung add-on invalid (harga 0/negatif/NaN/nama kosong) sebagai dropped', () => {
+  it('menghitung add-on invalid (harga negatif/NaN/nama kosong) sebagai dropped — harga 0 GRATIS dipertahankan', () => {
     const res = sanitizeImportedAddOns([
       { name: 'A', price: 1000 },
-      { name: 'Gratis', price: 0 }, // harga 0 → drop
+      { name: 'Gratis', price: 0 }, // harga 0 → SAH (add-on gratis)
       { name: 'Minus', price: -500 }, // negatif → drop
       { name: 'NaN', price: 'bukan-angka' }, // bukan angka → drop
       { name: '', price: 2000 }, // nama kosong → drop
@@ -82,9 +92,10 @@ describe('sanitizeImportedAddOns', () => {
     ]);
     expect(res.addons).toEqual([
       { name: 'A', price: 1000 },
+      { name: 'Gratis', price: 0 },
       { name: 'Desimal', price: 3500 },
     ]);
-    expect(res.dropped).toBe(5);
+    expect(res.dropped).toBe(4);
   });
 
   it('menangani input non-array (string/object/null)', () => {
@@ -96,9 +107,12 @@ describe('sanitizeImportedAddOns', () => {
 });
 
 describe('parseImportedAddOns', () => {
-  it('mem-parse JSON valid', () => {
-    const res = parseImportedAddOns('[{"name":"A","price":1000},{"name":"B","price":0}]');
-    expect(res.addons).toEqual([{ name: 'A', price: 1000 }]);
+  it('mem-parse JSON valid — harga 0 dipertahankan (add-on gratis)', () => {
+    const res = parseImportedAddOns('[{"name":"A","price":1000},{"name":"B","price":0},{"name":"C","price":-1}]');
+    expect(res.addons).toEqual([
+      { name: 'A', price: 1000 },
+      { name: 'B', price: 0 },
+    ]);
     expect(res.dropped).toBe(1);
     expect(res.parseFailed).toBe(false);
   });

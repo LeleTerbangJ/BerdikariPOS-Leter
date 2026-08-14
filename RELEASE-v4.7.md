@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **434/434 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **449/449 tes otomatis lolos**.
 
 ---
 
@@ -50,9 +50,10 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Fallback browser bisa diatur per printer** (kasir & dapur) — pas untuk demo atau toko tanpa printer Bluetooth.
 - **Antrean cetak** — banyak struk/tiket dapur yang datang bersamaan dicetak **berurutan** tanpa tumpang tindih.
 - **Indikator printer di halaman Dapur (KDS)** — tahu printer mana yang hidup/mati + tombol Hubungkan, tanpa buka Settings.
+- **Opsi "Semua Dapur" di Edit Menu** — menu bisa diatur agar tiketnya dicetak ke **semua printer dapur aktif** (tidak hanya satu target) — cocok untuk menu yang bisa dibuat di dapur mana pun.
 
 ### 10. UX Kasir Lebih Mulus (Prioritas 15)
-- **Harga Add-on divalidasi** — add-on tidak bisa disimpan dengan harga 0/kosong/bukan angka (peringatan jelas, simpan diblokir — tidak lagi di-drop diam-diam); import CSV katalog ikut divalidasi (add-on invalid dilewati + dilaporkan, JSON rusak tidak menggagalkan import).
+- **Harga Add-on divalidasi (gratis diperbolehkan)** — **add-on harga 0 (gratis) SAH** untuk pilihan saus/topping yang sudah termasuk; yang diblokir hanya harga **negatif/bukan angka** (peringatan jelas, simpan diblokir); di POS label **"Gratis"**, di struk termal & digital nama add-on gratis tercetak dengan penanda **(Gratis)** tanpa menambah total; import CSV katalog ikut divalidasi (add-on invalid dilewati + dilaporkan, JSON rusak tidak menggagalkan import).
 - **Daftar Pending Payment jadi carousel** — card pesanan gantung bergeser kiri/kanan (panah, dot, counter "N dari M", bisa digeser jari) — tidak memakan layar saat banyak pending.
 - **Opsi cetak per-transaksi (dua toggle)** — **"Cetak struk kasir"** & **"Cetak tiket dapur"**: skip struk saja (tiket dapur **tetap keluar di awal**) atau skip keduanya (tanpa cetakan); **anti tiket dobel otomatis** saat resume pending; berlaku di checkout normal, **Split Bill**, dan **resume pending**.
 - **Header Inventaris lebih rapi** — tombol bahan baku (Tambah Bahan/Min. Stok/Export/Import) hanya di tab Bahan Baku; tab Stock Opname bersih.
@@ -66,6 +67,7 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - Rekap Kas (Kas Masuk/Keluar) tersinkron antar device (fix RLS).
 - Import CSV & Stock Opname lebih cepat (1 request batch), rename bahan tercatat dengan nama baru.
 - Perbaikan stabilitas penyimpanan: transaksi & audit log di **IndexedDB** (kuota lokal tidak terbatas).
+- **Perubahan menu pada pesanan gantung (tambah/kurangi) kini selalu muncul di riwayat transaksi** — sinkronisasi antar perangkat tidak lagi menimpa item yang baru diubah dengan versi lama (perbandingan kesegaran per transaksi, termasuk void/batal & perubahan metode bayar).
 
 ---
 
@@ -121,7 +123,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **434/434 test lolos** (41 file)
+- `npx vitest run` → **449/449 test lolos** (43 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA)
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 

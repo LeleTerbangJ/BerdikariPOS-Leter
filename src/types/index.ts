@@ -141,7 +141,12 @@ export type TransactionLifecycleState =
 export interface Transaction {
   id: string;
   queueNumber: number;
-  date: string; // ISO
+  date: string; // ISO — timestamp BISNIS (kapan transaksi dicommit/finalized; dipakai laporan & filter)
+  // v4.7 (evaluasi updatedAt): timestamp MUTASI terakhir — diset engine tiap commit & tiap
+  // update status/meta lokal. Dipakai loadFromCloud untuk memutuskan mana yang lebih baru
+  // (lokal vs cloud) tanpa mengotori `date` yang dipakai laporan/filter. Fallback ke date
+  // untuk baris legacy yang belum punya updatedAt.
+  updatedAt?: string; // ISO — kapan record terakhir diubah (freshness/version marker)
   items: CartItem[];
   subtotal: number;
   discount: number;

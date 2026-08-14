@@ -142,6 +142,10 @@ export class AtomicTransactionEngine {
         id: txId,
         queueNumber: queueNum,
         date: new Date().toISOString(),
+        // v4.7 (evaluasi updatedAt): stamp mutasi terakhir tiap commit — loadFromCloud
+        // memakai ini (fallback date) agar update lokal yang belum tersync tidak ditimpa
+        // data cloud stale (race realtime/refresh). `date` sendiri dipakai laporan & filter.
+        updatedAt: new Date().toISOString(),
         items: itemsWithSnapshot,
         subtotal: params.subtotal,
         discount: params.discount,
