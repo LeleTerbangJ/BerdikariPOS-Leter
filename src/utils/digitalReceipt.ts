@@ -79,7 +79,7 @@ function formatReceiptDate(dateStr: string): string {
 
 function itemLine(item: ReceiptData['items'][number]): string[] {
   const lines: string[] = [];
-  const addonStr = item.addons.length > 0 ? ` +${item.addons.map((a) => a.name).join(',')}` : '';
+  const addonStr = item.addons.length > 0 ? ` +${item.addons.map((a) => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
   const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
   const tempStr = item.showTemperature !== false ? item.temperature : '';
   const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();

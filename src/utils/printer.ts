@@ -689,7 +689,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
       `;
     }
 
-    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
+    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
@@ -898,7 +898,7 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   // 4. Items List (Exact Left/Right Alignment)
   for (const item of data.items) {
     commands.push(...encoder.encode(`${item.name}\n`));
-    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
+    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
@@ -1022,7 +1022,7 @@ export function printKitchenReceiptBrowser(data: ReceiptData, items: CartItem[],
 
   // Items
   for (const item of items) {
-    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
+    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     lines.push(`${item.name}`);
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
@@ -1108,7 +1108,7 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   // Items list
   for (const item of items) {
     commands.push(...encoder.encode(`${item.name}\r\n`));
-    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => a.name).join(',')}` : '';
+    const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
@@ -1217,6 +1217,11 @@ export async function printReceipt(
           if (item.isBundle) return false;
           const itemTarget = (item.kitchenTarget || '').trim().toLowerCase();
           const printerTarget = (kp.targetCategory || '').trim().toLowerCase();
+          // v4.7: kitchenTarget 'ALL' ("Semua Dapur" di form Edit Menu) → tiket dicetak
+          // ke SEMUA printer dapur yang aktif (item ini tampil di semua target dapur).
+          if (itemTarget === 'all' || itemTarget === 'semua dapur' || itemTarget === '*') {
+            return true;
+          }
           return itemTarget === printerTarget && printerTarget !== '';
         });
 

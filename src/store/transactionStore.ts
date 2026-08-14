@@ -143,7 +143,10 @@ export const useTransactionStore = create<TransactionState>()(
         syncTransactionStatus(id, status); // Cloud sync
         set((s) => ({
           transactions: s.transactions.map((t) =>
-            t.id === id ? { ...t, kitchenStatus: status } : t
+            // v4.7 (evaluasi updatedAt): stamp mutasi — jalur ini TIDAK mengubah `date`
+            // (timestamp bisnis), jadi freshness harus dicatat terpisah agar update lokal
+            // tidak kalah dari fetch cloud stale saat smartUpdate async belum selesai.
+            t.id === id ? { ...t, kitchenStatus: status, updatedAt: new Date().toISOString() } : t
           ),
         }));
       },
@@ -152,7 +155,9 @@ export const useTransactionStore = create<TransactionState>()(
         syncTransactionTxStatus(id, status); // Cloud sync
         set((s) => ({
           transactions: s.transactions.map((t) =>
-            t.id === id ? { ...t, txStatus: status, isPending: status === 'Pending' } : t
+            t.id === id
+              ? { ...t, txStatus: status, isPending: status === 'Pending', updatedAt: new Date().toISOString() }
+              : t
           ),
         }));
       },
@@ -164,7 +169,7 @@ export const useTransactionStore = create<TransactionState>()(
         syncTransactionMeta(id, partial); // Cloud sync (field terpilih saja)
         set((s) => ({
           transactions: s.transactions.map((t) =>
-            t.id === id ? { ...t, ...partial } : t
+            t.id === id ? { ...t, ...partial, updatedAt: new Date().toISOString() } : t
           ),
         }));
       },
@@ -245,6 +250,38 @@ export const useTransactionStore = create<TransactionState>()(
             oldestCloudTime = new Date(oldestTx.date).getTime();
           }
 
+          // v4.7 FIX (bug: item pending tidak ter-update di riwayat transaksi):
+          // re-commit pending dengan ID yang sama men-stamp date baru di engine → update lokal
+          // SELALU lebih baru dari versi cloud sebelum upsert async selesai (atau bila upsert
+          // tertunda/gagal → offline queue). Sebelumnya loadFromCloud cloud-authoritative tanpa
+          // perbandingan freshness → fetch realtime/refresh dengan data cloud STALE menimpa
+          // item lokal yang sudah benar (menu yang ditambah/dikurangi hilang dari riwayat).
+          // Kini: bila ID ada di cloud DAN di lokal → pilih yang lebih baru (date).
+          // Deletion lintas device (ID lokal TIDAK ada di cloud, di dalam window) tetap
+          // cloud-authoritative seperti sebelumnya.
+          // v4.7 (evaluasi updatedAt): freshness marker utamakan `updatedAt` (timestamp mutasi),
+          // fallback `date` untuk baris legacy yang belum punya updatedAt. Ini menutup race
+          // untuk SEMUA jalur update — termasuk status (void/cancel) & meta (paymentMethod/
+          // refund) yang TIDAK mengubah `date` (timestamp bisnis untuk laporan & filter).
+          const freshTime = (tx: Transaction): number =>
+            new Date((tx.updatedAt as string | undefined) || tx.date).getTime();
+          const keepLocalIfNewer = (t: Transaction): boolean => {
+            if (!cloudIds.has(t.id)) return false;
+            const cloudTx = cloudTxFiltered.find((c) => c.id === t.id);
+            if (!cloudTx) return false;
+            return freshTime(t) > freshTime(cloudTx);
+          };
+
+          // v4.7: ID yang versi LOKAL-nya lebih baru dari cloud → versi cloud TIDAK boleh
+          // ikut merge. Jika ikut, muncul dua record ber-ID sama (duplikat baris di UI) dan
+          // `find()`/sort bisa mengembalikan versi cloud stale sebagai pemenang.
+          const localNewerIds = new Set(
+            s.transactions
+              .filter((t) => cloudIds.has(t.id) && keepLocalIfNewer(t))
+              .map((t) => t.id)
+          );
+          const cloudForMerge = cloudTxFiltered.filter((c) => !localNewerIds.has(c.id));
+
           let localOnly: Transaction[];
           if (fullSync) {
             if (cloudTxFiltered.length === 0) {
@@ -255,7 +292,7 @@ export const useTransactionStore = create<TransactionState>()(
               // Full sync mode (real-time or explicit cloud refresh): cloud is authoritative within the window.
               // Any local transaction newer than or equal to oldestCloudTime that is NOT in cloudIds was deleted on another device.
               localOnly = s.transactions.filter((t) => {
-                if (cloudIds.has(t.id)) return false;
+                if (cloudIds.has(t.id)) return keepLocalIfNewer(t);
                 const txTime = new Date(t.date).getTime();
                 if (txTime >= oldestCloudTime) return false; // Deleted on cloud
                 return true; // Keep older transactions outside the fetched window
@@ -263,14 +300,14 @@ export const useTransactionStore = create<TransactionState>()(
             }
           } else {
             localOnly = s.transactions.filter((t) => {
-              if (cloudIds.has(t.id)) return false;
+              if (cloudIds.has(t.id)) return keepLocalIfNewer(t);
               const txTime = new Date(t.date).getTime();
               return txTime < oldestCloudTime;
             });
           }
 
-          // Merge: cloud data (tanpa tombstoned) + local-only data
-          const merged = [...cloudTxFiltered, ...localOnly];
+          // Merge: cloud data (tanpa tombstoned & tanpa versi yang kalah dari lokal) + local-only data
+          const merged = [...cloudForMerge, ...localOnly];
           // Sort by date descending (newest first)
           merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 

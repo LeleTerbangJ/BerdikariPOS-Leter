@@ -143,6 +143,34 @@ describe('buildReceiptText (P0.4 — struk teks polos untuk WA/email)', () => {
     expect(text).toContain('+Telur');
   });
 
+  it('add-on GRATIS (harga 0): nama tercetak dengan penanda (Gratis) & TIDAK menambah unit price', () => {
+    const r = makeReceipt();
+    r.items.push({
+      lineId: 'l3',
+      name: 'Ayam Geprek',
+      quantity: 1,
+      basePrice: 18000,
+      subtotal: 18000, // hanya basePrice — add-on gratis +0
+      addons: [
+        { id: 'a3', name: 'Saus Sambal', price: 0 }, // gratis → penanda (Gratis)
+        { id: 'a4', name: 'Saus Keju', price: 2000 }, // berbayar → tanpa penanda
+      ],
+      sugar: 'Normal',
+      temperature: 'Panas',
+      showSugarLevel: false,
+      showTemperature: false,
+      kitchenTarget: 'Makanan',
+    });
+    r.subtotal += 18000;
+    r.total += 18000;
+    const text = buildReceiptText(r);
+    // Nama add-on gratis tercetak + penanda; add-on berbayar tanpa penanda
+    expect(text).toContain('+Saus Sambal(Gratis),Saus Keju');
+    // Unit price = basePrice + add-on berbayar saja (gratis +0, total tidak ter-inflasi)
+    expect(text).toContain('1x Rp 20.000');
+    expect(text).not.toContain('Rp 0');
+  });
+
   it('menampilkan diskon, pajak, bayar & kembali', () => {
     const text = buildReceiptText(makeReceipt());
     expect(text).toContain('Diskon');

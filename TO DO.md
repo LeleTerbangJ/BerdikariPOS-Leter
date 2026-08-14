@@ -946,6 +946,7 @@
 ### 15.1 (🟠 TINGGI) — Harga Add-on bisa bernilai 0 / tidak divalidasi (`Catalog.tsx`)
 
 > ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+> 🔁 **REVISI (v4.7)**: **add-on harga 0 (gratis) kini SAH** — kebutuhan bisnis: banyak menu yang *include* pilihan saus ekstra tanpa biaya dan ingin memakai Add-ons untuk itu. Yang diblokir hanya harga **negatif / bukan angka** (bukan harga 0). Form & import CSV diperbarui (`validateAddOnForm`/`sanitizeImportedAddOns` — `price >= 0` valid; kolom harga kosong = 0/gratis). Di POS, add-on gratis tampil berlabel **"Gratis"** (bukan "+Rp 0"), dan di **struk termal & digital** nama add-on gratis ikut tercetak dengan penanda **(Gratis)** tanpa menambah total/unit price (5 lokasi `addonStr` di `printer.ts` + `digitalReceipt.ts`; +2 test). Test `menuValidation` diperbarui (tetap 11 kasus — harga 0 valid, negatif/NaN/nama kosong diblokir/di-drop).
 
 - **Gejala**: harga add-on pada menu dapat bernilai 0 → di POS add-on tampil "+Rp 0" (gratis) atau malah **hilang diam-diam** dari daftar add-on menu tanpa peringatan.
 - **Akar masalah** (2 jalur):
@@ -954,10 +955,10 @@
 - **Rencana perbaikan**: (a) validasi harga add-on **harus > 0** di form (warning/toast saat simpan, jangan drop diam-diam); (b) saat import CSV, validasi tiap add-on (drop baris invalid + laporkan jumlah yang dibuang); (c) opsional: validasi juga harga menu `parseInt(formPrice) || 0` (harga 0) dan add-on tanpa nama — konsisten di semua jalur masuk data (form, import, seed).
 - **Yang dikerjakan (v4.7)**:
   - **Helper murni baru `src/utils/menuValidation.ts`**: `validateAddOnForm` (form — baris kosong di-skip; nama tanpa harga / harga ≤ 0 / bukan angka → problem yang MENGAMBLOK simpan, bukan drop diam-diam), `sanitizeImportedAddOns` (CSV — entry invalid di-drop + dihitung, harga di-round ke integer), `parseImportedAddOns` (JSON.parse aman — JSON rusak tidak menggagalkan seluruh import, ditandai `parseFailed`).
-  - **`Catalog.handleSave`**: pakai `validateAddOnForm` — bila ada masalah → **toast warning** "Add-on \"X\": harga harus lebih dari 0." (+ jumlah masalah lain) dan **simpan dibatalkan**; baris kosong tetap di-skip.
+  - **`Catalog.handleSave`**: pakai `validateAddOnForm` — bila ada masalah → **toast warning** "Add-on \"X\": harga tidak boleh negatif atau bukan angka." (+ jumlah masalah lain) dan **simpan dibatalkan**; baris kosong tetap di-skip. **Revisi**: harga 0 diterima (gratis).
   - **`Catalog.handleImport`**: pakai `parseImportedAddOns` per menu — add-on invalid (harga ≤ 0 / nama kosong / non-objek) dilewati; kolom addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import; hasilnya dilaporkan via **toast warning** ("N add-on tidak valid dilewati" / "N menu dengan kolom Addons rusak"), toast sukses hanya bila tidak ada masalah.
   - (c) harga menu `parseInt(formPrice) || 0` sengaja TIDAK diubah — di luar lingkup 15.1 (fokus add-on); dicatat untuk tinjauan berikutnya bila diperlukan.
-- **Test**: `src/test/menuValidation.test.ts` (11 kasus: form valid/baris kosong, harga 0/negatif/NaN/empty diblokir, nama wajib, round desimal, kumpulan masalah; import valid, dropped dihitung, non-array, JSON rusak → parseFailed). Total test: **427/427** (40 file).
+- **Test**: `src/test/menuValidation.test.ts` (11 kasus: form valid/baris kosong, **harga 0/empty = gratis SAH**, negatif/NaN diblokir, nama wajib, round desimal, kumpulan masalah; import valid, **add-on harga 0 dipertahankan**, dropped dihitung, non-array, JSON rusak → parseFailed). Total test: **427/427** (40 file) — **diperbarui (tetap 11 kasus) setelah revisi add-on gratis**.
 
 ### 15.2 (🟠 TINGGI) — Daftar Pending Payment berupa card bertumpuk (memakan space layar) → ubah jadi carousel
 
@@ -1006,6 +1007,38 @@
 
 ---
 
+## 🔴 PRIORITAS 16 — BUG: ITEM PENDING TIDAK TER-UPDATE DI RIWAYAT TRANSAKSI (v4.7)
+
+> **Sumber temuan**: laporan user — "ketika saya menambahkan atau mengurangi menu di transaksi pending payment, menu yang ditambahkan atau dikurangi itu tidak bertambah atau berkurang di riwayat transaksi".
+> **Status**: ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+### 16.1 (🟠 TINGGI) — Item pending yang di-update tidak tercermin di riwayat transaksi
+
+- **Gejala**: tambah/kurangi menu pada pesanan gantung (resume → ubah cart → Simpan Pending lagi / Lanjutkan Pembayaran) tidak terlihat di riwayat transaksi — menu lama tetap tampil, menu baru hilang.
+- **Akar masalah (2 lapis)**:
+  1. **Lokal BENAR** — re-commit pending dengan ID sama (`bypassIdempotency`) → `addTransaction` melakukan **upsert by ID** (`filter(t.id !== tx.id)` + prepend) → store lokal langsung menyimpan item baru. Dibuktikan test reproduksi engine langsung (3/3 lolos).
+  2. **Round-trip cloud MENIMPA lokal** — `loadFromCloud` (dipicu realtime App.tsx & Transactions.tsx, refresh halaman, event `online`, boot) bersifat **cloud-authoritative**: bila ID ada di hasil fetch cloud, versi lokal DIBUANG tanpa perbandingan freshness. Karena `syncTransaction` berjalan **async fire-and-forget** (bisa tertunda / gagal → offline queue), ada jendela di mana cloud masih berisi item LAMA → fetch menimpa item lokal yang benar.
+- **Perbaikan (2 lapis)**:
+  1. **Freshness compare di `loadFromCloud`** (`src/store/transactionStore.ts`) — bila ID ada di cloud DAN di lokal, pilih versi yang **lebih baru** per transaksi; deletion lintas device (ID lokal tidak ada di cloud, di dalam window) tetap cloud-authoritative.
+  2. **Anti-duplikat** — versi cloud yang kalah TIDAK boleh ikut merge (`localNewerIds`/`cloudForMerge`) — sebelumnya muncul **dua record ber-ID sama** (duplikat baris di UI; `find()`/sort bisa mengembalikan versi cloud stale).
+  3. **`updatedAt` minimal (hasil evaluasi desain)** — jalur update yang TIDAK mengubah `date` (void/cancel, kitchen status, payment method/refund via `updateTxStatus`/`updateKitchenStatus`/`updateTxMeta`) tidak terlindungi perbandingan `date` saja. Tambah field **`updatedAt?: string`** di `Transaction`: di-stamp **engine tiap commit** + **3 fungsi update store**; `loadFromCloud` memakai `freshTime()` = `updatedAt` fallback `date` (legacy). **Tanpa migrasi DB** (versi minimal — kolom DB opsional untuk presisi lintas device; hindari `DEFAULT now()` untuk backfill agar baris legacy tidak tampak "lebih baru").
+- **File**: `src/types/index.ts` (+`updatedAt`), `src/lib/atomicTransactionEngine.ts` (stamp tiap commit), `src/store/transactionStore.ts` (stamp 3 fungsi update + freshness compare + anti-duplikat), test `src/test/pendingUpdateHistory.test.ts` (baru) + `src/test/pendingCloudOverwrite.test.ts` (baru).
+- **Test**: 11 kasus — `pendingUpdateHistory` (3: update tambah item, hapus+tambah item, finalize dengan item berubah — membuktikan alur LOKAL engine benar) + `pendingCloudOverwrite` (8: lokal lebih baru tidak ditimpa stale, cloud lebih baru menang, date sama → cloud, **void/status terlindungi** (updatedAt), updatedAt lebih unggul dari date, cloud updatedAt lebih baru, legacy fallback date, **anti-duplikat**, deletion lintas device tetap berlaku). Timestamp relatif terhadap `Date.now()` agar deterministik. Total test: **445/445** (43 file) — **447/447** setelah +2 test add-on gratis di struk (revisi 15.1) — **449/449** setelah fitur "Semua Dapur" (16.2, `printTarget` +2).
+
+### 16.2 (🟢 MINOR/FITUR) — Edit Menu: opsi cetak ke SEMUA Target Dapur ("Semua Dapur")
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Kebutuhan**: ada menu yang harus dicetak di semua dapur (mis. menu umum yang bisa dibuat di dapur mana pun) — sebelumnya `kitchenTarget` hanya bisa satu target spesifik (cocokkan `item.kitchenTarget === kp.targetCategory`), atau kosong (tanpa split / tidak ke printer dapur mana pun).
+- **Yang dikerjakan (v4.7)**:
+  - **Form Edit Menu** (`Catalog.tsx`): pilihan baru **"Semua Dapur (Cetak ke Semua Printer Dapur)"** di select Target Dapur → nilai tersimpan `kitchenTarget: 'ALL'` (string, sync cloud aman via kolom `kitchen_target` TEXT — tanpa migrasi).
+  - **Routing dapur** (`printer.ts` `printReceipt` — satu-satunya tempat routing, dipakai juga `printSplitReceipt`): `itemTarget` `'all'`/`'semua dapur'`/`'*'` → item dikirim ke **SEMUA printer dapur aktif**. Target spesifik tetap seperti sebelumnya.
+  - **Tampilan**: badge daftar menu (`Catalog.tsx`) & badge item di cart POS (`POS.tsx`) menampilkan **"Semua Dapur"** untuk `kitchenTarget === 'ALL'`.
+  - Bundle: `kitchenTarget` 'ALL' mengalir ke child (bundleService) tanpa perubahan khusus.
+- **Test**: `printTarget.test.ts` +2 — item `kitchenTarget: 'ALL'` + 2 printer (Makanan & Minuman) → **keduanya mencetak** (2 iframe, hasil sukses); item target spesifik `'Makanan'` + 2 printer → hanya printer Makanan yang benar-benar mencetak (1 iframe). Total test: **449/449** (43 file).
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -1032,6 +1065,7 @@
 11. **Prioritas 13 (Audit Mode Offline)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — O-1 ✅ (queue → IndexedDB) + O-2 ✅ (retry berkala 30 dtk + visibilitychange) + O-3 ✅ (failed-ops list + badge + modal + audit log) + O-4 ✅ (banner global) + O-5 ✅ (badge "Belum Sync" transaksi) + O-6 ✅ (banner cold start + dokumentasi batasan) + O-7 ✅ (deteksi konflik stok) + O-8 ✅ (tombstone cap 1000) + O-9 ✅ (PWA navigateFallback + NetworkFirst) + O-10 ✅ (UI konfirmasi aman + urutan antrean kronologis) — angka test **397/397** (35 file) + build sukses.
 12. **Prioritas 14 (Audit Printer Thermal & Split Printer)**: **14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅ (v4.7) — TUNTAS (6/6)** — P-1 ✅ (silent re-pair via `getDevices()` + `establishConnection` bersama), P-2 ✅ (state sesi `sessionStorage`), P-3 ✅ (tidak buka picker otomatis saat checkout), P-4 ✅ (banner "Refresh memutus koneksi" non-dismissable) + **14.2 ✅** (fallback seragam: re-pair senyap → browser print + toast `notifyPrinterFallback`) + **14.3 ✅** (print queue FIFO per printer + retry 1× + drop tanpa hang) + **14.4 ✅** (BroadcastChannel `rempah-printer-events` + `printerStatusStore` + `usePrinterCrossTab` + indikator KDS dengan tombol Hubungkan senyap) + **14.5 ✅** (fallback EKSPLISIT per printer: `cashierFallbackBrowser` / `kp.fallbackBrowser`, return boolean, status error bila nonaktif, toggle di Settings) + **14.6 ✅** (alert→toast semua alur printer, satu sumber kebenaran device identity via `getPrinterDeviceId/Name`, banner pakai `getPrinterSessionState` + label Indonesia konsisten) — test **416/416** (39 file; +7 `printerFallback`). **Prioritas 14 TUNTAS.**
 13. **Prioritas 15 (Temuan UX & Validasi)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — **15.1 ✅** validasi harga add-on > 0 (form blok simpan + toast; import CSV drop invalid + laporan; helper `menuValidation.ts`, 11 test) + **15.2 ✅** daftar pending payment jadi **carousel horizontal** (scroll-snap + geser mobile, panah ◀ ▶ + dot + counter "N dari M", clamp index saat list berubah; semua fitur lama dipertahankan) + **15.3 ✅** opsi cetak per-transaksi **dua toggle independen** — "Cetak struk kasir" (`skipReceiptPrint`) & "Cetak tiket dapur" (`skipKitchenPrint`): skip struk saja → tiket dapur **tetap keluar di awal** (kebutuhan kasir hemat struk tapi dapur tetap dapat tiket); skip keduanya → tidak ada cetakan; **anti tiket DOBEL otomatis** saat resume pending item tidak berubah (tiket dapur default OFF, sudah tercetak saat Simpan Pending); **diperluas ke Split Bill** via `printSplitReceipt(skipCashierPrint, skipKitchenPrint)` + dua checkbox di Payment Box `SplitBillModal`; **resume pending otomatis tercakup** via modal checkout yang sama; 7 test `printTarget`) + **15.4 ✅** header aksi bahan baku (Tambah Bahan/Min. Stok/Export/Template CSV/Import) hanya di tab Bahan Baku (UI-only). **Prioritas 15 TUNTAS** — test **434/434** (41 file), tsc 0 error.
+14. **Prioritas 16 (Bug Item Pending Tidak Ter-update di Riwayat + Fitur Semua Dapur)**: **SELESAI ✅ (v4.7)** — **16.1 ✅** freshness compare di `loadFromCloud` (pilih versi lebih baru per transaksi; **anti-duplikat** — versi cloud yang kalah tidak ikut merge) + **`updatedAt` minimal** (stamp engine tiap commit & `updateKitchenStatus`/`updateTxStatus`/`updateTxMeta`; fallback `date` untuk legacy; tanpa migrasi DB) — menutup race item pending (tambah/kurangi menu) DAN jalur void/cancel/status/meta. Test permanen `pendingUpdateHistory` (3) + `pendingCloudOverwrite` (8) + **16.2 ✅** opsi "Semua Dapur" di Edit Menu (`kitchenTarget: 'ALL'` → tiket ke semua printer dapur aktif; `printTarget` +2) — test **449/449** (43 file), tsc 0 error.
 
 ---
 

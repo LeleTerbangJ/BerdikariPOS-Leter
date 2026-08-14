@@ -1443,7 +1443,7 @@ export default function POS() {
                   <span className="text-slate-600 dark:text-slate-400 font-medium flex items-center gap-1.5">
                     <span className="text-brand-500 font-bold">↳</span> {item.quantity}x {item.name} <span className="text-[10px] text-slate-400 font-normal">(Isi Paket)</span>
                   </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-500">{item.kitchenTarget || 'Dapur'}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-500">{item.kitchenTarget === 'ALL' ? 'Semua Dapur' : item.kitchenTarget || 'Dapur'}</span>
                 </div>
               ) : (
                 <div key={item.lineId} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3">
@@ -1738,7 +1738,12 @@ export default function POS() {
                         }`}
                       >
                         <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{addon.name}</span>
-                        <span className="text-sm text-brand-600 dark:text-brand-400 font-bold">+{formatRupiah(addon.price)}</span>
+                        {/* v4.7 revisi 15.1: add-on harga 0 = GRATIS (saus pilihan include) — label jelas, bukan "+Rp 0" */}
+                        {addon.price > 0 ? (
+                          <span className="text-sm text-brand-600 dark:text-brand-400 font-bold">+{formatRupiah(addon.price)}</span>
+                        ) : (
+                          <span className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">Gratis</span>
+                        )}
                       </button>
                     );
                   })}

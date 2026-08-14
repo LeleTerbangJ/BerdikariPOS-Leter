@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§20) dan `TO DO.md` (Prioritas 7–15 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§21) dan `TO DO.md` (Prioritas 7–16 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -166,12 +166,18 @@ END $$;
 - **Antrean cetak per printer (print queue)** — struk & tiket dapur yang datang bersamaan diproses **berurutan (FIFO)** dengan retry 1× untuk error transient — mencegah tumpang tindih cetak saat banyak pesanan.
 - **Status koneksi lintas tab** — peristiwa connect/disconnect dibagikan antar-tab (BroadcastChannel); halaman **Kitchen/Dapur** menampilkan indikator hijau/merah per printer dapur + tombol Hubungkan (re-pair senyap, tanpa picker).
 - **UX lebih halus** — notifikasi `alert()` diganti **toast** di semua alur printer; **satu sumber kebenaran identitas device** (settings persisten > session); label tombol diseragamkan ke Bahasa Indonesia.
+- **Opsi "Semua Dapur" di Edit Menu** — menu bisa diatur agar tiket dapurnya dicetak ke **semua printer dapur aktif** (mis. menu yang bisa dibuat di dapur mana pun); selain target spesifik yang sudah ada. Tampil sebagai "Semua Dapur" di daftar menu & keranjang POS.
 
 **Pengalaman Kasir & Validasi (Prioritas 15 — 15.1 s.d. 15.4):**
-- **Harga Add-on divalidasi** — add-on tidak bisa disimpan dengan harga 0 / kosong / bukan angka; form menampilkan peringatan jelas dan **memblokir simpan** (sebelumnya add-on invalid di-drop diam-diam tanpa penjelasan). Import CSV katalog juga divalidasi: add-on tidak valid dilewati + dilaporkan jumlahnya, dan kolom Addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import.
+- **Harga Add-on divalidasi (gratis diperbolehkan)** — **add-on harga 0 (gratis) SAH**, pas untuk pilihan saus/topping yang sudah termasuk di menu; yang diblokir hanya harga **negatif / bukan angka** (peringatan jelas + simpan dibatalkan — tidak lagi di-drop diam-diam). Di POS, add-on gratis tampil berlabel **"Gratis"** (bukan "+Rp 0"), dan di **struk termal & digital** nama add-on gratis ikut tercetak dengan penanda **(Gratis)** tanpa menambah total (unit price = harga menu + add-on berbayar saja). Import CSV katalog ikut divalidasi: add-on tidak valid dilewati + dilaporkan jumlahnya, dan kolom Addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import.
 - **Daftar Pending Payment jadi carousel** — card pesanan gantung bergeser kiri/kanan (panah ◀ ▶, indikator dot, label "N dari M", bisa digeser jari di mobile) — tidak lagi bertumpuk memakan layar saat banyak pesanan gantung. Pencarian, detail, struk sementara, batalkan, dan lanjutkan pembayaran tetap tersedia.
 - **Opsi cetak per-transaksi — dua toggle independen**: checkbox **"Cetak struk kasir"** & **"Cetak tiket dapur"** di modal pembayaran. Kombinasi: cetak semua (default); **skip struk kasir saja** → tiket dapur **tetap keluar di awal** (kasir hemat kertas, dapur tetap dapat pesanan); **skip keduanya** → tidak ada cetakan sama sekali. **Anti tiket DOBEL otomatis**: saat resume pending dengan item tidak berubah, checkbox tiket dapur default **OFF** (tiket sudah tercetak saat Simpan Pending). Berlaku konsisten di semua jalur: checkout normal, **Split Bill** (dua checkbox di Payment Box sub-bill; checkbox dapur hanya tampil saat split fresh), dan **resume pesanan pending**.
 - **Header Inventaris lebih rapi** — tombol Tambah Bahan / Min. Stok / Export / Template CSV / Import hanya tampil di tab **Bahan Baku**; tab **Stock Opname** bersih dari aksi yang tidak relevan (aksi opname dikelola halaman opname sendiri).
+
+**Perubahan menu pada pesanan gantung kini selalu tercermin di riwayat transaksi (Prioritas 16):**
+- **Tambah/kurangi menu di pesanan gantung (Pending) langsung terlihat di Riwayat Transaksi** — sebelumnya fetch data cloud (realtime/refresh/online) bisa **menimpa item lokal yang sudah benar dengan versi lama** sebelum sinkronasi selesai, sehingga menu yang ditambah/dikurangi "hilang" dari riwayat.
+- **Perbandingan kesegaran per transaksi** — `loadFromCloud` kini memilih versi yang **lebih baru** antara lokal vs cloud (field baru `updatedAt`, fallback `date` untuk data lama); versi cloud yang kalah tidak lagi menghasilkan **duplikat baris** ber-ID sama.
+- Berlaku juga untuk **void/batal, status dapur, dan perubahan metode bayar/refund** — jalur update yang tidak mengubah tanggal transaksi kini terlindungi dari data cloud yang basi.
 
 (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
@@ -197,6 +203,7 @@ END $$;
 - **Sinkronisasi stok lebih cepat**: Stock Opname & Import CSV memakai **1 request batch** (sebelumnya N request per item).
 - **Peringatan stok negatif** setelah transaksi (mis. dua device checkout bahan terakhir bersamaan) — kasir **tidak diblokir**, hanya diberi tahu via notifikasi.
 - Otorisasi opname tidak lagi bisa dilakukan oleh siapa pun yang sekadar tahu PIN global — wajib akun Manager.
+- **Item pesanan gantung yang diubah (tambah/kurangi menu) kini selalu muncul di riwayat transaksi** — sinkronisasi realtime/refresh tidak lagi menimpa update lokal dengan versi cloud yang basi; perbandingan kesegaran per transaksi (`updatedAt` fallback `date`) + anti duplikat baris ber-ID sama.
 
 ### ⚙️ Langkah yang Wajib Dijalankan (Database Lama)
 
@@ -255,7 +262,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **434/434 test lolos** (41 file)
+- `npx vitest run` → **449/449 test lolos** (43 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

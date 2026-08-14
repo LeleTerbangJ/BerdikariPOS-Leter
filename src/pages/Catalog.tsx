@@ -158,7 +158,8 @@ export default function Catalog() {
     formIngredients.forEach((i) => {
       if (i.invId && parseFloat(i.amount)) ingredients[i.invId] = parseFloat(i.amount);
     });
-    // v4.7 TO DO 15.1: validasi harga add-on > 0 — jangan drop diam-diam, blok simpan + toast
+    // v4.7 TO DO 15.1 (revisi): validasi harga add-on ≥ 0 — harga 0 SAH (add-on gratis,
+    // mis. saus pilihan include); negatif/bukan angka diblokir + toast (jangan drop diam-diam)
     const addonResult = validateAddOnForm(formAddons);
     if (addonResult.problems.length > 0) {
       addToast(
@@ -308,7 +309,7 @@ export default function Catalog() {
       if (brokenAddonsCols > 0 || droppedAddons > 0) {
         const msgs: string[] = [];
         if (brokenAddonsCols > 0) msgs.push(`${brokenAddonsCols} menu dengan kolom Addons rusak (diabaikan)`);
-        if (droppedAddons > 0) msgs.push(`${droppedAddons} add-on tidak valid (harga ≤ 0 / nama kosong) dilewati`);
+        if (droppedAddons > 0) msgs.push(`${droppedAddons} add-on tidak valid (harga negatif / bukan angka / nama kosong) dilewati`);
         addToast(`Import selesai, tapi ${msgs.join(' dan ')}.`, 'warning');
       } else {
         addToast('Import katalog menu CSV berhasil!', 'success');
@@ -392,7 +393,7 @@ export default function Catalog() {
                     <td className="p-3 text-slate-500 dark:text-slate-400">
                       {menu.kitchenTarget ? (
                         <span className="badge bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-xs font-semibold px-2 py-0.5 rounded border border-indigo-100 dark:border-indigo-800/40">
-                          {menu.kitchenTarget}
+                          {menu.kitchenTarget === 'ALL' ? 'Semua Dapur' : menu.kitchenTarget}
                         </span>
                       ) : (
                         <span className="text-slate-400">-</span>
@@ -486,6 +487,8 @@ export default function Catalog() {
                 className="input"
               >
                 <option value="">Sama dengan Kasir (Tanpa Split)</option>
+                {/* v4.7: kitchenTarget 'ALL' — menu dicetak ke SEMUA target dapur (Semua Dapur) */}
+                <option value="ALL">Semua Dapur (Cetak ke Semua Printer Dapur)</option>
                 {configuredKitchenTargets.map((target) => (
                   <option key={target} value={target}>{target}</option>
                 ))}

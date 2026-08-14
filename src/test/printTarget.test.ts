@@ -129,6 +129,32 @@ describe('15.3 — target print all vs kitchen (skipReceiptPrint)', () => {
     expect(openSpy).toHaveBeenCalled();
   });
 
+  it('struk termal: add-on GRATIS (harga 0) tercetak dengan penanda (Gratis) & tidak menambah unit price', async () => {
+    installFakeDom();
+    const openSpy = (globalThis as any).window.open;
+    const mod = await loadPrinterModule();
+    const settings = makeBaseSettings(); // printer kasir browser
+
+    const item = {
+      ...makeFoodItem(),
+      addons: [
+        { id: 'a1', name: 'Saus Sambal', price: 0 }, // gratis → penanda (Gratis)
+        { id: 'a2', name: 'Telur', price: 3000 }, // berbayar → tanpa penanda
+      ],
+    };
+    await mod.printReceipt(makeReceiptData([item]), settings, 'all');
+
+    expect(openSpy).toHaveBeenCalled();
+    const win = openSpy.mock.results[0].value;
+    const html = win.document.write.mock.calls.map((c: any[]) => c[0]).join('');
+    // Nama add-on gratis ikut tercetak di detail item + penanda Gratis
+    expect(html).toContain('+Saus Sambal(Gratis),Telur');
+    // Unit price = basePrice + add-on berbayar saja (gratis +0): 10000 + 3000 = 13000
+    expect(html).toContain('1x Rp 13.000');
+    // Tidak ada "+Rp 0" di struk
+    expect(html).not.toContain('+Rp 0');
+  });
+
   it('target "kitchen" (skipReceiptPrint) tanpa printer dapur → struk kasir TIDAK dicetak (0 iframe)', async () => {
     const { doc } = installFakeDom();
     const mod = await loadPrinterModule();
@@ -267,5 +293,41 @@ describe('15.3 — target print all vs kitchen (skipReceiptPrint)', () => {
     expect(openSpy).toHaveBeenCalled(); // struk kasir
     expect(doc.createElement).toHaveBeenCalledWith('iframe'); // tiket dapur
     expect(createdIframes.length).toBeGreaterThan(0);
+  });
+
+  // v4.7: kitchenTarget 'ALL' ("Semua Dapur" di form Edit Menu) → tiket dapur dicetak ke SEMUA printer aktif
+  it('kitchenTarget "ALL" (Semua Dapur) → tiket dicetak ke SEMUA printer dapur aktif', async () => {
+    const { createdIframes } = installFakeDom();
+    const mod = await loadPrinterModule();
+    const kpMakanan = makeKitchenPrinter({ id: 'kp-mkn', name: 'Dapur Makanan', targetCategory: 'Makanan' });
+    const kpMinuman = makeKitchenPrinter({ id: 'kp-min', name: 'Dapur Minuman', targetCategory: 'Minuman' });
+    const settings = makeBaseSettings({ kitchenPrinters: [kpMakanan, kpMinuman] });
+
+    // Menu dengan kitchenTarget 'ALL' — harus dicetak ke kedua dapur
+    const item = { ...makeFoodItem(), kitchenTarget: 'ALL' };
+    const results = await mod.printReceipt(makeReceiptData([item]), settings, 'kitchen');
+
+    expect(results).toHaveLength(2);
+    expect(results.map((r: any) => r.printer).sort()).toEqual(['Dapur Makanan', 'Dapur Minuman']);
+    expect(results.every((r: any) => r.status === 'success')).toBe(true);
+    // Kedua printer benar-benar mencetak (2 iframe dibuat)
+    expect(createdIframes.length).toBe(2);
+  });
+
+  it('kitchenTarget spesifik → hanya printer dengan target itu yang benar-benar mencetak', async () => {
+    const { createdIframes } = installFakeDom();
+    const mod = await loadPrinterModule();
+    const kpMakanan = makeKitchenPrinter({ id: 'kp-mkn', name: 'Dapur Makanan', targetCategory: 'Makanan' });
+    const kpMinuman = makeKitchenPrinter({ id: 'kp-min', name: 'Dapur Minuman', targetCategory: 'Minuman' });
+    const settings = makeBaseSettings({ kitchenPrinters: [kpMakanan, kpMinuman] });
+
+    const item = { ...makeFoodItem(), kitchenTarget: 'Makanan' };
+    const results = await mod.printReceipt(makeReceiptData([item]), settings, 'kitchen');
+
+    expect(results).toHaveLength(2); // 2 printer dilaporkan
+    expect(results.find((r: any) => r.printer === 'Dapur Makanan')?.status).toBe('success');
+    expect(results.find((r: any) => r.printer === 'Dapur Minuman')?.status).toBe('success'); // tanpa item = sukses no-op
+    // Hanya printer Makanan yang benar-benar membuat iframe (1 cetakan)
+    expect(createdIframes.length).toBe(1);
   });
 });
