@@ -381,6 +381,8 @@ export default function POS() {
       setShowStockWarning(true);
       return;
     }
+    // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak struk) tiap modal dibuka
+    setSkipReceiptPrint(false);
     setShowCheckout(true);
   }, [cart.items, menus, inventory, orderType, tableNumber, settings.tableFeaturesEnabled, addToast]);
 
@@ -440,6 +442,8 @@ export default function POS() {
   // Checkout state
   const [payMethod, setPayMethod] = useState<PaymentMethod>('Cash');
   const [cashReceived, setCashReceived] = useState('');
+  // v4.7 TO DO 15.3: opsi "cetak tanpa struk" per-transaksi (default: cetak struk kasir)
+  const [skipReceiptPrint, setSkipReceiptPrint] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
   const [discountType, setDiscountType] = useState<'rp' | 'percent'>('rp');
 
@@ -703,6 +707,8 @@ export default function POS() {
   const proceedCheckoutAnyway = () => {
     setShowStockWarning(false);
     setStockWarnings([]);
+    // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak struk) tiap modal dibuka
+    setSkipReceiptPrint(false);
     setShowCheckout(true);
   };
 
@@ -743,8 +749,9 @@ export default function POS() {
     if (payMethod === 'Cash' && cash < total) return;
 
     // Pre-open print window BEFORE any async calls to avoid popup blocker
+    // v4.7 TO DO 15.3: jangan pre-open bila kasir memilih tanpa struk
     let preOpenedPrintWindow: Window | null = null;
-    if ((settings.printerEnabled || settings.autoPrintOnCheckout) && settings.printerType !== 'bluetooth') {
+    if ((settings.printerEnabled || settings.autoPrintOnCheckout) && settings.printerType !== 'bluetooth' && !skipReceiptPrint) {
       preOpenedPrintWindow = window.open('', '_blank', 'width=400,height=600');
     }
 
@@ -785,6 +792,8 @@ export default function POS() {
       currentUser,
       settings,
       preOpenedPrintWindow,
+      // v4.7 TO DO 15.3: opsi cetak tanpa struk per-transaksi
+      skipReceiptPrint,
       // v4.5 TO DO 5.5: pertahankan atribusi promo pada tx final (termasuk hasil resume pending)
       // agar laporan promo/transaksi tidak kehilangan metadata yang tersimpan saat save pending.
       appliedPromoId: appliedPromoId || undefined,
@@ -832,6 +841,7 @@ export default function POS() {
     // Clear cart & reset state with fresh transaction ID for next checkout
     cart.clearCart();
     setShowCheckout(false);
+    setSkipReceiptPrint(false);
     setDiscountInput('');
     setDiscountType('rp');
     setVoucherCode('');
@@ -1905,6 +1915,22 @@ export default function POS() {
                 })()}
               </div>
             </div>
+          )}
+
+          {/* v4.7 TO DO 15.3: opsi cetak tanpa struk per-transaksi (hemat kertas) */}
+          {(settings.printerEnabled || settings.autoPrintOnCheckout) && (
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none py-1">
+              <input
+                type="checkbox"
+                checked={!skipReceiptPrint}
+                onChange={(e) => setSkipReceiptPrint(!e.target.checked)}
+                className="accent-brand-600 h-4 w-4"
+              />
+              <span>Cetak struk kasir</span>
+              {skipReceiptPrint && (
+                <span className="text-slate-400 dark:text-slate-500">(tiket dapur tetap dicetak)</span>
+              )}
+            </label>
           )}
 
           {/* Finalize / Split Bill Action Buttons */}

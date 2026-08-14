@@ -74,7 +74,7 @@ Vercel otomatis detect push ke `main` dan re-deploy dalam 1–2 menit. Tidak per
 
 ### Sebelum merge ke produksi, pastikan:
 - `npx tsc --noEmit` → 0 error
-- `npx vitest run` → semua test lolos (saat ini **192/192**)
+- `npx vitest run` → semua test lolos (saat ini **433/433** — 41 file)
 - `npm run build` → sukses
 - Perubahan database (jika ada) sudah dijalankan di Supabase SQL Editor — lihat §4
 
@@ -387,7 +387,8 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] **Promo lengkap (v4.7 — P-A2 s.d. P-A8)** — scope menu di form, validasi form, laporan performa promo (snapshot `promoName`/`promoAmount` + tab di Laporan + CSV), stacking/eksklusif dengan auto best-deal, BOGO & min-qty, batas pemakaian per pelanggan, nama promo di struk termal & digital, poin loyalty (earn + redeem + clawback)
 - [x] **Mode Offline andal (v4.7 — Prioritas 13, O-1 s.d. O-10)** — antrean offline di IndexedDB (payload besar aman, migrasi otomatis dari localStorage), retry berkala 30 dtk + visibilitychange (error jaringan sementara tidak bakar retries), failed-ops list (badge merah + modal Coba Lagi/Hapus + audit log, tidak drop diam-diam), banner global offline/belum-sync di semua device, badge "Belum Sync" per transaksi, banner cold start perangkat baru, deteksi konflik stok lintas device, tombstone cap 1000, PWA navigateFallback + NetworkFirst, urutan flush kronologis
 - [x] **Integrasi Printer Thermal andal (v4.7 — Prioritas 14, 14.1 s.d. 14.6)** — silent re-pair via `getDevices()` pasca-refresh + state sesi + banner reconnect 1-klik "Sambungkan Ulang", tidak buka picker otomatis saat checkout, fallback browser eksplisit per printer (`cashierFallbackBrowser`/`kp.fallbackBrowser`) dengan status error bila nonaktif, print queue FIFO + retry 1×, status koneksi lintas tab (BroadcastChannel + indikator hijau/merah di KDS), alert→toast + satu sumber kebenaran device identity (`getPrinterDeviceId/Name`)
-- [x] Validasi otomatis: tsc 0 error, **416/416 test** (39 file), build produksi sukses (diverifikasi v4.7)
+- [x] **UX Kasir & Validasi (v4.7 — Prioritas 15, 15.1 s.d. 15.4)** — harga add-on divalidasi > 0 (form memblokir simpan + toast; import CSV drop invalid + laporan, JSON rusak tidak menggagalkan import), daftar Pending Payment jadi carousel horizontal (panah/dot/counter/geser mobile — tidak memakan layar), opsi **"Cetak Tanpa Struk"** per transaksi (`skipReceiptPrint` → tiket dapur tetap dicetak; berlaku di checkout normal, Split Bill `skipCashierReceipt`, & resume pending), header aksi bahan baku hanya di tab Bahan Baku (tab Stock Opname bersih)
+- [x] Validasi otomatis: tsc 0 error, **433/433 test** (41 file), build produksi sukses (diverifikasi v4.7)
 
 > **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./testing/TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./testing/TESTING-DEMO-SALES.md)**. Panduan verifikasi mode offline (antrean IndexedDB, retry 30 dtk, failed-ops list, badge "Belum Sync", konflik stok, PWA offline): **[`TESTING-OFFLINE.md`](./testing/TESTING-OFFLINE.md)**. Panduan verifikasi printer thermal & split printer (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue, indikator KDS): **[`TESTING-PRINTER.md`](./testing/TESTING-PRINTER.md)**.
 
@@ -409,7 +410,7 @@ Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL ya
 
 | Versi | Ringkasan |
 |---|---|
-| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)**, **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)**, **Mode Offline andal (queue IndexedDB, retry berkala, failed-ops list, badge "Belum Sync", deteksi konflik stok, PWA offline)** & **Integrasi Printer Thermal andal (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab)** |
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)**, **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)**, **Mode Offline andal (queue IndexedDB, retry berkala, failed-ops list, badge "Belum Sync", deteksi konflik stok, PWA offline)**, **Integrasi Printer Thermal andal (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab)** & **UX Kasir (validasi harga add-on, daftar pending jadi carousel, opsi cetak tanpa struk di semua jalur pembayaran, header Inventaris rapi)** |
 | **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
 | **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
 | **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |

@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–14 semuanya ✅ — termasuk Promo P-A2–P-A8, Mode Offline O-1–O-10, & Printer Thermal 14.1–14.6** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§19) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–15 semuanya ✅ — termasuk Promo P-A2–P-A8, Mode Offline O-1–O-10, Printer Thermal 14.1–14.6, & UX Kasir 15.1–15.4** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§20) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru); **403/403** setelah 14.1 (36 file, `printerReconnect` +6 — §19.1); **406/406** setelah 14.2+14.3 (37 file, `printerQueue` +3 — §19.2–19.3); **409/409** setelah 14.4 (38 file, `printerCrossTab` +3 — §19.4); **416/416** setelah 14.5+14.6 (39 file, `printerFallback` +7 — §19.5–19.6)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru); **403/403** setelah 14.1 (36 file, `printerReconnect` +6 — §19.1); **406/406** setelah 14.2+14.3 (37 file, `printerQueue` +3 — §19.2–19.3); **409/409** setelah 14.4 (38 file, `printerCrossTab` +3 — §19.4); **416/416** setelah 14.5+14.6 (39 file, `printerFallback` +7 — §19.5–19.6); **427/427** setelah 15.1 (40 file, `menuValidation` +11 — §20.1); **431/431** setelah 15.3+15.4 (41 file, `printTarget` +4 — §20.3–20.4); **433/433** setelah perluasan 15.3 ke Split Bill (`printSplitReceipt` skipCashierReceipt, `printTarget` +2 — §20.3)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -798,8 +798,43 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **416/416 test lolos** (39 file) — rantai terkini di §9.6.
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW, **51 entry precache**) — **build final diverifikasi ulang** setelah pembuatan panduan tes printer (TIDAK ada perubahan kode setelah 14.5/14.6; perubahan hanya dokumentasi: TESTING-PRINTER.md + DEPLOYMENT §7), build tetap hijau (exit 0).
-- **TO DO.md**: Prioritas 14 **TUNTAS (6/6)** — 14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅. Prioritas 1–14 selesai semua.
+- **TO DO.md**: Prioritas 14 **TUNTAS (6/6)** — 14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅. Prioritas 15 (UX Kasir) juga **TUNTAS (4/4)** — lihat §20. Prioritas 1–15 selesai semua.
 - **Dokumen rilis tersinkron (Prioritas 14)**: CHANGELOG.md (blok "Printer Thermal Lebih Andal" + 416/416), RELEASE-v4.7.md (fitur #9 + 416/416), DEPLOYMENT.md (checklist 14.1–14.6 + validasi 416/416 + tabel v4.7). **Panduan tes manual baru `testing/TESTING-PRINTER.md`** (tahap A–F: auto re-pair pasca-refresh, tanpa dialog Bluetooth di tengah checkout, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab, UX toast) — ditautkan dari DEPLOYMENT §7; sekaligus tautan 3 panduan lama di §7 diperbaiki ke `./testing/...` (file memang berada di folder `testing/`).
+
+---
+
+## 20. Riwayat Pengerjaan v4.7 — Prioritas 15: Temuan UX & Validasi (15.1–15.4 ✅)
+
+> Semua item Prioritas 15 (temuan user: harga add-on 0, daftar pending bertumpuk, tidak ada opsi cetak tanpa struk, header Inventaris bocor ke tab opname) **SELESAI**. Validasi: tsc 0 error, **433/433 test** (41 file).
+
+### 20.1 15.1 (TINGGI) — Validasi harga add-on (form & import CSV) ✅
+
+- **Akar masalah**: form add-on di `Catalog.tsx` tidak memvalidasi harga > 0 — `handleSave` memakai `.filter(a => a.name && parseInt(a.price))` yang **meng-DROP add-on harga 0/NaN diam-diam** tanpa pesan; import CSV memakai `JSON.parse` mentah (add-on 0/negatif bisa masuk, bahkan JSON rusak bisa **menggagalkan seluruh import**).
+- **Dikerjakan**: helper murni baru **`src/utils/menuValidation.ts`** — `validateAddOnForm` (form: baris kosong di-skip, nama tanpa harga / harga ≤ 0 / bukan angka → problem yang **memblokir simpan** + toast, bukan drop diam-diam), `sanitizeImportedAddOns` (CSV: entry invalid di-drop + dihitung, harga di-round ke integer), `parseImportedAddOns` (JSON.parse aman — JSON rusak → `parseFailed`, import tetap jalan). `Catalog.handleSave` & `handleImport` memakainya + toast laporan ("N add-on tidak valid dilewati" / "N menu dengan kolom Addons rusak"). Harga menu 0 sengaja tidak diubah (di luar lingkup 15.1).
+- **Test**: `src/test/menuValidation.test.ts` (11 kasus). Total: **427/427** (40 file).
+
+### 20.2 15.2 (TINGGI) — Daftar pending payment jadi carousel horizontal ✅
+
+- **Akar masalah**: `PendingPaymentsModal` me-render semua card pending dalam list vertikal (`overflow-y-auto`) — banyak pending = layar penuh card bertumpuk.
+- **Dikerjakan**: `PendingPaymentsModal.tsx` ditulis ulang — **carousel horizontal**: container `overflow-x-auto snap-x snap-mandatory` (scrollbar disembunyikan), satu card besar per slide (antrean, badge Pending, pelanggan/meja, waktu, jumlah menu, total), **panah ◀ ▶** (disabled di ujung), **indikator dot** (klik lompat) + label **"N dari M pesanan gantung"**; geser jari di mobile. `safeIdx` di-clamp + `useEffect` mengembalikan posisi scroll saat list berubah (pencarian/void). Semua fitur lama dipertahankan (pencarian, detail kanan, Struk Sementara, Batalkan, Lanjutkan Pembayaran). Props tidak berubah — POS/Layout tidak disentuh.
+
+### 20.3 15.3 (TINGGI) — Opsi "cetak tanpa struk" per transaksi (termasuk Split Bill & resume pending) ✅
+
+- **Akar masalah**: `triggerPostCommitTasks` selalu memanggil `printReceipt(..., 'all')` (struk kasir + tiket dapur) saat printer aktif — tidak ada cara melewati struk pelanggan untuk hemat kertas.
+- **Dikerjakan**: param baru **`skipReceiptPrint?: boolean`** di `AtomicCheckoutParams` → engine memanggil `printReceipt(..., 'kitchen')` (hanya tiket dapur) saat skip; `suppressAutoPrint` (split) tetap dihormati. **POS.tsx**: checkbox **"Cetak struk kasir"** di modal pembayaran (hanya tampil bila printer aktif; reset ke default tiap modal dibuka & setelah checkout; **pre-open print window dilewati** saat skip; param diteruskan ke `executeCheckout`).
+- **Perluasan ke Split Bill**: `printSplitReceipt` mendapat param `skipCashierReceipt?: boolean` — struk kasir sub-bill dilewati, **tiket dapur (target 'all' sub-bill pertama) tetap dicetak**; `SplitBillModal` menambah checkbox di Payment Box (reset saat modal dibuka konteks baru; sub-bill berikutnya yang hanya struk kasir tidak dipanggil saat skip). **Resume pending otomatis tercakup** — kasir melewati modal checkout yang sama sehingga `skipReceiptPrint` ikut berlaku.
+- **Test**: `src/test/printTarget.test.ts` (6 kasus: 'all' vs 'kitchen' di `printReceipt`; skip → struk dilewati + tiket dapur tetap; default → keduanya; `printSplitReceipt` skip & default). Total: **433/433** (41 file).
+
+### 20.4 15.4 (SEDANG) — Header aksi bahan baku hanya di tab Bahan Baku ✅
+
+- **Akar masalah**: `Inventory.tsx` me-render group aksi (Tambah Bahan, Min. Stok, Export, Template CSV, Import) **di atas tab** → tombol bahan baku ikut tampil saat tab Stock Opname aktif (StockOpname.tsx sendiri bersih).
+- **Dikerjakan**: group aksi dibungkus `{activeTab === 'inventory' && (...)}` — hanya tampil di tab **Bahan Baku**; tab Stock Opname hanya judul + tab (aksi opname dikelola `StockOpname.tsx` sendiri). Kondisi role Staf Gudang tetap dipertahankan. Perubahan UI-only.
+
+### 20.5 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **433/433 test lolos** (41 file) — rantai terkini di §9.6.
+- **TO DO.md**: Prioritas 15 **TUNTAS (4/4)** — 15.1 ✅ + 15.2 ✅ + 15.3 ✅ (termasuk perluasan Split Bill & resume pending) + 15.4 ✅. Prioritas 1–15 selesai semua.
+- **Dokumen rilis tersinkron (Prioritas 15)**: CHANGELOG.md (blok "Pengalaman Kasir & Validasi" + 433/433), RELEASE-v4.7.md (fitur #10 "UX Kasir Lebih Mulus" + 433/433). Perubahan kode Prioritas 15 masih **belum di-commit** (menunggu instruksi).
 
 ---
 

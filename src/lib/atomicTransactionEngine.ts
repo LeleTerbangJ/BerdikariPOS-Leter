@@ -300,7 +300,11 @@ export class AtomicTransactionEngine {
       try {
         if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
           const receiptData = buildReceiptFromTransaction(tx, params.settings);
-          printReceipt(receiptData, params.settings, 'all', params.preOpenedPrintWindow || undefined);
+          // v4.7 TO DO 15.3: opsi "cetak tanpa struk" per-transaksi — skipReceiptPrint
+          // → cetak HANYA tiket dapur (target 'kitchen'), struk kasir dilewati
+          // (tiket dapur tetap keluar agar dapur tidak kehilangan pesanan).
+          const printTarget: 'all' | 'kitchen' = params.skipReceiptPrint ? 'kitchen' : 'all';
+          printReceipt(receiptData, params.settings, printTarget, params.preOpenedPrintWindow || undefined);
         }
       } catch (printErr) {
         console.warn('[AtomicEngine] Post-commit printer warning:', printErr);
