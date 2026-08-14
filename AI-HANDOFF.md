@@ -833,6 +833,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 20.5 Validasi & Status
 
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **433/433 test lolos** (41 file) — rantai terkini di §9.6.
+- `npm run build` → **sukses (exit 0)** diverifikasi ulang setelah Prioritas 15 tuntas termasuk perluasan Split Bill: built in 22.50s, **51 entry precache (3603.83 KiB)**, PWA generateSW `dist/sw.js` + `dist/workbox-c3716bd4.js`. Satu-satunya warning adalah chunk > 500 kB (dikenal, bukan regresi). Tidak ada error baru.
 - **TO DO.md**: Prioritas 15 **TUNTAS (4/4)** — 15.1 ✅ + 15.2 ✅ + 15.3 ✅ (termasuk perluasan Split Bill & resume pending) + 15.4 ✅. Prioritas 1–15 selesai semua.
 - **Dokumen rilis tersinkron (Prioritas 15)**: CHANGELOG.md (blok "Pengalaman Kasir & Validasi" + 433/433), RELEASE-v4.7.md (fitur #10 "UX Kasir Lebih Mulus" + 433/433). Perubahan kode Prioritas 15 masih **belum di-commit** (menunggu instruksi).
 
