@@ -226,6 +226,8 @@ export default function Inventory() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📦 Inventaris</h1>
+        {/* v4.7 TO DO 15.4: aksi bahan baku (Tambah Bahan/Min. Stok/Export/Template CSV/Import) hanya untuk tab Bahan Baku — disembunyikan saat tab Stock Opname aktif */}
+        {activeTab === 'inventory' && (
         <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
           <button onClick={openAdd} className="btn-primary text-sm flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto">
             <Plus size={16} /> Tambah Bahan
@@ -250,6 +252,7 @@ export default function Inventory() {
             </>
           )}
         </div>
+        )}
       </div>
 
       {/* v4.7 TO DO 13.5 (O-7): banner potensi konflik stok lintas device */}

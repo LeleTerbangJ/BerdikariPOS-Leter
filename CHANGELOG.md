@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§19) dan `TO DO.md` (Prioritas 7–14 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§20) dan `TO DO.md` (Prioritas 7–15 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -166,6 +166,12 @@ END $$;
 - **Antrean cetak per printer (print queue)** — struk & tiket dapur yang datang bersamaan diproses **berurutan (FIFO)** dengan retry 1× untuk error transient — mencegah tumpang tindih cetak saat banyak pesanan.
 - **Status koneksi lintas tab** — peristiwa connect/disconnect dibagikan antar-tab (BroadcastChannel); halaman **Kitchen/Dapur** menampilkan indikator hijau/merah per printer dapur + tombol Hubungkan (re-pair senyap, tanpa picker).
 - **UX lebih halus** — notifikasi `alert()` diganti **toast** di semua alur printer; **satu sumber kebenaran identitas device** (settings persisten > session); label tombol diseragamkan ke Bahasa Indonesia.
+
+**Pengalaman Kasir & Validasi (Prioritas 15 — 15.1 s.d. 15.4):**
+- **Harga Add-on divalidasi** — add-on tidak bisa disimpan dengan harga 0 / kosong / bukan angka; form menampilkan peringatan jelas dan **memblokir simpan** (sebelumnya add-on invalid di-drop diam-diam tanpa penjelasan). Import CSV katalog juga divalidasi: add-on tidak valid dilewati + dilaporkan jumlahnya, dan kolom Addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import.
+- **Daftar Pending Payment jadi carousel** — card pesanan gantung bergeser kiri/kanan (panah ◀ ▶, indikator dot, label "N dari M", bisa digeser jari di mobile) — tidak lagi bertumpuk memakan layar saat banyak pesanan gantung. Pencarian, detail, struk sementara, batalkan, dan lanjutkan pembayaran tetap tersedia.
+- **Opsi "Cetak Tanpa Struk" per transaksi** — checkbox **"Cetak struk kasir"** di modal pembayaran: dimatikan → transaksi selesai **tanpa mencetak struk** (menghemat kertas), sedangkan **tiket dapur tetap dicetak** agar dapur tidak kehilangan pesanan. Berlaku konsisten di semua jalur: checkout normal, **Split Bill** (checkbox di Payment Box sub-bill), dan **resume pesanan pending**.
+- **Header Inventaris lebih rapi** — tombol Tambah Bahan / Min. Stok / Export / Template CSV / Import hanya tampil di tab **Bahan Baku**; tab **Stock Opname** bersih dari aksi yang tidak relevan (aksi opname dikelola halaman opname sendiri).
 
 (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
@@ -249,7 +255,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **416/416 test lolos** (39 file)
+- `npx vitest run` → **433/433 test lolos** (41 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

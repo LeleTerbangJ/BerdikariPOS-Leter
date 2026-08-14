@@ -939,6 +939,72 @@
 
 ---
 
+## 🔴 PRIORITAS 15 — TEMUAN UX & VALIDASI (Analisa, v4.7)
+
+> **Sumber temuan**: laporan user (3 isu) — `src/pages/Catalog.tsx` (form add-on & import CSV), `src/components/PendingPaymentsModal.tsx` (daftar pending), `src/pages/POS.tsx` + `src/lib/atomicTransactionEngine.ts` (alur checkout & cetak otomatis). Belum ada perubahan kode — analisa dulu, eksekusi bertahap.
+
+### 15.1 (🟠 TINGGI) — Harga Add-on bisa bernilai 0 / tidak divalidasi (`Catalog.tsx`)
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: harga add-on pada menu dapat bernilai 0 → di POS add-on tampil "+Rp 0" (gratis) atau malah **hilang diam-diam** dari daftar add-on menu tanpa peringatan.
+- **Akar masalah** (2 jalur):
+  - **Form**: input harga add-on hanya membatasi digit (`replace(/\D/g, '')`) — tidak ada validasi harga > 0. Saat simpan, `handleSave` memakai `.filter((a) => a.name && parseInt(a.price))` → add-on dengan harga `0`/`NaN` di-**DROP tanpa pesan** (kasir tidak tahu kenapa add-onnya hilang setelah disimpan).
+  - **Import CSV** (`handleImport`): `availableAddons: JSON.parse(clean(parts[5] || '[]'))` — di-parse mentah **tanpa validasi** → add-on harga 0/negatif/NaN bisa masuk ke katalog via import.
+- **Rencana perbaikan**: (a) validasi harga add-on **harus > 0** di form (warning/toast saat simpan, jangan drop diam-diam); (b) saat import CSV, validasi tiap add-on (drop baris invalid + laporkan jumlah yang dibuang); (c) opsional: validasi juga harga menu `parseInt(formPrice) || 0` (harga 0) dan add-on tanpa nama — konsisten di semua jalur masuk data (form, import, seed).
+- **Yang dikerjakan (v4.7)**:
+  - **Helper murni baru `src/utils/menuValidation.ts`**: `validateAddOnForm` (form — baris kosong di-skip; nama tanpa harga / harga ≤ 0 / bukan angka → problem yang MENGAMBLOK simpan, bukan drop diam-diam), `sanitizeImportedAddOns` (CSV — entry invalid di-drop + dihitung, harga di-round ke integer), `parseImportedAddOns` (JSON.parse aman — JSON rusak tidak menggagalkan seluruh import, ditandai `parseFailed`).
+  - **`Catalog.handleSave`**: pakai `validateAddOnForm` — bila ada masalah → **toast warning** "Add-on \"X\": harga harus lebih dari 0." (+ jumlah masalah lain) dan **simpan dibatalkan**; baris kosong tetap di-skip.
+  - **`Catalog.handleImport`**: pakai `parseImportedAddOns` per menu — add-on invalid (harga ≤ 0 / nama kosong / non-objek) dilewati; kolom addons yang JSON-nya rusak tidak lagi menggagalkan seluruh import; hasilnya dilaporkan via **toast warning** ("N add-on tidak valid dilewati" / "N menu dengan kolom Addons rusak"), toast sukses hanya bila tidak ada masalah.
+  - (c) harga menu `parseInt(formPrice) || 0` sengaja TIDAK diubah — di luar lingkup 15.1 (fokus add-on); dicatat untuk tinjauan berikutnya bila diperlukan.
+- **Test**: `src/test/menuValidation.test.ts` (11 kasus: form valid/baris kosong, harga 0/negatif/NaN/empty diblokir, nama wajib, round desimal, kumpulan masalah; import valid, dropped dihitung, non-array, JSON rusak → parseFailed). Total test: **427/427** (40 file).
+
+### 15.2 (🟠 TINGGI) — Daftar Pending Payment berupa card bertumpuk (memakan space layar) → ubah jadi carousel
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: list pesanan gantung di `PendingPaymentsModal` tampil sebagai card berjajar vertikal (scroll list) — dengan banyak pending, space layar habis & navigasi berat.
+- **Akar masalah**: kolom kiri modal (lebar 5/12, tinggi `h-[520px]`) me-render semua card pending dalam `overflow-y-auto` — semakin banyak pending semakin panjang daftar (bukan paginasi/carousel).
+- **Rencana perbaikan**: ubah daftar pending menjadi **carousel horizontal** (geser kiri/kanan):
+  - Satu card besar aktif + preview card berikutnya (atau scroll-snap horizontal) — tidak menumpuk vertikal; space modal bisa dipersingkat.
+  - Navigasi: tombol panah ◀ ▶ + indikator dot + label "3 dari 12"; dukungan swipe (touch/scroll-snap) di mobile.
+  - Pertahankan fitur yang ada: pencarian (meja/antrean/nama), pilih card → detail di kanan, cetak struk sementara, batalkan (void, dengan konfirmasi + revert stok), lanjutkan pembayaran.
+  - Catatan: bila jumlah pending sedikit (≤ 3), carousel tetap rapi (tidak perlu list vertikal panjang).
+- **Yang dikerjakan (v4.7)**: `PendingPaymentsModal.tsx` ditulis ulang — daftar vertikal diganti **carousel horizontal**:
+  - Container `overflow-x-auto snap-x snap-mandatory` (scrollbar disembunyikan via arbitrary properties) → **geser jari di mobile** & scroll-snap rapi; satu card besar per slide (`w-full shrink-0 snap-center`) menampilkan #antrean, badge Pending, pelanggan/meja, waktu, jumlah menu & total.
+  - **Navigasi**: tombol panah ◀ ▶ (disabled di ujung), **indikator dot** (klik untuk lompat) + label **"N dari M pesanan gantung"**; `scrollToIndex`/`handleScroll` menyinkronkan index aktif dari posisi scroll (panah & geser konsisten).
+  - `safeIdx` di-clamp saat daftar berubah (pencarian / void menghapus item) + `useEffect` mengembalikan posisi scroll — tidak ada index liar.
+  - Semua fitur lama dipertahankan: pencarian, detail order di kanan mengikuti card aktif, **Struk Sementara** (`printProvisionalBill`), **Batalkan** (konfirmasi + revert stok), **Lanjutkan Pembayaran** (`onResumeOrder`). Props komponen tidak berubah (POS/Layout tidak perlu diubah).
+  - Perubahan UI-only; tsc 0 error, test tetap **431/431** (41 file).
+
+### 15.4 (🟡 SEDANG) — Tombol "Tambah Bahan" & "Min. Stok" muncul juga di tab Stock Opname (`Inventory.tsx`)
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: di halaman Inventaris, saat tab **Stock Opname** aktif, tombol **"Tambah Bahan"** dan **"Min. Stok"** (juga Export/Template CSV/Import) masih tampil di header — padahal aksi itu hanya relevan untuk tab **Bahan Baku**.
+- **Akar masalah**: `Inventory.tsx` me-render header aksi (baris ~226–252) **di luar/atas tab** (`activeTab: 'inventory' | 'opname'`), sehingga tombol-tombol bahan baku tampil di kedua tab. `StockOpname.tsx` sendiri bersih (tidak ada tombol Tambah Bahan / min stok) — semua berasal dari header induk.
+- **Rencana perbaikan**: (a) tampilkan group aksi header (Tambah Bahan, Min. Stok, Export, Template CSV, Import) **hanya saat `activeTab === 'inventory'`** — pindahkan ke dalam blok tab Bahan Baku, atau bungkus dengan kondisional `activeTab === 'inventory' && (...)`; (b) saat tab Stock Opname aktif, header cukup judul + tab (dan tombol aksi opname yang memang ada di `StockOpname.tsx`, mis. Mulai Opname/History — biarkan komponen StockOpname mengelola aksinya sendiri); (c) pastikan tombol Min. Stok tetap tersembunyi untuk role Staf Gudang sesuai kondisi yang ada.
+- **Yang dikerjakan (v4.7)**: group aksi header di `Inventory.tsx` (Tambah Bahan, Min. Stok, Export, Template CSV, Import) dibungkus `{activeTab === 'inventory' && (...)}` — **hanya tampil di tab Bahan Baku**; saat tab Stock Opname aktif, header hanya judul "📦 Inventaris" + tab (aksi opname dikelola `StockOpname.tsx` sendiri). Kondisi role Staf Gudang (Min. Stok & Import/Template tersembunyi) tetap dipertahankan. Perubahan UI-only; test tetap **431/431** (41 file), tsc 0 error.
+
+### 15.3 (🟠 TINGGI) — Tidak ada opsi "cetak tanpa struk" saat menyelesaikan pembayaran
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: saat checkout, struk selalu dicetak bila `printerEnabled` / `autoPrintOnCheckout` aktif — tidak ada cara memilih **tidak mencetak struk** untuk menghemat kertas (mis. pelanggan tidak mau struk / struk duplikat).
+- **Akar masalah**: `AtomicTransactionEngine.triggerPostCommitTasks` memanggil `printReceipt(receiptData, settings, 'all', ...)` (struk kasir + tiket dapur) bila setting printer aktif; satu-satunya bypass `suppressAutoPrint` hanya dipakai sub-bill split (yang mencetak sendiri). Tidak ada opsi per-transaksi.
+- **Rencana perbaikan**:
+  - **UI**: checkbox di modal pembayaran (POS) — mis. **"Cetak struk kasir"** (default ON mengikuti setting) — bila dimatikan → transaksi selesai tanpa mencetak struk.
+  - **Engine**: tambah param `skipReceiptPrint?: boolean` di `AtomicCheckoutParams` → `triggerPostCommitTasks` memanggil `printReceipt(receiptData, settings, 'kitchen', ...)` (hanya tiket dapur — dapur TETAP dapat pesanan) saat skip, atau `'all'` seperti biasa. Jangan pre-open `preOpenedPrintWindow` di POS bila skip.
+  - **Pertimbangan**: opsi yang sama idealnya juga ada di alur Split Bill (sub-bill mencetak `printSplitReceipt` sendiri) dan saat resume pending — dokumentasikan agar perilaku konsisten (struk pelanggan bisa dilewati, tiket dapur tidak).
+- **Yang dikerjakan (v4.7)**:
+  - **`AtomicCheckoutParams`** (`src/types/index.ts`): param baru `skipReceiptPrint?: boolean` — true = cetak HANYA tiket dapur (target `'kitchen'`), struk kasir dilewati.
+  - **Engine** (`triggerPostCommitTasks`): `const printTarget: 'all' | 'kitchen' = params.skipReceiptPrint ? 'kitchen' : 'all'` → `printReceipt(receiptData, settings, printTarget, ...)`. `suppressAutoPrint` (split) tetap dihormati.
+  - **POS.tsx**: checkbox **"Cetak struk kasir"** di modal pembayaran (hanya tampil bila `printerEnabled`/`autoPrintOnCheckout` aktif; saat di-uncheck ada keterangan "tiket dapur tetap dicetak"); state `skipReceiptPrint` di-reset ke default (cetak struk) setiap modal dibuka (handleCheckoutCb + proceedCheckoutAnyway) dan setelah checkout sukses; **pre-open print window dilewati** saat skip; `skipReceiptPrint` diteruskan ke `executeCheckout`.
+  - **Perluasan ke Split Bill & resume pending (selesai)**: `printSplitReceipt` mendapat param baru `skipCashierReceipt?: boolean` — saat true, struk kasir sub-bill dilewati tapi **tiket dapur tetap dicetak** (target 'all' sub-bill pertama tetap mengirim kitchen). `SplitBillModal` menambah checkbox **"Cetak struk kasir"** di Payment Box (reset saat modal dibuka konteks baru; pre-open window dilewati saat skip; sub-bill berikutnya yang hanya struk kasir tidak dipanggil sama sekali saat skip). **Resume pending otomatis tercakup** — kasir melewati modal checkout yang sama (15.3) sehingga `skipReceiptPrint` ikut berlaku saat finalisasi pending. Test `printTarget` bertambah 2 kasus (skip → struk dilewati + tiket dapur tetap; default → keduanya) → total **433/433** (41 file).
+- **Test**: `src/test/printTarget.test.ts` (4 kasus — target `'all'` → struk kasir keluar via window.open; target `'kitchen'` tanpa printer dapur → 0 print; target `'kitchen'` dengan printer dapur browser → tiket dapur TETAP keluar via iframe; `'all'` dengan printer dapur → struk kasir + tiket dapur keduanya). Total test: **431/431** (41 file).
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -964,6 +1030,7 @@
 10. **Prioritas 12 (Audit Promo & Manajemen Data)**: terdokumentasi (v4.7) — **MANAJEMEN DATA TUNTAS ✅** (12.1.1–12.1.5 + P-A1) + **P-A2 ✅** (scope `menu` + validasi, 17 test) + **P-A3 ✅** (laporan performa promo, 15 test + mapping) + **P-A4 ✅** (stacking/eksklusif, 13 test) + **P-A5 ✅** (BOGO & min-qty, 21 test) + **P-A6 ✅** (batas per pelanggan, 10 test) + **P-A7 ✅** (nama promo di struk, 8 test) + **P-A8 ✅** (poin loyalty earn+redeem, 18 test). **SELURUH PRIORITAS 12 TUNTAS ✅** (Manajemen Data + Promo P-A1–P-A8) — angka test terkini **370/370**.
 11. **Prioritas 13 (Audit Mode Offline)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — O-1 ✅ (queue → IndexedDB) + O-2 ✅ (retry berkala 30 dtk + visibilitychange) + O-3 ✅ (failed-ops list + badge + modal + audit log) + O-4 ✅ (banner global) + O-5 ✅ (badge "Belum Sync" transaksi) + O-6 ✅ (banner cold start + dokumentasi batasan) + O-7 ✅ (deteksi konflik stok) + O-8 ✅ (tombstone cap 1000) + O-9 ✅ (PWA navigateFallback + NetworkFirst) + O-10 ✅ (UI konfirmasi aman + urutan antrean kronologis) — angka test **397/397** (35 file) + build sukses.
 12. **Prioritas 14 (Audit Printer Thermal & Split Printer)**: **14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅ (v4.7) — TUNTAS (6/6)** — P-1 ✅ (silent re-pair via `getDevices()` + `establishConnection` bersama), P-2 ✅ (state sesi `sessionStorage`), P-3 ✅ (tidak buka picker otomatis saat checkout), P-4 ✅ (banner "Refresh memutus koneksi" non-dismissable) + **14.2 ✅** (fallback seragam: re-pair senyap → browser print + toast `notifyPrinterFallback`) + **14.3 ✅** (print queue FIFO per printer + retry 1× + drop tanpa hang) + **14.4 ✅** (BroadcastChannel `rempah-printer-events` + `printerStatusStore` + `usePrinterCrossTab` + indikator KDS dengan tombol Hubungkan senyap) + **14.5 ✅** (fallback EKSPLISIT per printer: `cashierFallbackBrowser` / `kp.fallbackBrowser`, return boolean, status error bila nonaktif, toggle di Settings) + **14.6 ✅** (alert→toast semua alur printer, satu sumber kebenaran device identity via `getPrinterDeviceId/Name`, banner pakai `getPrinterSessionState` + label Indonesia konsisten) — test **416/416** (39 file; +7 `printerFallback`). **Prioritas 14 TUNTAS.**
+13. **Prioritas 15 (Temuan UX & Validasi)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — **15.1 ✅** validasi harga add-on > 0 (form blok simpan + toast; import CSV drop invalid + laporan; helper `menuValidation.ts`, 11 test) + **15.2 ✅** daftar pending payment jadi **carousel horizontal** (scroll-snap + geser mobile, panah ◀ ▶ + dot + counter "N dari M", clamp index saat list berubah; semua fitur lama dipertahankan) + **15.3 ✅** opsi "cetak tanpa struk" per-transaksi (`skipReceiptPrint` → engine print target `'kitchen'`, tiket dapur tetap; **diperluas ke Split Bill** via `printSplitReceipt(skipCashierReceipt)` + checkbox di Payment Box `SplitBillModal`; **resume pending otomatis tercakup** via modal checkout yang sama; 6 test `printTarget`) + **15.4 ✅** header aksi bahan baku (Tambah Bahan/Min. Stok/Export/Template CSV/Import) hanya di tab Bahan Baku (UI-only). **Prioritas 15 TUNTAS** — test **433/433** (41 file), tsc 0 error.
 
 ---
 

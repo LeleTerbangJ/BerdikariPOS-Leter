@@ -11,6 +11,7 @@ import { calculateMenuHPP } from '../utils/hpp';
 import { validateMenuComponent } from '../lib/bundleValidation';
 import { calculateBundleHPP } from '../lib/bundleService';
 import { processAndUploadMenuImage } from '../utils/imageUpload';
+import { validateAddOnForm, parseImportedAddOns } from '../utils/menuValidation';
 import type { Menu, AddOn, ComponentType } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -157,9 +158,18 @@ export default function Catalog() {
     formIngredients.forEach((i) => {
       if (i.invId && parseFloat(i.amount)) ingredients[i.invId] = parseFloat(i.amount);
     });
-    const addons: AddOn[] = formAddons
-      .filter((a) => a.name && parseInt(a.price))
-      .map((a) => ({ name: a.name, price: parseInt(a.price) }));
+    // v4.7 TO DO 15.1: validasi harga add-on > 0 — jangan drop diam-diam, blok simpan + toast
+    const addonResult = validateAddOnForm(formAddons);
+    if (addonResult.problems.length > 0) {
+      addToast(
+        addonResult.problems.length === 1
+          ? addonResult.problems[0]
+          : `${addonResult.problems[0]} (dan ${addonResult.problems.length - 1} masalah lain)`,
+        'warning'
+      );
+      return;
+    }
+    const addons: AddOn[] = addonResult.addons;
 
     const targetMenuId = editId || uuid();
     const components = formIsBundle
@@ -269,11 +279,17 @@ export default function Catalog() {
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       const lines = text.split('\n').slice(1);
+      // v4.7 TO DO 15.1: validasi add-on saat import CSV — drop invalid + lapor jumlah
+      let droppedAddons = 0;
+      let brokenAddonsCols = 0;
       const imported: Menu[] = lines
           .filter((l) => l.trim())
           .map((line) => {
             const parts = line.match(/(".*?"|[^,]+)/g) || [];
             const clean = (s: string) => s.replace(/^"|"$/g, '');
+            const parsedAddons = parseImportedAddOns(clean(parts[5] || '[]'));
+            droppedAddons += parsedAddons.dropped;
+            if (parsedAddons.parseFailed) brokenAddonsCols += 1;
             return {
               id: uuid(),
               name: clean(parts[0] || ''),
@@ -281,7 +297,7 @@ export default function Catalog() {
               price: parseInt(parts[2]) || 0,
               isBestSeller: parts[3] === 'true',
               ingredients: JSON.parse(clean(parts[4] || '{}')),
-              availableAddons: JSON.parse(clean(parts[5] || '[]')),
+              availableAddons: parsedAddons.addons,
               manualHpp: parseInt(parts[6]) || 0,
               kitchenTarget: parts[7] ? clean(parts[7]) : undefined,
               showSugarLevel: parts[8] ? clean(parts[8]) !== 'false' : true,
@@ -289,7 +305,14 @@ export default function Catalog() {
             };
           });
       importMenus(imported);
-      addToast('Import katalog menu CSV berhasil!', 'success');
+      if (brokenAddonsCols > 0 || droppedAddons > 0) {
+        const msgs: string[] = [];
+        if (brokenAddonsCols > 0) msgs.push(`${brokenAddonsCols} menu dengan kolom Addons rusak (diabaikan)`);
+        if (droppedAddons > 0) msgs.push(`${droppedAddons} add-on tidak valid (harga ≤ 0 / nama kosong) dilewati`);
+        addToast(`Import selesai, tapi ${msgs.join(' dan ')}.`, 'warning');
+      } else {
+        addToast('Import katalog menu CSV berhasil!', 'success');
+      }
     };
     reader.readAsText(file);
     e.target.value = '';

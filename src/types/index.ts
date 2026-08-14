@@ -211,6 +211,9 @@ export interface AtomicCheckoutParams {
   currentUser?: { id: string; name: string; role: string } | null;
   settings: any;
   preOpenedPrintWindow?: Window | null;
+  // v4.7 TO DO 15.3: opsi "cetak tanpa struk" per-transaksi — true = cetak HANYA tiket dapur
+  // (target 'kitchen'), struk kasir dilewati untuk menghemat kertas.
+  skipReceiptPrint?: boolean;
 
   // v4.1 Extensions for Pending & Split
   skipStockDeduction?: boolean;  // If true, bypass inventory deduction (prevent double deduction)
