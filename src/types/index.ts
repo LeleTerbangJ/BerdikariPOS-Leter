@@ -301,6 +301,9 @@ export interface KitchenPrinterConfig {
   width: '58mm' | '80mm';
   bluetoothDeviceId?: string;    // Web Bluetooth device.id — persistent identifier
   bluetoothDeviceName?: string;  // Human-readable Bluetooth device name
+  // TO DO 14.5: fallback eksplisit per printer — true = bila koneksi Bluetooth gagal,
+  // tiket dicetak lewat dialog browser (window.print). Default true saat undefined.
+  fallbackBrowser?: boolean;
 }
 
 export interface AppSettings {
@@ -318,6 +321,9 @@ export interface AppSettings {
   autoPrintOnCheckout: boolean;
   cashierBluetoothDeviceId?: string;    // Bluetooth device.id for cashier printer
   cashierBluetoothDeviceName?: string;  // Bluetooth device name for cashier printer
+  // TO DO 14.5: fallback eksplisit ke browser print bila koneksi Bluetooth kasir gagal.
+  // Device-local (tidak disinkronkan ke cloud, seperti printerType/printerWidth). Default true.
+  cashierFallbackBrowser?: boolean;
   kitchenPrinters?: KitchenPrinterConfig[]; // Konfigurasi printer dapur untuk split print
   // Super Admin & Demo
   superAdminPin: string; // PIN untuk akses Manajemen Data (hanya developer)

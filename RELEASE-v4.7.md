@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, hingga **mode offline andal**). Validasi: build produksi sukses, **397/397 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**). Validasi: build produksi sukses, **416/416 tes otomatis lolos**.
 
 ---
 
@@ -43,6 +43,13 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Peringatan perangkat baru** (cold start) — membedakan "belum pernah online" vs "koneksi putus" — dan **deteksi konflik stok** lintas device (banner kuning di Inventaris bila stok lokal tertimpa data perangkat lain).
 - **PWA offline** — aplikasi tetap terbuka & bisa dipakai tanpa internet (app shell precache + NetworkFirst).
 - Urutan sinkron **kronologis** — konsistensi antar tabel terjaga (mis. Rekap Kas selalu mengikuti transaksi induknya).
+
+### 9. Printer Thermal Andal
+- **Otomatis tersambung kembali setelah refresh** — printer Bluetooth yang tadinya terhubung dicoba disambungkan ulang secara senyap (tanpa dialog); bila perlu, banner 1-klik **"Sambungkan Ulang"** muncul — kasir tidak perlu pairing manual setiap kali.
+- **Tidak ada dialog Bluetooth yang muncul tiba-tiba** di tengah pembayaran — kalau printer terputus, dicetak lewat dialog browser + pemberitahuan jelas, atau status error bila fallback dimatikan.
+- **Fallback browser bisa diatur per printer** (kasir & dapur) — pas untuk demo atau toko tanpa printer Bluetooth.
+- **Antrean cetak** — banyak struk/tiket dapur yang datang bersamaan dicetak **berurutan** tanpa tumpang tindih.
+- **Indikator printer di halaman Dapur (KDS)** — tahu printer mana yang hidup/mati + tombol Hubungkan, tanpa buka Settings.
 
 ---
 
@@ -108,7 +115,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **397/397 test lolos** (35 file)
+- `npx vitest run` → **416/416 test lolos** (39 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA)
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
@@ -119,6 +126,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 - **Internet putus bukan lagi alasan berhenti jualan** — kasir tetap mencatat pesanan, Rekap Kas, dan pesanan gantung; semuanya tersinkron otomatis saat koneksi kembali (tanpa tombol manual, tanpa duplikat).
 - **Aplikasi tidak "hilang" saat offline** — tetap terbuka & bisa dipakai (PWA), dan data tidak hilang walau aplikasi ditutup di tengah offline (IndexedDB).
 - **Tidak ada lagi data raib diam-diam** — setiap operasi yang gagal tersinkron selalu terlihat (badge/banner + daftar dengan alasan) dan bisa dicoba lagi.
+- **Printer thermal tidak bikin antrean berhenti** — saat printer terputus (mis. setelah refresh), aplikasi mencoba menyambungkan ulang otomatis atau mencetak lewat dialog browser; kasir tidak diblokir dan pesanan dapur tidak hilang.
 - **Panduan verifikasi**: [`TESTING-OFFLINE.md`](./TESTING-OFFLINE.md) — 6 tahap uji (≈ 30–45 menit) untuk memastikan semua perilaku di atas bekerja di perangkat Anda.
 
 ---

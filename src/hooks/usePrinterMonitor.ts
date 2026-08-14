@@ -13,6 +13,9 @@ import {
   isBluetoothConnected,
   CASHIER_PRINTER_ID,
   connectBluetoothPrinter,
+  reconnectBluetoothPrinter,
+  getPrinterSessionState,
+  getPrinterDeviceId,
 } from '../utils/printer';
 
 export interface PrinterMonitorStatus {
@@ -31,6 +34,8 @@ export interface PrinterMonitorStatus {
   }>;
   /** Whether all configured Bluetooth printers are connected */
   allConnected: boolean;
+  /** Printer IDs yang tersambung di sesi sebelum refresh terakhir (untuk banner pasca-refresh) */
+  previouslyConnected?: string[];
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -38,6 +43,7 @@ const POLL_INTERVAL_MS = 3000;
 export function usePrinterMonitor(): {
   status: PrinterMonitorStatus;
   reconnect: (printerId: string) => Promise<boolean>;
+  reconnectSilent: (printerId: string) => Promise<boolean>;
   reconnectAll: () => Promise<void>;
 } {
   const { settings } = useSettingsStore();
@@ -86,6 +92,11 @@ export function usePrinterMonitor(): {
 
   const [status, setStatus] = useState<PrinterMonitorStatus>(computeStatus);
 
+  // TO DO 14.1 P-2: daftar printer yang tersambung di sesi SEBELUM refresh
+  const [previouslyConnected, setPreviouslyConnected] = useState<string[]>(() =>
+    Object.keys(getPrinterSessionState())
+  );
+
   // Poll at interval
   useEffect(() => {
     // Only poll if there are bluetooth printers configured
@@ -101,7 +112,7 @@ export function usePrinterMonitor(): {
     return () => clearInterval(interval);
   }, [computeStatus]);
 
-  // Reconnect a single printer
+  // Reconnect a single printer (user gesture — membuka picker bila perlu)
   const reconnect = useCallback(async (printerId: string): Promise<boolean> => {
     try {
       const result = await connectBluetoothPrinter(printerId);
@@ -114,6 +125,51 @@ export function usePrinterMonitor(): {
       return false;
     }
   }, [computeStatus]);
+
+  // TO DO 14.1 P-1: re-pair senyap via getDevices() (tanpa picker) untuk satu printer
+  // TO DO 14.6: satu sumber kebenaran device identity — helper getPrinterDeviceId (settings kanonik)
+  const reconnectSilent = useCallback(async (printerId: string): Promise<boolean> => {
+    const expected = getPrinterDeviceId(printerId, settings);
+    if (!expected) return false;
+    const result = await reconnectBluetoothPrinter(printerId, expected);
+    if (result.success) setStatus(computeStatus());
+    return result.success;
+  }, [settings, computeStatus]);
+
+  // TO DO 14.1 P-2: saat boot, coba re-pair senyap untuk printer yang tadinya tersambung
+  // di sesi SEBELUM refresh (banner reconnect agresif hanya muncul bila re-pair senyap gagal).
+  useEffect(() => {
+    const session = getPrinterSessionState();
+    const previously = Object.keys(session);
+    if (previously.length === 0) return;
+
+    const candidates: Array<{ id: string; deviceId?: string }> = [];
+    for (const id of previously) {
+      if (isBluetoothConnected(id)) continue;
+      const deviceId = getPrinterDeviceId(id, settings);
+      if (deviceId) candidates.push({ id, deviceId });
+    }
+
+    if (candidates.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      for (const c of candidates) {
+        if (cancelled) return;
+        try {
+          const r = await reconnectBluetoothPrinter(c.id, c.deviceId);
+          if (r.success && !cancelled) setStatus(computeStatus());
+        } catch {
+          // lanjut printer berikutnya
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reconnect all offline printers
   const reconnectAll = useCallback(async () => {
@@ -128,5 +184,14 @@ export function usePrinterMonitor(): {
     setStatus(computeStatus());
   }, [computeStatus]);
 
-  return { status, reconnect, reconnectAll };
+  // TO DO 14.1 P-2: hapus tanda sesi setelah semua printer tersambung lagi (banner sukses)
+  useEffect(() => {
+    if (status.active && status.allConnected && previouslyConnected.length > 0) {
+      setPreviouslyConnected([]);
+      // sessionStorage dibersihkan di printer.ts via markPrinterSession — di sini cukup
+      // menandai bahwa tidak perlu prompt reconnect lagi.
+    }
+  }, [status.active, status.allConnected, previouslyConnected.length]);
+
+  return { status, reconnect, reconnectSilent, reconnectAll };
 }

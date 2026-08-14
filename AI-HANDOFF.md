@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–13 semuanya ✅ — termasuk Promo P-A2–P-A8 & Mode Offline O-1–O-10** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§18) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–14 semuanya ✅ — termasuk Promo P-A2–P-A8, Mode Offline O-1–O-10, & Printer Thermal 14.1–14.6** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§19) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru); **403/403** setelah 14.1 (36 file, `printerReconnect` +6 — §19.1); **406/406** setelah 14.2+14.3 (37 file, `printerQueue` +3 — §19.2–19.3); **409/409** setelah 14.4 (38 file, `printerCrossTab` +3 — §19.4); **416/416** setelah 14.5+14.6 (39 file, `printerFallback` +7 — §19.5–19.6)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -755,6 +755,51 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW, **51 entry precache**) — **build final** diverifikasi ulang setelah seluruh pekerjaan Prioritas 13 + sinkronisasi dokumen (O-9 → O-10 → dokumen rilis → panduan tes offline; tidak ada perubahan kode setelahnya, build tetap hijau).
 - **TO DO.md**: Prioritas 13 **TUNTAS SELURUHNYA** (O-1–O-10 ✅) — 13 temuan (13.1–13.13) ditutup/didokumentasikan. Prioritas 1–13 selesai semua.
 - **Dokumen rilis tersinkron (Prioritas 13)**: CHANGELOG.md (blok "Mode Offline Andal" + 397/397), RELEASE-v4.7.md (fitur #8 + 397/397), DEPLOYMENT.md (checklist O-1–O-10 + validasi 397/397 + tabel v4.7). Panduan tes baru **TESTING-OFFLINE.md** (tahap A–F: queue IndexedDB, retry 30 dtk, failed-ops list, badge Belum Sync, banner/cold start, konflik stok, PWA offline) — ditautkan dari DEPLOYMENT §7 & TESTING-PRADEPLOY tahap D (smoke test ringkas).
+
+## 19. Riwayat Pengerjaan v4.7 — Prioritas 14: Audit & Perbaikan Integrasi Printer Thermal & Split Printer (14.1–14.6 ✅)
+
+> Sesi lanjutan setelah Prioritas 13 tuntas (§18). Audit menyeluruh integrasi printer termal & split printer → akar masalah: koneksi Web Bluetooth hidup **in-memory** (putus saat refresh), tidak ada silent re-pair (setiap connect wajib picker), picker bisa muncul tiba-tiba di tengah checkout, fallback browser vs Bluetooth tidak seragam, tanpa print queue, status tidak persist lintas tab. **SELURUH Prioritas 14 SELESAI** — 6 item (14.1–14.6).
+
+### 19.1 14.1 (P-1–P-4, KRITIS) — Koneksi putus saat refresh ✅
+
+- **P-1** `reconnectBluetoothPrinter` — silent re-pair via `navigator.bluetooth.getDevices()` (cocokkan `device.id` dengan `bluetoothDeviceId`) + `establishConnection` bersama (dipakai connect & reconnect — tanpa duplikasi logika). **Tanpa membuka picker.**
+- **P-2** state sesi `sessionStorage` (`markPrinterSession`/`clearPrinterSession`/`getPrinterSessionState`, key `rempah-printer-session`) — aplikasi tahu printer yang tadinya tersambung; `usePrinterMonitor` coba re-pair senyap otomatis saat boot.
+- **P-3** tidak buka picker otomatis saat checkout — semua jalur print re-pair senyap dulu; gagal → fallback browser + pesan jelas (bukan picker di tengah transaksi).
+- **P-4** banner pasca-refresh "Refresh memutus koneksi …" non-dismissable + tombol **Sambungkan Ulang / Sambungkan Semua**.
+- Test: `printerReconnect.test.ts` (6 kasus: sesi survive reload, clear, re-pair senyap tanpa requestDevice, gagal bila device tak ada, tanpa getDevices, disconnect bersihkan registry+sesi).
+
+### 19.2 14.2 (TINGGI) — Fallback print seragam ✅
+
+- `notifyPrinterFallback` (toast) + pola tetap di semua jalur Bluetooth: re-pair senyap → fallback browser print → **tidak pernah picker tanpa klik**. Diterapkan di struk kasir, tiket dapur (fallback `printKitchenReceiptBrowser` — dapur tidak kehilangan pesanan), dan `printTextRaw` (fallback `fallbackBrowserPrintText`).
+
+### 19.3 14.3 (TINGGI) — Print queue FIFO per printer ✅
+
+- `printQueue` + `drainingPrinters` + `enqueuePrint`/`drainPrintQueue` — job diproses **serial per printer** (antar printer paralel), **retry 1×** untuk error transient (GATT busy, jeda 150 ms), drop tanpa hang setelah 2× gagal. Semua jalur cetak (struk, tiket dapur, `printTextRaw`, test print) lewat queue.
+- Test: `printerQueue.test.ts` (3 kasus: sequential, retry→sukses, drop tanpa hang).
+
+### 19.4 14.4 (SEDANG) — Status lintas tab + indikator KDS ✅
+
+- BroadcastChannel **`rempah-printer-events`** (`broadcastPrinterEvent`/`subscribePrinterEvents`) — peristiwa connect/disconnect dibagikan antar-tab (connect di Settings/POS terlihat di tab lain). Store transient `printerStatusStore` + hook `usePrinterCrossTab` (subscribe + sinkron registry lokal + `tryReconnectSilent` + `getStatus`). **Indikator hijau/merah per printer dapur di halaman Kitchen** + tombol Hubungkan (re-pair senyap).
+- Test: `printerCrossTab.test.ts` (3 kasus).
+
+### 19.5 14.5 (SEDANG) — Fallback browser eksplisit per printer ✅
+
+- `cashierFallbackBrowser` (AppSettings) + `fallbackBrowser` (KitchenPrinterConfig), **default ON**. `printReceiptBluetooth`/`printKitchenReceiptBluetooth`/`printTextRaw` kini return `boolean` — Bluetooth gagal & fallback nonaktif → **false** (pemanggil mencatat `status: 'error'` "Koneksi Bluetooth terputus dan fallback browser nonaktif"), bukan cetak browser diam-diam. Toggle di Settings (Printer Kasir + per kartu Printer Dapur). `printTextRaw` tidak melempar (aman untuk alur tutup shift, TO DO 6.4).
+- Test: `printerFallback.test.ts` (4 kasus fallback; stub DOM — iframe thermal tercipta = bukti browser print dieksekusi).
+
+### 19.6 14.6 (MINOR) — Naming & UX (alert→toast, satu sumber kebenaran device identity) ✅
+
+- `alert()` → **toast** di semua alur printer: `connectBluetoothPrinter` (printer.ts — browser tak mendukung / tak bisa menulis / gagal connect) + SettingsPage (connect kasir & dapur, test print sukses/gagal, putus, peringatan duplikat device).
+- Helper **`getPrinterDeviceId`/`getPrinterDeviceName`** — settings (`bluetoothDeviceId` persisten) = kanonik, sessionStorage = fallback; dipakai `usePrinterMonitor`, `usePrinterCrossTab`, dan semua jalur print (satu sumber kebenaran, tidak ada dua sumber device id).
+- Banner pakai `getPrinterSessionState()` (bukan string-includes `sessionStorage`) + label Indonesia konsisten ("Sambungkan Ulang" / "Sambungkan Semua", menggantikan "Reconnect").
+- Test: `printerFallback.test.ts` (3 kasus 14.6: prioritas settings > session, printer dapur dari kitchenPrinters, connect tanpa Web Bluetooth → toast tanpa alert).
+
+### 19.7 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **416/416 test lolos** (39 file) — rantai terkini di §9.6.
+- `npm run build` → **sukses** (tsc + vite build + PWA generateSW, **51 entry precache**) — **build final diverifikasi ulang** setelah pembuatan panduan tes printer (TIDAK ada perubahan kode setelah 14.5/14.6; perubahan hanya dokumentasi: TESTING-PRINTER.md + DEPLOYMENT §7), build tetap hijau (exit 0).
+- **TO DO.md**: Prioritas 14 **TUNTAS (6/6)** — 14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅. Prioritas 1–14 selesai semua.
+- **Dokumen rilis tersinkron (Prioritas 14)**: CHANGELOG.md (blok "Printer Thermal Lebih Andal" + 416/416), RELEASE-v4.7.md (fitur #9 + 416/416), DEPLOYMENT.md (checklist 14.1–14.6 + validasi 416/416 + tabel v4.7). **Panduan tes manual baru `testing/TESTING-PRINTER.md`** (tahap A–F: auto re-pair pasca-refresh, tanpa dialog Bluetooth di tengah checkout, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab, UX toast) — ditautkan dari DEPLOYMENT §7; sekaligus tautan 3 panduan lama di §7 diperbaiki ke `./testing/...` (file memang berada di folder `testing/`).
 
 ---
 

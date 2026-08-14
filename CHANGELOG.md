@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§17) dan `TO DO.md` (Prioritas 7–13 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§19) dan `TO DO.md` (Prioritas 7–14 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -145,6 +145,7 @@ END $$;
 **Kasir Lebih Cepat (UX POS):**
 - **Pencarian pelanggan di keranjang** — dropdown pelanggan diganti combobox yang bisa dicari dengan mengetik (nama / nomor HP / email); `Enter` memilih hasil pertama, `Escape` menutup, opsi "Lepaskan pelanggan".
 - **Tambah pelanggan langsung dari POS** — tombol shortcut "Baru" di samping pemilih pelanggan membuka form singkat (nama/HP/email/catatan); setelah disimpan pelanggan **langsung terpilih** (loyalty, poin & promo per-pelanggan langsung aktif) + tercatat di audit log.
+- **Dropdown "Pilih promo..." di keranjang desktop** — sebelumnya hanya tampil di keranjang mobile; kini kasir desktop juga bisa memilih promo aktif langsung dari daftar (format sama: `Nama (12%)` / `Nama (Rp …)`), dengan indikator terpasang + tombol Batal saat promo diterapkan.
 
 **Mode Offline Andal (Prioritas 13 — O-1 s.d. O-10):**
 - **Antrean offline di IndexedDB** (bukan localStorage) — payload transaksi besar tidak lagi hilang saat kuota lokal penuh; data lama otomatis dimigrasikan.
@@ -157,6 +158,14 @@ END $$;
 - **Tombstone penghapusan diperbesar** (cap 200 → 1000) agar transaksi yang dihapus offline tidak "ghost" muncul lagi.
 - **PWA offline**: navigasi SPA jatuh ke app shell yang di-precache + runtime cache NetworkFirst untuk aset same-origin — aplikasi tetap terbuka & bisa dipakai tanpa internet.
 - Urutan sinkronisasi **kronologis** (berbasis timestamp, bukan urutan jenis operasi) — konsistensi antar tabel (mis. Rekap Kas mengikuti transaksi induknya).
+
+**Printer Thermal Lebih Andal (Prioritas 14 — 14.1 s.d. 14.6):**
+- **Tidak perlu pairing ulang manual setelah refresh** — aplikasi otomatis mencoba menyambungkan kembali printer Bluetooth yang tadinya tersambung (`navigator.bluetooth.getDevices()` + GATT, **tanpa membuka dialog**); bila gagal, banner merah 1-klik "Sambungkan Ulang".
+- **Dialog Bluetooth tidak lagi muncul tiba-tiba di tengah transaksi** — setiap jalur cetak memakai kebijakan seragam: re-pair senyap → fallback browser + notifikasi → tidak pernah membuka picker tanpa klik eksplisit.
+- **Fallback browser eksplisit per printer** — opsi "Fallback Browser Print bila Bluetooth gagal" (printer kasir & tiap printer dapur); bila nonaktif, kegagalan Bluetooth tercatat sebagai **status error** (bukan cetak diam-diam ke browser).
+- **Antrean cetak per printer (print queue)** — struk & tiket dapur yang datang bersamaan diproses **berurutan (FIFO)** dengan retry 1× untuk error transient — mencegah tumpang tindih cetak saat banyak pesanan.
+- **Status koneksi lintas tab** — peristiwa connect/disconnect dibagikan antar-tab (BroadcastChannel); halaman **Kitchen/Dapur** menampilkan indikator hijau/merah per printer dapur + tombol Hubungkan (re-pair senyap, tanpa picker).
+- **UX lebih halus** — notifikasi `alert()` diganti **toast** di semua alur printer; **satu sumber kebenaran identitas device** (settings persisten > session); label tombol diseragamkan ke Bahasa Indonesia.
 
 (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
@@ -240,7 +249,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **397/397 test lolos** (35 file)
+- `npx vitest run` → **416/416 test lolos** (39 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

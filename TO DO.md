@@ -866,6 +866,79 @@
 
 ---
 
+## 🔴 PRIORITAS 14 — AUDIT INTEGRASI PRINTER THERMAL & SPLIT PRINTER (Analisa, v4.7)
+
+> **Sumber audit**: `src/utils/printer.ts` (Printer Device Registry v4.0 — `connectBluetoothPrinter`, `printReceipt`/`printSplitReceipt`/`printKitchenReceiptBluetooth`), `src/hooks/usePrinterMonitor.ts` (polling 3 dtk), `src/components/PrinterStatusBanner.tsx`, `src/pages/SettingsPage.tsx` (UI Hubungkan/Ganti/Test Print/Putus).
+
+**Arsitektur saat ini (yang benar):**
+- **Registry per-logika-printer**: `printerRegistry` = Map in-memory (`__cashier__` → struk kasir; `<kitchen-printer-uuid>` → printer dapur/bar) — setiap printer punya binding Bluetooth independen.
+- **Split print**: `printReceipt(targetPrinter)` memfilter item per `kitchenTarget` → printer dapur yang cocok; `printSplitReceipt` mencetak struk sub-bill (kasir) + tiket dapur lengkap saat `target 'all'` (split fresh, sub-bill pertama — dapur belum terima tiket).
+- **Monitor**: `usePrinterMonitor` polling 3 dtk + banner status (hijau/kuning/merah) dengan tombol Reconnect per printer / Reconnect Semua.
+- **Penyimpanan deviceId**: settings menyimpan `cashierBluetoothDeviceId`/`cashierBluetoothDeviceName` + `kitchenPrinters[].bluetoothDeviceId/Name` (persisten).
+
+### 14.1 (🔴 KRITIS) — Koneksi Bluetooth PUTUS SAAT REFRESH — tidak ada auto-reconnect
+
+> ✅ **SELESAI (v4.7) — P-1 + P-2 + P-3 + P-4 dieksekusi** (lihat catatan di bawah).
+
+- **Akar masalah**: koneksi hidup di `printerRegistry` (Map in-memory) → **hilang total saat page refresh**. Web Bluetooth (`navigator.bluetooth.requestDevice`) **wajib user gesture** dan selalu membuka **device picker** — tidak bisa reconnect diam-diam setelah refresh. `bluetoothDeviceId` tersimpan di settings **tidak pernah dipakai** untuk re-pair (tidak ada panggilan `getDevices()`/`gatt.connect` ke device tersimpan).
+- **Akibat**: setelah refresh, banner muncul (polling 3 dtk) tapi tombol Reconnect membuka picker lagi; kasir harus pairing ulang manual tiap refresh. Lebih parah: `printReceiptBluetooth`/`printTextRaw` yang menemukan printer terputus **memanggil `connectBluetoothPrinter` saat checkout** → picker Bluetooth muncul di tengah transaksi (kalau tidak diklik, print gagal diam-diam).
+- **Yang sudah dikerjakan (v4.7)**:
+  - **P-1 ✅** — `reconnectBluetoothPrinter(printerId, expectedDeviceId)` baru di `src/utils/printer.ts`: `navigator.bluetooth.getDevices()` → cocokkan `device.id` dengan `bluetoothDeviceId` tersimpan → `gatt.connect()` + discovery service/characteristic via helper bersama `establishConnection` (dipakai juga oleh `connectBluetoothPrinter` — tanpa duplikasi logika). **Senyap, tanpa picker**. Dipanggil otomatis saat boot (`usePrinterMonitor` useEffect untuk printer yang tadinya tersambung) + saat print menemukan printer terputus.
+  - **P-2 ✅** — State sesi di `sessionStorage` (`rempah-printer-session`, key = printerId → deviceId/deviceName/connectedAt): `markPrinterSession` (saat connect/re-pair sukses), `clearPrinterSession` (saat user memutus manual), `getPrinterSessionState`. Setelah refresh, `usePrinterMonitor` tahu printer mana yang tadinya tersambung dan mencoba re-pair senyap dulu; bila gagal → banner **agresif non-dismissable**.
+  - **P-3 ✅** — **Picker tidak lagi terbuka otomatis saat checkout**: `printReceiptBluetooth` & `printTextRaw` menggantikan `connectBluetoothPrinter` (picker) dengan re-pair senyap; gagal → throw error dengan pesan "klik banner printer untuk menyambungkan kembali" (struk kasir: hasil error masuk `PrintJobResult` tanpa memblokir transaksi — engine tetap commit; `printTextRaw`: fallback browser print). `printKitchenReceiptBluetooth` juga coba re-pair senyap sebelum throw (tiket dapur tidak membuka picker di tengah checkout).
+  - **P-4 ✅** — `PrinterStatusBanner`: bila ada printer yang tersambung di sesi sebelumnya tapi kini terputus → banner merah **"Refresh memutus koneksi … — klik untuk menyambungkan kembali"** + tombol **Sambungkan Ulang / Sambungkan Semua** (tidak bisa di-dismiss sampai tersambung). Handler dipindah sebelum early-return (fix TS2448).
+- **Test**: `src/test/printerReconnect.test.ts` (6 kasus: state sesi survive reload, clear, re-pair senyap tanpa requestDevice, gagal bila device tidak ada, tanpa dukungan getDevices, disconnect membersihkan registry+sesi). Total test: **403/403** (36 file).
+- **Catatan batasan**: `getDevices()` hanya berisi device yang dipairing dengan izin "remember"; butuh user activation minimal sekali per sesi di beberapa browser — bila gagal, fallback tetap picker via tombol banner (1 klik).
+
+### 14.2 (🟠 TINGGI) — Fallback print saat printer terputus tidak konsisten
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- `printReceiptBluetooth` (struk kasir) & `printTextRaw` memanggil `connectBluetoothPrinter` saat terputus → **picker muncul di tengah checkout** (mengganggu alur). `printKitchenReceiptBluetooth` sebaliknya **melempar error** (tidak ada fallback) → tiket dapur gagal diam-diam (hanya `console.error` di `printReceipt`, hasil error dibungkus `Promise.allSettled`).
+- **Yang dikerjakan (v4.7)**: satu kebijakan `notifyPrinterFallback` + fallback di semua jalur — printer Bluetooth terputus → (a) **re-pair senyap** via `getDevices()`; (b) gagal → **fallback browser print** (struk kasir `printReceiptBrowser`, tiket dapur `printKitchenReceiptBrowser`, teks `fallbackBrowserPrintText`) + **toast peringatan** "Printer X terputus — struk dicetak lewat dialog browser. Klik banner printer untuk menyambungkan kembali"; (c) tidak pernah membuka picker tanpa klik eksplisit (P-3).
+
+### 14.3 (🟠 TINGGI) — Belum ada antrean print (print queue)
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- Saat banyak pesanan masuk bersamaan (KDS + struk + split), `sendToBluetoothPrinter` menulis langsung ke characteristic — tanpa antrean, bisa saling tumpang tindih/gagal; tidak ada retry jika GATT busy.
+- **Yang dikerjakan (v4.7)**: **print queue FIFO per printer** di `src/utils/printer.ts` — `printQueue` + `drainingPrinters` + `enqueuePrint`/`drainPrintQueue`; `sendToBluetoothPrinter` kini mengantre & menunggu job selesai (serial per printer, printer lain tetap paralel). **Retry 1×** untuk error transient (GATT busy / disconnect sesaat, jeda 150 ms); gagal kedua → job di-drop dengan `console.warn` (tidak menggantung). Semua jalur cetak (struk, tiket dapur, `printTextRaw`, `testPrintBluetooth`) lewat queue ini.
+- **Test**: `src/test/printerQueue.test.ts` (3 kasus: dua job sequential tanpa tumpang tindih, retry 1× sukses, drop tanpa menggantung). Total test: **406/406** (37 file).
+
+### 14.4 (🟡 SEDANG) — Status koneksi tidak dipersist & tidak sinkron lintas tab/device
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- `getBluetoothStatus` hanya dari registry in-memory; setelah refresh UI "Connected" hilang walau device fisik masih menyala. Tidak ada indikasi di KDS/kitchen page apakah printer dapur tersambung (hanya banner global).
+- **Yang dikerjakan (v4.7)**: **BroadcastChannel `rempah-printer-events`** di `printer.ts` (`broadcastPrinterEvent`/`subscribePrinterEvents`) — peristiwa connect/disconnect dibagikan antar-tab (connect di Settings/POS terlihat di tab lain). **Store ringan `printerStatusStore`** (transient) + **hook `usePrinterCrossTab`** (subscribe channel + sinkron registry lokal + `tryReconnectSilent` + `getStatus` fallback lokal→store). **Indikator di halaman Kitchen/Dapur**: chip hijau/merah per printer dapur (ikon printer + nama + titik status) + tombol **Hubungkan** (re-pair senyap tanpa picker) saat terputus — dapur langsung tahu printer mana yang hidup/mati tanpa buka Settings.
+- **Test**: `src/test/printerCrossTab.test.ts` (3 kasus: applyEvent connect/disconnect, subscribePrinterEvents lintas-tab ke store via BroadcastChannel, setConnected). Total test: **409/409** (38 file).
+
+### 14.5 (🟡 SEDANG) — Print fallback browser vs Bluetooth tidak seragam
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- `printerType: 'browser'` memakai `window.print()`; mode Bluetooth tidak punya fallback ke browser secara otomatis. Untuk demo/klien tanpa printer Bluetooth, fallback harus eksplisit & mulus (termasuk tiket dapur).
+- **Yang dikerjakan (v4.7)**: fallback kini **opsi eksplisit per printer** — `cashierFallbackBrowser` (AppSettings) & `fallbackBrowser` (KitchenPrinterConfig), default ON (true saat undefined):
+  - `printReceiptBluetooth` / `printKitchenReceiptBluetooth` / `printTextRaw` → return `boolean`; bila Bluetooth gagal & fallback nonaktif → **return false** (pemanggil mencatat status error), bukan cetak browser diam-diam.
+  - `printReceipt` orchestrator: printer dapur BT fallback OFF → hasil `status: 'error'` dengan pesan "Koneksi Bluetooth terputus dan fallback browser nonaktif"; fallback ON → `status: 'success'` + tiket keluar via `printKitchenReceiptBrowser`.
+  - `printTextRaw` tidak melempar (aman untuk tutup shift, TO DO 6.4) — return false + toast bila fallback nonaktif.
+  - **UI Settings**: toggle "Fallback Browser Print bila Bluetooth gagal" di blok Printer Kasir (Bluetooth) + toggle "Fallback Browser Print bila gagal" per kartu Printer Dapur (tipe Bluetooth).
+  - Test: `src/test/printerFallback.test.ts` (4 kasus fallback; via stub DOM — iframe thermal tercipta = bukti browser print dieksekusi).
+
+### 14.6 (🟢 MINOR) — Naming & UX kecil
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- Tombol "Hubungkan Printer" di Settings memakai `alert()` (konsisten lama, tapi bisa diganti toast); banner Reconnect tidak menyebut bahwa refresh yang memutus koneksi.
+- `sessionStorage` vs settings `bluetoothDeviceId` — pastikan satu sumber kebenaran device identity.
+- **Yang dikerjakan (v4.7)**:
+  - **alert() → toast** di semua alur printer: `connectBluetoothPrinter` (printer.ts — browser tak mendukung / tak bisa menulis / gagal connect) + SettingsPage (connect kasir, test print sukses/gagal, putus, duplikat device, connect printer dapur).
+  - **Satu sumber kebenaran device identity**: helper `getPrinterDeviceId(printerId, settings)` / `getPrinterDeviceName` di `printer.ts` — settings (`bluetoothDeviceId` persisten) = kanonik, sessionStorage = fallback. Dipakai di `usePrinterMonitor.reconnectSilent` + boot re-pair, `usePrinterCrossTab.tryReconnectSilent`, dan jalur print Bluetooth.
+  - **Banner Reconnect**: cek state sesi via `getPrinterSessionState()` (bukan string-includes `sessionStorage`) + label diseragamkan ke Bahasa Indonesia: "Sambungkan Ulang" / "Sambungkan Semua" (sebelumnya campuran "Reconnect").
+  - Test: `src/test/printerFallback.test.ts` (3 kasus 14.6: prioritas settings > session, printer dapur dari kitchenPrinters, connect tanpa Web Bluetooth → toast tanpa alert).
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -890,6 +963,7 @@
 9. **Prioritas 11 (Celah Spesifikasi & Arah Komersialisasi)**: terdokumentasi (v4.7) — 6 celah (WhatsApp marketing, Google Drive, QRIS gateway, multi-outlet, RLS JWT, diskon per item) + P0/P1/P2. Eksekusi: **P0 selesai 3/4** — P0.1 laporan PPN ✅, P0.2 refund ✅, P0.4 struk digital ✅; tersisa **P0.3 (role Owner)** → P1 bertahap → P2; arah komersialisasi (1 outlet vs SaaS) menentukan prioritas P1.
 10. **Prioritas 12 (Audit Promo & Manajemen Data)**: terdokumentasi (v4.7) — **MANAJEMEN DATA TUNTAS ✅** (12.1.1–12.1.5 + P-A1) + **P-A2 ✅** (scope `menu` + validasi, 17 test) + **P-A3 ✅** (laporan performa promo, 15 test + mapping) + **P-A4 ✅** (stacking/eksklusif, 13 test) + **P-A5 ✅** (BOGO & min-qty, 21 test) + **P-A6 ✅** (batas per pelanggan, 10 test) + **P-A7 ✅** (nama promo di struk, 8 test) + **P-A8 ✅** (poin loyalty earn+redeem, 18 test). **SELURUH PRIORITAS 12 TUNTAS ✅** (Manajemen Data + Promo P-A1–P-A8) — angka test terkini **370/370**.
 11. **Prioritas 13 (Audit Mode Offline)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — O-1 ✅ (queue → IndexedDB) + O-2 ✅ (retry berkala 30 dtk + visibilitychange) + O-3 ✅ (failed-ops list + badge + modal + audit log) + O-4 ✅ (banner global) + O-5 ✅ (badge "Belum Sync" transaksi) + O-6 ✅ (banner cold start + dokumentasi batasan) + O-7 ✅ (deteksi konflik stok) + O-8 ✅ (tombstone cap 1000) + O-9 ✅ (PWA navigateFallback + NetworkFirst) + O-10 ✅ (UI konfirmasi aman + urutan antrean kronologis) — angka test **397/397** (35 file) + build sukses.
+12. **Prioritas 14 (Audit Printer Thermal & Split Printer)**: **14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅ (v4.7) — TUNTAS (6/6)** — P-1 ✅ (silent re-pair via `getDevices()` + `establishConnection` bersama), P-2 ✅ (state sesi `sessionStorage`), P-3 ✅ (tidak buka picker otomatis saat checkout), P-4 ✅ (banner "Refresh memutus koneksi" non-dismissable) + **14.2 ✅** (fallback seragam: re-pair senyap → browser print + toast `notifyPrinterFallback`) + **14.3 ✅** (print queue FIFO per printer + retry 1× + drop tanpa hang) + **14.4 ✅** (BroadcastChannel `rempah-printer-events` + `printerStatusStore` + `usePrinterCrossTab` + indikator KDS dengan tombol Hubungkan senyap) + **14.5 ✅** (fallback EKSPLISIT per printer: `cashierFallbackBrowser` / `kp.fallbackBrowser`, return boolean, status error bila nonaktif, toggle di Settings) + **14.6 ✅** (alert→toast semua alur printer, satu sumber kebenaran device identity via `getPrinterDeviceId/Name`, banner pakai `getPrinterSessionState` + label Indonesia konsisten) — test **416/416** (39 file; +7 `printerFallback`). **Prioritas 14 TUNTAS.**
 
 ---
 
