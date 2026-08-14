@@ -385,9 +385,10 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] **Refund/Retur penuh (v4.7 — P0.2)** — revert stok + kunjungan, Kas Keluar 'Refund' otomatis di Rekap Kas, eksklusi dari penjualan, anti double-refund, otorisasi PIN Manager
 - [x] **Struk Digital (v4.7 — P0.4)** — kirim struk ke WhatsApp/email pelanggan dari halaman Transaksi (kontak CRM otomatis + pratinjau + audit log); toggle Settings "auto-kirim WA" pasca-checkout (pre-open window anti popup blocker, skip idempotent replay)
 - [x] **Promo lengkap (v4.7 — P-A2 s.d. P-A8)** — scope menu di form, validasi form, laporan performa promo (snapshot `promoName`/`promoAmount` + tab di Laporan + CSV), stacking/eksklusif dengan auto best-deal, BOGO & min-qty, batas pemakaian per pelanggan, nama promo di struk termal & digital, poin loyalty (earn + redeem + clawback)
-- [x] Validasi otomatis: tsc 0 error, **370/370 test** (31 file), build produksi sukses (diverifikasi v4.7)
+- [x] **Mode Offline andal (v4.7 — Prioritas 13, O-1 s.d. O-10)** — antrean offline di IndexedDB (payload besar aman, migrasi otomatis dari localStorage), retry berkala 30 dtk + visibilitychange (error jaringan sementara tidak bakar retries), failed-ops list (badge merah + modal Coba Lagi/Hapus + audit log, tidak drop diam-diam), banner global offline/belum-sync di semua device, badge "Belum Sync" per transaksi, banner cold start perangkat baru, deteksi konflik stok lintas device, tombstone cap 1000, PWA navigateFallback + NetworkFirst, urutan flush kronologis
+- [x] Validasi otomatis: tsc 0 error, **397/397 test** (35 file), build produksi sukses (diverifikasi v4.7)
 
-> **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./TESTING-DEMO-SALES.md)**.
+> **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./TESTING-DEMO-SALES.md)**. Panduan verifikasi mode offline (antrean IndexedDB, retry 30 dtk, failed-ops list, badge "Belum Sync", konflik stok, PWA offline): **[`TESTING-OFFLINE.md`](./TESTING-OFFLINE.md)**.
 
 ### 🔲 Sebelum Serah Terima ke Klien
 - [ ] Ganti password default semua akun
@@ -407,7 +408,7 @@ Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL ya
 
 | Versi | Ringkasan |
 |---|---|
-| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)** & **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)** |
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)**, **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)** & **Mode Offline andal (queue IndexedDB, retry berkala, failed-ops list, badge "Belum Sync", deteksi konflik stok, PWA offline)** |
 | **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
 | **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
 | **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |

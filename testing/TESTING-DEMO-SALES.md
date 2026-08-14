@@ -12,7 +12,7 @@ Panduan **cepat untuk tim sales/demo** — 4 alur inti POS: (1) pesan + promo BO
    - Nama: `BOGO Kopi` • Tipe: **BOGO / Beli N Gratis M** • Beli **2**, Gratis **1** • Berlaku untuk: **Semua menu**.
    - Ceklis **Aktif**; tanggal mulai = hari ini, selesai = +7 hari.
 2. Pastikan stok bahan baku **cukup** untuk menu yang akan dipesan (Inventory → bahan baku; kalau kurang, naikkan stok via Stock Opname/adjustment).
-3. (Opsional) Buat 1 pelanggan dengan **nomor WhatsApp** agar demo struk digital lancar.
+3. (Opsional) Siapkan 1 pelanggan dengan **nomor WhatsApp** agar demo struk digital lancar — bisa dibuat langsung dari POS via tombol **"Baru"** di keranjang (tidak perlu ke halaman Pelanggan).
 4. Pastikan printer/audio tidak memblokir pop-up (demo struk digital membuka jendela baru).
 
 > [!TIP] **Hindari error di depan klien**: (a) promo berbatas per pelanggan membutuhkan **pelanggan dipilih dulu** di POS; (b) pembayaran tunai harus ≥ total (atau pakai metode non-tunai); (c) jangan pakai menu yang stok bahannya habis.
@@ -30,7 +30,10 @@ Panduan **cepat untuk tim sales/demo** — 4 alur inti POS: (1) pesan + promo BO
    **Hasil yang diharapkan**:
    - ✅ Pill hijau `✓ BOGO Kopi (-Rp …)` muncul — **1 item gratis otomatis** (diambil dari item termurah).
    - ✅ Jumlah total turun sesuai harga 1 item gratis.
-4. (Opsional) Pilih **pelanggan** di POS → isi **"Tukar poin"** dengan saldo poin → lihat diskon redeem bertambah.
+4. (Opsional) Pilih **pelanggan** di keranjang:
+   - Klik kolom **"-- Cari pelanggan (nama/HP) --"** → **ketik sebagian nama/nomor HP** → klik hasil yang muncul (Enter memilih hasil pertama; Escape menutup).
+   - Atau klik tombol **"Baru"** di sampingnya → isi form singkat → **"Tambah & Pilih"** → pelanggan langsung terpilih.
+   - Jika pelanggan sudah terpilih, isi **"Tukar poin"** dengan saldo poin → lihat diskon redeem bertambah.
 5. Klik **Bayar** (buka modal pembayaran) → pilih metode (mis. **Cash** dengan nominal uang pas, atau **QRIS**) → klik **Selesaikan Pesanan**.
 
 **Hasil akhir A**: ✅ Transaksi **Selesai**; struk tercetak (bila auto-print aktif); stok bahan baku berkurang; poin pelanggan bertambah (jika ada pelanggan).
@@ -97,9 +100,10 @@ Panduan **cepat untuk tim sales/demo** — 4 alur inti POS: (1) pesan + promo BO
 | Urutan | Aksi | Tombol Kunci |
 |---|---|---|
 | 1 | Pesan item ×2 → pilih promo BOGO | Keranjang → "Pilih promo..." |
-| 2 | Bayar normal | **Selesaikan Pesanan** |
-| 3 | Split 3 orang | **Split Bill** → "3 Orang" → Bayar Sub-Bill |
-| 4 | Gantung pesanan | **Simpan Pending** → Pending → Lanjutkan |
-| 5 | Kirim struk WA | Riwayat Transaksi → **Struk Digital** → Kirim WhatsApp |
+| 2 | Pilih/tambah pelanggan (opsional) | Ketik nama/HP di "Cari pelanggan" atau tombol **Baru** |
+| 3 | Bayar normal | **Selesaikan Pesanan** |
+| 4 | Split 3 orang | **Split Bill** → "3 Orang" → Bayar Sub-Bill |
+| 5 | Gantung pesanan | **Simpan Pending** → Pending → Lanjutkan |
+| 6 | Kirim struk WA | Riwayat Transaksi → **Struk Digital** → Kirim WhatsApp |
 
 > Jika ada langkah yang gagal: catat pesan error + langkah, lalu cek `TESTING-PRADEPLOY.md` (SQL/migrasi) atau laporkan ke tim pengembangan. Detail teknis: `AI-HANDOFF.md`, `DEPLOYMENT.md`.

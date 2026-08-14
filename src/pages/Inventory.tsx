@@ -28,7 +28,8 @@ import {
 } from 'lucide-react';
 
 export default function Inventory() {
-  const { items: inventory, addItem, updateItem, deleteItem, importItems, loadFromCloud } = useInventoryStore();
+  // v4.7 TO DO 13.5 (O-7): potensi konflik stok lintas device
+  const { items: inventory, addItem, updateItem, deleteItem, importItems, loadFromCloud, stockConflicts, clearStockConflicts } = useInventoryStore();
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const [activeTab, setActiveTab] = useState<'inventory' | 'opname'>('inventory');
@@ -250,6 +251,33 @@ export default function Inventory() {
           )}
         </div>
       </div>
+
+      {/* v4.7 TO DO 13.5 (O-7): banner potensi konflik stok lintas device */}
+      {stockConflicts.length > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-semibold text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2">
+              <AlertTriangle size={16} /> Stok berubah di perangkat lain ({stockConflicts.length} bahan)
+            </p>
+            <button onClick={clearStockConflicts} className="btn-secondary text-xs px-2.5 py-1">
+              Pahami
+            </button>
+          </div>
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            Nilai cloud lebih tinggi dari stok lokal sebelum sinkron — bisa berarti deduksi dari perangkat ini tertimpa
+            perangkat lain (dua kasir offline menjual bahan yang sama), atau ada penambahan/adjustment dari device lain.
+            Periksa stok fisik sebelum meneruskan.
+          </p>
+          <div className="space-y-1">
+            {stockConflicts.map((c) => (
+              <div key={c.ingredientId} className="flex justify-between text-xs text-amber-700 dark:text-amber-400">
+                <span>{c.name} ({c.unit})</span>
+                <span>lokal {c.localBefore} → cloud {c.cloudNow} (+{Math.round(c.diff * 100) / 100})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">

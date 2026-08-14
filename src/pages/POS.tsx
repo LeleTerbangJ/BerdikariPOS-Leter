@@ -28,7 +28,7 @@ import { calculateDiscountBreakdown } from '../utils/discountEngine';
 import { calculatePromoDiscount as calcPromoDiscount } from '../utils/promoDiscount';
 // v4.7 TO DO 12.2.2 (P-A8): poin loyalty — earn (di customerStore.recordVisit) & redeem di POS
 import { calculateMaxRedeemablePoints, calculateRedeemDiscount } from '../utils/loyaltyPoints';
-import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType, Transaction, AtomicCheckoutParams } from '../types';
+import type { Menu, CartItem, Temperature, SugarLevel, AddOn, PaymentMethod, OrderType, Transaction, AtomicCheckoutParams, Customer } from '../types';
 import Modal from '../components/Modal';
 import PendingPaymentsModal from '../components/PendingPaymentsModal';
 import SplitBillModal from '../components/SplitBillModal';
@@ -50,7 +50,94 @@ import {
   Clock,
   Scissors,
   FileText,
+  UserPlus,
 } from 'lucide-react';
+
+// v4.7 UX: pemilih pelanggan yang bisa dicari (nama / HP / email) — hemat waktu kasir
+function CustomerPicker({
+  customers,
+  value,
+  onSelect,
+}: {
+  customers: Customer[];
+  value: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const selected = customers.find((c) => c.id === value) || null;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone || '').includes(query.trim()) ||
+        (c.email || '').toLowerCase().includes(q)
+    );
+  }, [customers, query]);
+
+  const handleSelect = (id: string | null) => {
+    onSelect(id);
+    setQuery('');
+    setOpen(false);
+  };
+
+  return (
+    <div className="flex-1 relative">
+      <input
+        value={open ? query : selected?.name || ''}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && open) {
+            e.preventDefault();
+            if (filtered.length > 0) handleSelect(filtered[0].id);
+          } else if (e.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
+        placeholder="-- Cari pelanggan (nama/HP) --"
+        className="input text-sm w-full"
+      />
+      {open && (
+        <div className="mt-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 shadow-lg max-h-52 overflow-y-auto z-20">
+          <button
+            type="button"
+            onClick={() => handleSelect(null)}
+            className="w-full text-left px-3 py-2 text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+          >
+            {value ? '✕ Lepaskan pelanggan' : '— Tanpa pelanggan —'}
+          </button>
+          {filtered.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-slate-400">Tidak ada pelanggan cocok</p>
+          ) : (
+            filtered.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => handleSelect(c.id)}
+                className={`w-full text-left px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                  c.id === value ? 'bg-brand-50 dark:bg-brand-950/30' : ''
+                }`}
+              >
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{c.name}</span>
+                <span className="text-xs text-slate-400 ml-2">
+                  {c.phone || c.email || ''}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function POS() {
   const { menus, customCategories, reorderCategories } = useMenuStore();
@@ -59,7 +146,7 @@ export default function POS() {
   const cart = useCartStore();
   const { addTransaction, getNextQueueNumber } = useTransactionStore();
   const { currentUser } = useAuthStore();
-  const { customers, recordVisit, deductLoyaltyPoints } = useCustomerStore();
+  const { customers, addCustomer, recordVisit, deductLoyaltyPoints } = useCustomerStore();
   const { settings } = useSettingsStore();
   const { addToast } = useToastStore();
   const { promos, getActivePromos, getPromoByCode, incrementUsage, getCustomerDiscount, loyaltySettings } = usePromoStore();
@@ -337,6 +424,12 @@ export default function POS() {
 
   // Customer selection
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  // v4.7 shortcut: tambah pelanggan langsung dari keranjang POS (hemat waktu kasir)
+  const [showCustomerForm, setShowCustomerForm] = useState(false);
+  const [custName, setCustName] = useState('');
+  const [custPhone, setCustPhone] = useState('');
+  const [custEmail, setCustEmail] = useState('');
+  const [custNotes, setCustNotes] = useState('');
 
   // Customization state
   const [temp, setTemp] = useState<Temperature>('Dingin');
@@ -441,6 +534,36 @@ export default function POS() {
     setAppliedPromoId(null);
     setVoucherCode('');
     setPromoError('');
+  };
+
+  // v4.7 shortcut: tambah pelanggan cepat dari keranjang POS
+  const openCustomerForm = () => {
+    setCustName('');
+    setCustPhone('');
+    setCustEmail('');
+    setCustNotes('');
+    setShowCustomerForm(true);
+  };
+
+  const handleSaveNewCustomer = () => {
+    if (!custName.trim()) return;
+    const newId = uuid();
+    addCustomer({
+      id: newId,
+      name: custName.trim(),
+      phone: custPhone.trim(),
+      email: custEmail.trim(),
+      notes: custNotes.trim(),
+      totalSpent: 0,
+      visitCount: 0,
+      createdAt: new Date().toISOString(),
+    });
+    if (currentUser) {
+      addLog(currentUser.id, currentUser.name, currentUser.role, 'create_customer', `Tambah pelanggan: ${custName.trim()}`, { customerId: newId });
+    }
+    setSelectedCustomerId(newId);
+    setShowCustomerForm(false);
+    addToast(`Pelanggan "${custName.trim()}" ditambahkan & dipilih`, 'success');
   };
 
   // Loyalty discount (auto-applied if customer selected)
@@ -948,20 +1071,24 @@ export default function POS() {
               </div>
             </div>
 
-            {/* Customer Selection */}
+            {/* Customer Selection + shortcut tambah cepat */}
             <div className="px-4 pt-3 space-y-2">
-              <select
-                value={selectedCustomerId || ''}
-                onChange={(e) => setSelectedCustomerId(e.target.value || null)}
-                className="input text-sm"
-              >
-                <option value="">-- Pelanggan (opsional) --</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}{c.phone ? ` (${c.phone})` : ''}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-2">
+                <CustomerPicker
+                  customers={customers}
+                  value={selectedCustomerId}
+                  onSelect={setSelectedCustomerId}
+                />
+                <button
+                  type="button"
+                  onClick={openCustomerForm}
+                  className="btn-secondary px-3 flex items-center justify-center gap-1 text-xs"
+                  title="Tambah Pelanggan Baru"
+                >
+                  <UserPlus size={16} />
+                  <span className="hidden sm:inline">Baru</span>
+                </button>
+              </div>
 
               {/* Tipe Pesanan & Nomor Meja (Mobile View Fix) */}
               <div className="grid grid-cols-2 gap-2">
@@ -1227,20 +1354,22 @@ export default function POS() {
             )}
           </div>
 
-          {/* Customer Selection - Dropdown */}
-          <div className="mt-3">
-            <select
-              value={selectedCustomerId || ''}
-              onChange={(e) => setSelectedCustomerId(e.target.value || null)}
-              className="input text-sm"
+          {/* Customer Selection - Dropdown + shortcut tambah cepat */}
+          <div className="mt-3 flex gap-2">
+            <CustomerPicker
+              customers={customers}
+              value={selectedCustomerId}
+              onSelect={setSelectedCustomerId}
+            />
+            <button
+              type="button"
+              onClick={openCustomerForm}
+              className="btn-secondary px-3 flex items-center justify-center gap-1 text-xs"
+              title="Tambah Pelanggan Baru"
             >
-              <option value="">-- Pelanggan (opsional) --</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}{c.phone ? ` (${c.phone})` : ''}
-                </option>
-              ))}
-            </select>
+              <UserPlus size={16} />
+              <span className="hidden md:inline">Baru</span>
+            </button>
           </div>
 
           {/* Tipe Pesanan & Nomor Meja */}
@@ -1828,6 +1957,61 @@ export default function POS() {
             </button>
             <button onClick={proceedCheckoutAnyway} className="btn-primary flex-1 bg-amber-600 hover:bg-amber-700">
               Lanjutkan Tetap
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* v4.7 shortcut: modal tambah pelanggan cepat dari keranjang */}
+      <Modal
+        open={showCustomerForm}
+        onClose={() => setShowCustomerForm(false)}
+        title="Tambah Pelanggan Baru"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="label">Nama *</label>
+            <input
+              value={custName}
+              onChange={(e) => setCustName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveNewCustomer()}
+              className="input"
+              placeholder="Nama pelanggan"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="label">No. Telepon (WhatsApp)</label>
+            <input
+              value={custPhone}
+              onChange={(e) => setCustPhone(e.target.value)}
+              className="input"
+              placeholder="08xxxxxxxxxx"
+            />
+          </div>
+          <div>
+            <label className="label">Email</label>
+            <input
+              value={custEmail}
+              onChange={(e) => setCustEmail(e.target.value)}
+              className="input"
+              type="email"
+            />
+          </div>
+          <div>
+            <label className="label">Catatan</label>
+            <textarea
+              value={custNotes}
+              onChange={(e) => setCustNotes(e.target.value)}
+              className="input"
+              rows={2}
+            />
+          </div>
+          <div className="flex gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+            <button onClick={() => setShowCustomerForm(false)} className="btn-secondary flex-1">Batal</button>
+            <button onClick={handleSaveNewCustomer} className="btn-primary flex-1" disabled={!custName.trim()}>
+              Tambah & Pilih
             </button>
           </div>
         </div>

@@ -14,7 +14,7 @@ Berikan file-file ini sebagai konteks awal agar AI memahami seluruh aplikasi:
 |------|--------|
 | `PRD.md` | Dokumen lengkap: arsitektur, fitur, data model, business logic |
 | `FEATURES.md` | Daftar semua fitur & keunggulan |
-| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–12 semuanya ✅ — termasuk Promo P-A2–P-A8** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§17) — wajib dibaca |
+| `TO DO.md` | Daftar lengkap temuan audit + status pengerjaan (**Prioritas 1–13 semuanya ✅ — termasuk Promo P-A2–P-A8 & Mode Offline O-1–O-10** — ringkasan v4.5 di §10, v4.6 di §11, v4.7 di §12–§18) — wajib dibaca |
 | `src/types/index.ts` | Semua TypeScript interfaces (data model) |
 | `package.json` | Dependencies & scripts |
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -695,7 +695,66 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 - Semua mengikuti pola konsisten: deteksi kolom di `runMigrations` + guard sync (`syncTransaction`/`syncPromo`/`syncCustomer`) agar DB lama tidak menumpuk offline queue + mapping `fetch*FromCloud` lintas device + `supabase/schema.sql` (CREATE TABLE + blok ALTER). ⚠️ DB lama perlu **butir 11** di DEPLOYMENT §4 (sekali di SQL Editor; tercetak otomatis di console app bila terlewat).
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **370/370 test lolos** (31 file). Test baru: `promoValidation` 17, `promoReport` 15, `discountEngine` 13, `promoDiscount` 21, `promoStoreUsage` 4, `receiptPromo` 8, `loyaltyPoints` 8, `loyaltyPointsStore` 10 + mapping cloud.
+- `npm run build` → **sukses** (tsc + vite build + PWA generateSW, **53 entry precache**) — **build final** diverifikasi setelah seluruh perubahan POS (shortcut tambah pelanggan + `CustomerPicker` pencarian pelanggan di keranjang; perubahan UI-only, build tetap hijau).
 - **TO DO.md**: Prioritas 12 **TUNTAS SELURUHNYA** — Manajemen Data (12.1.1–12.1.5 + P-A1) + Promo (P-A2–P-A8). Tidak ada item Prioritas 12 tersisa.
+
+---
+
+## 18. Riwayat Pengerjaan v4.7 — Prioritas 13: Audit & Perbaikan Mode Offline (O-1–O-10 ✅)
+
+> Sesi lanjutan setelah Prioritas 12 tuntas (§16–§17). Audit menyeluruh mode offline → 13 temuan (13.1–13.13) & 10 langkah perbaikan (O-1–O-10) di TO DO.md. **SELURUH Prioritas 13 SELESAI** — mode offline kini berjalan lancar: data tidak hilang, antrean tidak macet, kasir tahu status sync.
+
+### 18.1 O-1 — Antrean offline → IndexedDB ✅ (13.1, KRITIS)
+
+- `offlineQueue.ts`: mirror in-memory + **`hydrateQueue()`** (IDB primary via `idbGet`/`idbSet`/`idbRemove` yang kini diekspor dari `idbStorage.ts`; fallback `safeStorage`; **migrasi one-time** dari localStorage legacy). Guard **`hydrated`** anti-clobber race boot (op sebelum hidrasi digabung, tidak menimpa antrean tersimpan). `clearQueue` membersihkan IDB + localStorage; `initOfflineQueue` async; Layout badge di-hydrate saat boot. **Payload besar tidak lagi hilang** saat kuota localStorage penuh; persist gagal tidak pernah melempar.
+- Test: `offlineQueueStorage.test.ts` (7 kasus: persist IDB, survive reload, migrasi legacy, clear, dedup, no-throw kuota penuh, race boot).
+
+### 18.2 O-2 — Retry berkala ✅ (13.3, TINGGI)
+
+- `initOfflineQueue`: timer **30 detik** saat `queue > 0` (flush otomatis meski `navigator.onLine` salah — Wi-Fi tanpa internet) + flush saat `visibilitychange` → visible. `flushQueue` mengklasifikasi error: **transient (jaringan) TIDAK menaikkan retries** (op bertahan) vs permanen → naikkan retries.
+
+### 18.3 O-3 — Failed-ops list (jangan drop diam-diam) ✅ (13.2, KRITIS)
+
+- Op gagal permanen setelah MAX_RETRIES dipindah ke **daftar gagal** (`rempah-offline-queue-failed`, persist IDB + survive reload) — tidak pernah di-drop. Badge merah `N!` di sidebar + **modal daftar** (tabel/aksi, reason, lastError, waktu) dengan **Coba Lagi Semua** (`retryFailedOps` → balik ke antrean retries 0) & **Hapus Semua** (konfirmasi). **Audit log** `sync_failed` (otomatis saat op baru gagal) + `sync_retry` + `sync_failed_cleared`; `AuditAction` diperluas; `clearQueue` membersihkan keduanya; `flushQueue` return `{ success, failed, pending }`.
+- Test: `offlineQueueFailed.test.ts` (7 kasus: permanen → daftar gagal, transient tidak bakar retries, retry sukses, clear, survive reload, clearQueue, shape return).
+
+### 18.4 O-4 — Banner global offline/belum-sync ✅ (13.4, TINGGI)
+
+- Banner di `<main>` Layout (terlihat semua device & role, tidak bergantung sidebar mobile): merah "📡 Offline…" (disconnected) / merah "⚠️ N operasi gagal sinkron — klik untuk lihat" / kuning "⏳ N data belum tersinkron — klik untuk kirim". Klik → modal failed / flush + toast.
+
+### 18.5 O-5 — Badge "Belum Sync" per transaksi ✅ (13.7)
+
+- `transactionStore.confirmedSyncIds` (tidak dipersist — union id cloud tiap `loadFromCloud`, pola cashMovementStore) + `markTransactionConfirmed` saat `syncTransaction` sukses (fungsi kini return `Promise<boolean>`) + hapus saat delete. Riwayat Transaksi: **badge per baris** + hitung "⚠️ N belum sync" di header + refresh `loadFromCloud(true)` saat event `online`.
+- Test: `transactionSyncBadge.test.ts` (5 kasus).
+
+### 18.6 O-6 — Banner cold start + dokumentasi batasan ✅ (13.8, 13.5a, 13.6d)
+
+- `bootedOfflineRef` di Layout (masih disconnected ~4 dtk setelah boot) → teks "Offline sejak awal — data cloud belum dimuat (perangkat baru?); transaksi tetap bisa dicatat". **Dokumentasi**: komentar di `getNextQueueNumber` (13.6d — nomor antrean bisa kembar saat dua device offline; normalisasi di loadFromCloud; mitigasi penuh di TO DO 13.6).
+
+### 18.7 O-7 — Deteksi konflik stok lintas device ✅ (13.5c)
+
+- Helper murni `src/utils/stockConflict.ts` (`detectStockConflicts`: `cloud.stock > localBefore + 0.01` = potensi deduksi tertimpa/penambahan eksternal; `cloud ≤ lokal` tidak dibunyikan; item baru bukan konflik; urut diff). `inventoryStore` + `stockConflicts` (tidak dipersist via `partialize`; union per id; `clearStockConflicts`) + **banner kuning di Inventaris** (daftar + lokal→cloud + tombol "Pahami").
+- Test: `stockConflict.test.ts` (7 kasus: 5 pure + 2 integrasi store).
+
+### 18.8 O-8 — Tombstone cap 1000 ✅ (13.12)
+
+- `DEFAULT_TOMBSTONE_CAP = 1000` di `storagePrune.ts` (naik dari 200; store transaksi sudah IndexedDB) — anti ghost saat > 200 penghapusan offline; `pruneConfirmedTombstones` tetap membersihkan id terkonfirmasi.
+
+### 18.9 O-9 — PWA offline ✅ (13.9)
+
+- `vite.config.ts`: **`navigateFallback: 'index.html'`** + `navigateFallbackAllowlist [/^\/.*$/]` (semua navigasi SPA → app shell precache = halaman fallback offline; plugin versi ini tidak mendukung `offlineFallback` khusus) + **runtimeCaching NetworkFirst same-origin** (cache `same-origin-assets`, timeout 5 dtk, 30 hari; Supabase API cross-origin TIDAK dicache). **Build terverifikasi**: sw.js memuat `NavigationRoute`/`createHandlerBoundToURL` + `same-origin-assets` (52 entry precache).
+
+### 18.10 O-10 — UI konfirmasi aman + urutan antrean kronologis ✅ (13.10, 13.11)
+
+- `alert()`/`window.confirm()` pada alur sync diganti **toast** (hasil flush) + **ConfirmDialog** (hapus failed ops, pesan dampak jelas); retry failed ops langsung (non-destruktif). `flushQueue` sort **timestamp** dulu (urutan kejadian nyata antar entitas — cash movement refund mengikuti transaksi induknya), tie-break action order hanya untuk timestamp sama.
+- Test: `offlineQueueFailed.test.ts` +1 (kronologis — calls = [transactions, cash_movements], bukan [insert dulu]).
+
+### 18.11 Validasi & Status
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **397/397 test lolos** (35 file) — rantai terkini di §9.6.
+- `npm run build` → **sukses** (tsc + vite build + PWA generateSW, **51 entry precache**) — **build final** diverifikasi ulang setelah seluruh pekerjaan Prioritas 13 + sinkronisasi dokumen (O-9 → O-10 → dokumen rilis → panduan tes offline; tidak ada perubahan kode setelahnya, build tetap hijau).
+- **TO DO.md**: Prioritas 13 **TUNTAS SELURUHNYA** (O-1–O-10 ✅) — 13 temuan (13.1–13.13) ditutup/didokumentasikan. Prioritas 1–13 selesai semua.
+- **Dokumen rilis tersinkron (Prioritas 13)**: CHANGELOG.md (blok "Mode Offline Andal" + 397/397), RELEASE-v4.7.md (fitur #8 + 397/397), DEPLOYMENT.md (checklist O-1–O-10 + validasi 397/397 + tabel v4.7). Panduan tes baru **TESTING-OFFLINE.md** (tahap A–F: queue IndexedDB, retry 30 dtk, failed-ops list, badge Belum Sync, banner/cold start, konflik stok, PWA offline) — ditautkan dari DEPLOYMENT §7 & TESTING-PRADEPLOY tahap D (smoke test ringkas).
 
 ---
 

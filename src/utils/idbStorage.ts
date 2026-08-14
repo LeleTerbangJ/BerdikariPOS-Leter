@@ -108,7 +108,8 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
-async function idbGet(key: string): Promise<string | null> {
+/** Baca nilai dari IndexedDB (string). Resolve null jika IDB tidak tersedia / key kosong. */
+export async function idbGet(key: string): Promise<string | null> {
   const db = await openDb();
   if (!db) return null;
   try {
@@ -122,7 +123,7 @@ async function idbGet(key: string): Promise<string | null> {
 }
 
 /** Tulis ke IndexedDB. Return true jika berhasil (false = IDB tidak tersedia/gagal). */
-async function idbSet(key: string, value: string): Promise<boolean> {
+export async function idbSet(key: string, value: string): Promise<boolean> {
   const db = await openDb();
   if (!db) return false;
   try {
@@ -135,7 +136,8 @@ async function idbSet(key: string, value: string): Promise<boolean> {
   }
 }
 
-async function idbRemove(key: string): Promise<void> {
+/** Hapus key dari IndexedDB (tidak pernah melempar). */
+export async function idbRemove(key: string): Promise<void> {
   const db = await openDb();
   if (!db) return;
   try {
