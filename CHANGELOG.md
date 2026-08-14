@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§17) dan `TO DO.md` (Prioritas 7–12 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§17) dan `TO DO.md` (Prioritas 7–13 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -140,7 +140,25 @@ END $$;
 - **BOGO / Beli N Gratis M** — beli N dapat M gratis (diambil dari item termurah), opsi diskon % per unit gratis; dan **min-qty** (diskon hanya berlaku bila qty item ≥ ambang).
 - **Batas pemakaian per pelanggan** — kuota voucher per pelanggan (mis. 1× per orang) dengan pencatatan `usageByCustomer`; promo berbatas mewajibkan pelanggan dipilih di POS.
 - **Nama promo di struk** — baris `Promo: Nama (KODE)` di struk termal (browser & ESC/POS) dan struk digital WA/email; hanya tampil bila promo benar-benar memberi diskon (promo eksklusif yang kalah best-deal tidak diklaim struk).
-- **Poin Loyalty aktif** — poin didapat saat checkout (poin/transaksi + 1 poin per Rp), **ditukar jadi diskon** di POS (maks dibatasi saldo & headroom agar selalu terpakai penuh), dikembalikan (clawback) saat void/cancel/refund. Konfigurasi poin kini editabel di Promo & Loyalty; saldo tampil di kartu Pelanggan. (Settings → Backup):
+- **Poin Loyalty aktif** — poin didapat saat checkout (poin/transaksi + 1 poin per Rp), **ditukar jadi diskon** di POS (maks dibatasi saldo & headroom agar selalu terpakai penuh), dikembalikan (clawback) saat void/cancel/refund. Konfigurasi poin kini editabel di Promo & Loyalty; saldo tampil di kartu Pelanggan.
+
+**Kasir Lebih Cepat (UX POS):**
+- **Pencarian pelanggan di keranjang** — dropdown pelanggan diganti combobox yang bisa dicari dengan mengetik (nama / nomor HP / email); `Enter` memilih hasil pertama, `Escape` menutup, opsi "Lepaskan pelanggan".
+- **Tambah pelanggan langsung dari POS** — tombol shortcut "Baru" di samping pemilih pelanggan membuka form singkat (nama/HP/email/catatan); setelah disimpan pelanggan **langsung terpilih** (loyalty, poin & promo per-pelanggan langsung aktif) + tercatat di audit log.
+
+**Mode Offline Andal (Prioritas 13 — O-1 s.d. O-10):**
+- **Antrean offline di IndexedDB** (bukan localStorage) — payload transaksi besar tidak lagi hilang saat kuota lokal penuh; data lama otomatis dimigrasikan.
+- **Retry berkala otomatis** — selama ada data belum sinkron, aplikasi mencoba mengirim tiap 30 detik + saat tab kembali terlihat (device sleep / pindah tab); error jaringan sementara (Wi-Fi tanpa internet) tidak menghabiskan batas percobaan.
+- **Daftar operasi gagal (Failed Ops)** — operasi yang gagal permanen (mis. izin/kolom database) **tidak di-drop diam-diam**: muncul badge merah di header → modal daftar dengan alasan + tombol **Coba Lagi** / **Hapus** (dengan konfirmasi tegas) + tercatat di audit log.
+- **Banner status global** di semua perangkat & role (termasuk mobile): offline / N belum sinkron (klik = kirim sekarang) / N gagal.
+- **Badge "Belum Sync" per transaksi** di Riwayat Transaksi + hitungan di header — hilang otomatis saat tersinkron.
+- **Peringatan cold start offline** (perangkat baru yang belum pernah online) — transaksi tetap bisa dicatat & akan tersinkron.
+- **Deteksi konflik stok lintas device** — banner kuning di Inventaris saat stok lokal ditimpa data cloud yang lebih besar (potensi deduksi tertimpa device lain / penambahan eksternal).
+- **Tombstone penghapusan diperbesar** (cap 200 → 1000) agar transaksi yang dihapus offline tidak "ghost" muncul lagi.
+- **PWA offline**: navigasi SPA jatuh ke app shell yang di-precache + runtime cache NetworkFirst untuk aset same-origin — aplikasi tetap terbuka & bisa dipakai tanpa internet.
+- Urutan sinkronisasi **kronologis** (berbasis timestamp, bukan urutan jenis operasi) — konsistensi antar tabel (mis. Rekap Kas mengikuti transaksi induknya).
+
+(Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
 - Restore **2 mode**: **Merge** (gabung dengan data lama) atau **Replace/Snapshot** (sinkron penuh — data zombie tidak kembali lintas device).
 - Foto menu & logo toko ikut di-backup & di-restore (tidak lagi hilang).
@@ -222,7 +240,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **370/370 test lolos** (31 file)
+- `npx vitest run` → **397/397 test lolos** (35 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

@@ -449,8 +449,10 @@ export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
 // TRANSACTIONS (most critical for KDS real-time)
 // ============================================================
 
-export async function syncTransaction(tx: Transaction) {
-  if (!isSupabaseConfigured) return;
+// v4.7 TO DO 13.7 (O-5): return boolean agar store bisa menandai id sebagai "terkonfirmasi sync"
+// (badge "Belum Sync" hilang saat transaksi benar-benar sampai ke cloud).
+export async function syncTransaction(tx: Transaction): Promise<boolean> {
+  if (!isSupabaseConfigured) return false;
   const data: Record<string, any> = {
     id: tx.id,
     queue_number: tx.queueNumber,
@@ -515,7 +517,7 @@ export async function syncTransaction(tx: Transaction) {
   if (!migrationNeeded.promoAmount) {
     data.promo_amount = tx.promoAmount ?? null;
   }
-  await smartUpsert('transactions', data);
+  return smartUpsert('transactions', data);
 }
 
 export async function syncTransactionStatus(id: string, kitchenStatus: string) {

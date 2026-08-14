@@ -772,6 +772,100 @@
 
 ---
 
+## 🔴 PRIORITAS 13 — AUDIT MODE OFFLINE (Analisa, v4.7) — mode offline adalah fitur penting & harus jalan lancar
+
+> Audit menyeluruh alur offline: offline queue, deteksi koneksi, persist lokal (IndexedDB/localStorage), indikator UI, PWA, realtime & reconnect. **Belum ada perubahan kode** — hanya analisa + rekomendasi bertahap.
+
+### 13.0 Arsitektur saat ini (yang sudah benar)
+
+- **Semua tulis cloud lewat offline queue** (`offlineQueue.ts`): `smartUpsert`/`smartUpdate`/`smartInsert`/`smartDelete` — offline (atau fetch gagal) → otomatis masuk antrean. Dedup per record, sorting dependensi (insert→upsert→update→delete), self-healing strip kolom yang belum ada di DB.
+- **Persist lokal**: transaksi & audit log di **IndexedDB** (`idbStorage`); store lain di localStorage via `safeStorage` (anti QuotaExceededError).
+- **Indikator**: status cloud via `useCloudStatus` (`checkConnection` SELECT settings, cek tiap 30 dtk) + badge jumlah antrean di sidebar Layout; Rekap Kas punya badge **"⏳ Belum Sync"** per baris (`confirmedSyncIds`).
+- **Realtime + reconnect**: KDS subscribe transaksi; POS subscribe menu/inventory/customers/settings; halaman Transaksi subscribe transaksi; reconnect di event `online` + `visibilitychange` (POS/Kitchen/Transactions).
+- **PWA**: app shell di-precache (`generateSW`, 53 entry) → app bisa dibuka saat offline.
+- **Tombstone** `deletedLocalIds` (cap 200) anti transaksi ghost re-hidrasi dari cloud.
+
+### 13.1 (🔴 KRITIS) — Antrean offline di localStorage; payload besar bisa HILANG diam-diam
+
+- `offlineQueue.saveQueue` menulis ke `localStorage` (≈5 MB). Transaksi dengan banyak item/bundle/add-on bisa mendekati kuota; saat `setItem` melempar QuotaExceededError, fungsi **hanya console.warn** — operasi TIDAK dipersist dan **hilang saat reload** (data transaksi/Kas bisa hilang tanpa kabar).
+- **Fix**: migrasikan queue ke **IndexedDB** (pola `idbStorage` yang sudah ada) atau minimal ke `safeStorage`; tambah ukuran/penyimpanan statistik; jangan pernah buang op.
+
+### 13.2 (🔴 KRITIS) — Retry habis (MAX_RETRIES=5) → data di-DROP tanpa notifikasi
+
+- `flushQueue` menaikkan `retries`; setelah 5 percobaan op **dibuang diam-diam** (tidak ada UI/audit log). Error permanen (RLS/constraint/unik, kolom yang tak bisa di-strip) = kehilangan transaksi/Rekap Kas/perubahan master.
+- **Fix**: op yang gagal permanen dipindah ke daftar **"gagal sync"** (badge merah + bisa di-retry manual / dihapus sadar + audit log `sync_failed`); jangan auto-drop.
+
+### 13.3 (🟠 TINGGI) — `navigator.onLine` tidak reliabel + TIDAK ADA retry berkala
+
+- `navigator.onLine` tetap `true` saat perangkat terhubung Wi-Fi/LAN **tanpa internet** (router/modem mati). Tulis gagal → masuk queue (OK), tapi flush hanya dipicu **event `online`** (tidak pernah), boot, atau klik manual — antrean menggantung tanpa batas sampai event online tiba.
+- **Fix**: timer flush berkala (mis. tiap 30–60 dtk) saat `queue > 0` dan `checkConnection()` = connected; tambah flush saat `visibilitychange` → visible.
+
+### 13.4 (🟠 TINGGI) — Indikator antrean/status TERSEMBUNYI di mobile (sidebar collapsed)
+
+- Tombol status cloud & badge antrean di Layout hanya dirender saat **sidebar terbuka** (`!sidebarCollapsed`); di mobile (sidebar collapse) kasir **tidak tahu** ada data belum sync / sedang offline.
+- **Fix**: banner global (header/bottom bar) saat offline atau `queue > 0` — "⚠️ N data belum tersinkron" + status online/offline; berlaku semua role.
+
+### 13.5 (🟠 TINGGI) — Konflik merge = last-write-wins penuh, tanpa `updated_at`
+
+- Semua sync master/stok memakai whole-record overwrite; dua device mengubah item/stok/promo yang sama saat offline → **tulis terakhir menang**; deduksi stok dari device lain bisa tertimpa (stok drift). Alert stok negatif hanya mendeteksi, tidak mencegah.
+- **Fix bertahap**: (a) dokumentasi batasan; (b) merge berbasis `updated_at` per record; (c) **deteksi konflik stok** saat sync (bandingkan stok lokal vs nilai cloud yang dihitung ulang) + laporan/deviasi.
+
+### 13.6 (🟠 TINGGI) — Nomor antrean bisa DUPLIKAT antar device saat offline
+
+- `getNextQueueNumber` fallback ke max lokal saat offline → dua device offline memberi nomor antrean yang sama; setelah sync ada duplikat (struk/bill referensi nomor yang sama).
+- **Fix**: opsi (a) alokasi range per device, (b) prefix device + display gabungan, (c) deteksi & renumber saat merge, atau (d) dokumentasi batasan + deteksi duplikat di `loadFromCloud`.
+
+### 13.7 (🟡 SEDANG) — Badge "Belum Sync" hanya untuk Rekap Kas, belum untuk transaksi/audit
+
+- Pola `confirmedSyncIds` (v4.6) hanya di `cashMovementStore`; kasir tidak tahu transaksi tertentu belum sampai cloud (hanya hitung global di sidebar yang tersembunyi di mobile).
+- **Fix**: ekstensi pola yang sama ke **transaksi** (badge per baris di Riwayat Transaksi + hitung header) & opsi audit log.
+
+### 13.8 (🟡 SEDANG) — Cold start offline di device baru = data kosong tanpa pesan jelas
+
+- Device baru yang pertama dibuka saat offline: `loadFromCloud` gagal → store hanya berisi seed lokal; tidak ada banner "mode offline — data cloud belum dimuat".
+- **Fix**: banner mode offline global + info bahwa data mungkin belum lengkap; pastikan UI tetap bisa dipakai (read-only data lokal).
+
+### 13.9 (🟡 SEDANG) — PWA: tidak ada runtime caching tambahan / halaman fallback offline
+
+- App shell ter-precache (OK), tapi tidak ada strategi NetworkFirst untuk aset dinamis & tidak ada fallback page khusus offline; belum ada verifikasi installability di desktop.
+- **Fix**: `runtimeCaching` NetworkFirst untuk `same-origin` + halaman fallback offline + cek manifest/icon di semua platform.
+
+### 13.10 (🟡 SEDANG) — UI flush manual memakai `alert()`/`confirm()` & menawarkan "bersihkan antrean"
+
+- Layout menawarkan `clearQueue()` (hapus antrean) via `window.confirm` — risiko data hilang permanen bila kasir klik tanpa paham. Pesan error teknis tidak menjelaskan dampak.
+- **Fix**: UI konfirmasi yang jelas (apa yang dihapus, apa akibatnya); retry per kategori; tombol hapus hanya untuk op yang **gagal permanen** (13.2).
+
+### 13.11 (🟡 SEDANG) — Urutan flush global by action bisa memutus kronologis antar entitas
+
+- Sorting `insert→upsert→update→delete` global: operasi pada entitas berbeda (transaksi, kas, audit) tidak selalu dalam urutan kronologis — kas keluar refund bisa terkirim sebelum transaksi induknya.
+- **Fix**: sort per-dependency (timestamp) atau simpan `dependsOn` hint; pertahankan urutan dalam satu entitas.
+
+### 13.12 (🟡 SEDANG) — Tombstone `deletedLocalIds` cap 200
+
+- Lebih dari 200 penghapusan offline → tombstone tertua dibuang → transaksi yang dihapus bisa **re-hidrasi (ghost)** dari cloud.
+- **Fix**: simpan tombstone di IndexedDB + cap lebih besar (atau TTL berbasis tanggal).
+
+### 13.13 (🟢 RENDAH) — Lain-lain
+
+- `checkConnection` hanya SELECT settings limit 1 (tidak mengukur latensi) — cukup, namun status "connected" tidak menjamin semua tabel bisa ditulis (RLS per tabel) — dokumentasikan.
+- Tidak ada pull berkala master data saat dua device aktif bersamaan — realtime sudah menutupi saat online; offline device menerima saat reconnect — OK, cukup dokumentasi.
+- Audit log & Rekap Kas saat offline tidak punya badge "Belum Sync" (lihat 13.7).
+
+### 13.14 Rekomendasi eksekusi bertahap (urutan saran)
+
+- [x] **O-1 — ✅ SELESAI (v4.7)** — Antrean offline kini dipersist ke **IndexedDB** (`src/lib/offlineQueue.ts`: mirror in-memory + `hydrateQueue()` async; primary `idbSet`/`idbGet`/`idbRemove` dari `idbStorage.ts`, fallback `safeStorage`; **migrasi one-time** dari localStorage legacy; guard `hydrated` anti-clobber race boot — op sebelum hidrasi digabung, tidak menimpa; `clearQueue` bersihkan IDB + localStorage; `initOfflineQueue` async + `Layout` badge di-hydrate saat boot). Payload besar tidak lagi hilang saat kuota localStorage penuh & persist gagal tidak pernah melempar (op tetap hidup di memory). Test: `src/test/offlineQueueStorage.test.ts` (7 kasus: persist IDB, survive reload, migrasi legacy, clear, dedup, no-throw kuota penuh, race boot). Total test: **377/377** (32 file).
+- [x] **O-2 — ✅ SELESAI (v4.7)** — Retry berkala di `initOfflineQueue`: timer **30 detik** saat `queue > 0` (flush otomatis meski `navigator.onLine` salah — Wi-Fi tanpa internet) + flush saat `visibilitychange` → visible. `flushQueue` kini mengklasifikasi error: **transient (jaringan) tidak menaikkan retries** (op bertahan, dicoba lagi tiap tick) vs permanen (RLS/constraint/kolom) → naikkan retries. (13.3)
+- [x] **O-3 — ✅ SELESAI (v4.7)** — **Failed-ops list** (bukan auto-drop): op yang gagal permanen setelah MAX_RETRIES dipindah ke daftar gagal (`rempah-offline-queue-failed`, persist IDB + survive reload), badge merah `N!` di sidebar + **modal daftar** (tabel, reason, lastError, waktu) dengan **Coba Lagi Semua** (`retryFailedOps` → balik ke antrean, retries 0) & **Hapus Semua** (konfirmasi jelas) + **audit log** `sync_failed`/`sync_retry`/`sync_failed_cleared`. `clearQueue` (reset data) juga membersihkan daftar gagal. `flushQueue` return `{ success, failed, pending }`. (13.2) Test: `src/test/offlineQueueFailed.test.ts` (7 kasus). Total test: **384/384** (33 file).
+- [x] **O-4 — ✅ SELESAI (v4.7)** — **Banner global** di `<main>` Layout (di bawah PrinterStatusBanner, **terlihat semua device & role — tidak bergantung sidebar** yang bisa collapsed di mobile): merah "📡 Offline — data tersimpan lokal, akan tersinkron otomatis" (cloudStatus disconnected) / merah "⚠️ N operasi gagal sinkron — klik untuk lihat" (failedCount) / kuning "⏳ N data belum tersinkron — klik untuk kirim sekarang" (queueLength); klik → modal failed / flush + toast. (13.4)
+- [x] **O-5 — ✅ SELESAI (v4.7)** — Badge **"⏳ Belum Sync" per transaksi** di Riwayat Transaksi: `transactionStore.confirmedSyncIds` (TIDAK dipersist — union dari cloud tiap `loadFromCloud`, pola cashMovementStore) + `markTransactionConfirmed` saat `syncTransaction` sukses (return boolean baru) + hapus dari set saat delete; halaman Transaksi: badge per baris + hitung "⚠️ N belum sync" di header + refresh `loadFromCloud(true)` saat event `online` (badge hilang setelah queue ter-flush). (13.7) Test: `src/test/transactionSyncBadge.test.ts` (5 kasus). Total test: **389/389** (34 file).
+- [x] **O-6 — ✅ SELESAI (v4.7)** — Banner offline kini **membedakan cold start**: `bootedOfflineRef` di Layout (masih disconnected ~4 dtk setelah boot) → teks "📡 Offline sejak awal — data cloud belum dimuat (perangkat baru?); transaksi tetap bisa dicatat & akan tersinkron" (vs "Offline — data tersimpan lokal" saat koneksi putus di tengah). **Dokumentasi batasan**: komentar di `getNextQueueNumber` (13.6d — dua device offline bisa memberi nomor antrean sama; loadFromCloud menormalkan nextQueueNumber, mitigasi penuh di TO DO 13.6) + catatan merge last-write-wins (13.5a — lihat O-7). (13.8)
+- [x] **O-7 — ✅ SELESAI (v4.7)** — **Deteksi konflik stok lintas device** saat sync: helper murni `src/utils/stockConflict.ts` (`detectStockConflicts` — `cloud.stock > localBefore + 0.01` = potensi deduksi tertimpa/penambahan eksternal; `cloud ≤ lokal` = normal, tidak bising; item baru bukan konflik; urut diff terbesar). `inventoryStore` + `stockConflicts` (TIDAK dipersist — `partialize`; union per id; `clearStockConflicts`) diisi tiap `loadFromCloud`; **banner kuning di halaman Inventaris** (daftar bahan + lokal→cloud + tombol "Pahami"). (13.5c) Test: `src/test/stockConflict.test.ts` (7 kasus: 5 pure + 2 integrasi store). Total test: **396/396** (35 file).
+- [x] **O-8 — ✅ SELESAI (v4.7)** — Cap tombstone `deletedLocalIds` dinaikkan **200 → 1000** (`DEFAULT_TOMBSTONE_CAP` di storagePrune; store transaksi sudah IndexedDB sehingga kuota bukan kendala) — anti ghost saat > 200 penghapusan offline sebelum konfirmasi cloud; `pruneConfirmedTombstones` tetap membersihkan id yang sudah terkonfirmasi di tiap loadFromCloud. (13.12)
+- [x] **O-9 — ✅ SELESAI (v4.7)** — PWA offline: `navigateFallback: 'index.html'` + `navigateFallbackAllowlist [/^\/.*$/]` (semua navigasi SPA → app shell yang di-precache = **halaman fallback offline** — plugin versi ini tidak mendukung `offlineFallback` khusus, index.html precache berfungsi sebagai gantinya; banner offline O-4/O-6 tampil di dalamnya) + **runtimeCaching NetworkFirst** untuk aset same-origin (cache `same-origin-assets`, timeout 5 dtk, 30 hari; Supabase API cross-origin TIDAK dicache). **Build terverifikasi**: `npm run build` sukses — sw.js memuat `NavigationRoute`/`createHandlerBoundToURL` (navigate fallback) + cache `same-origin-assets`. (13.9)
+- [x] **O-10 — ✅ SELESAI (v4.7)** — (a) **UI flush manual lebih aman**: `alert()`/`window.confirm()` diganti — hasil flush → **toast** (sukses/tersisa/offline/failed→modal), hapus failed ops → **ConfirmDialog** dengan pesan dampak jelas (data tidak akan terkirim lagi), retry failed ops → langsung (non-destruktif) + toast. (b) **Urutan antrean kronologis**: `flushQueue` kini sort **timestamp** dulu (urutan kejadian nyata antar entitas — mis. cash movement refund setelah transaksi induknya, bukan didahulukan karena action `insert`), tie-break action order hanya untuk timestamp sama. (13.10, 13.11) Test: `offlineQueueFailed.test.ts` +1 (urutan kronologis — calls = [transactions, cash_movements] bukan [insert dulu]). Total test: **397/397** (35 file).
+
+---
+
 ## ✅ YANG SUDAH BENAR (jangan diubah)
 
 - **Atomic Engine**: rollback engine, snapshot resep/HPP permanen, error isolation printing, validasi all-or-nothing — solid untuk alur normal.
@@ -795,6 +889,7 @@
 8. **Prioritas 10 (Mode Blind Opname & PIN)**: 10.1 (kritis — kebocoran mode buta), 10.2 (role-gate PIN + identitas approver), 10.3 (alasan wajib staff), 10.4 (clamp stok aktual), 10.5 (catatan desain ambang PIN) **SELESAI (v4.7) — Prioritas 10 tuntas**.
 9. **Prioritas 11 (Celah Spesifikasi & Arah Komersialisasi)**: terdokumentasi (v4.7) — 6 celah (WhatsApp marketing, Google Drive, QRIS gateway, multi-outlet, RLS JWT, diskon per item) + P0/P1/P2. Eksekusi: **P0 selesai 3/4** — P0.1 laporan PPN ✅, P0.2 refund ✅, P0.4 struk digital ✅; tersisa **P0.3 (role Owner)** → P1 bertahap → P2; arah komersialisasi (1 outlet vs SaaS) menentukan prioritas P1.
 10. **Prioritas 12 (Audit Promo & Manajemen Data)**: terdokumentasi (v4.7) — **MANAJEMEN DATA TUNTAS ✅** (12.1.1–12.1.5 + P-A1) + **P-A2 ✅** (scope `menu` + validasi, 17 test) + **P-A3 ✅** (laporan performa promo, 15 test + mapping) + **P-A4 ✅** (stacking/eksklusif, 13 test) + **P-A5 ✅** (BOGO & min-qty, 21 test) + **P-A6 ✅** (batas per pelanggan, 10 test) + **P-A7 ✅** (nama promo di struk, 8 test) + **P-A8 ✅** (poin loyalty earn+redeem, 18 test). **SELURUH PRIORITAS 12 TUNTAS ✅** (Manajemen Data + Promo P-A1–P-A8) — angka test terkini **370/370**.
+11. **Prioritas 13 (Audit Mode Offline)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — O-1 ✅ (queue → IndexedDB) + O-2 ✅ (retry berkala 30 dtk + visibilitychange) + O-3 ✅ (failed-ops list + badge + modal + audit log) + O-4 ✅ (banner global) + O-5 ✅ (badge "Belum Sync" transaksi) + O-6 ✅ (banner cold start + dokumentasi batasan) + O-7 ✅ (deteksi konflik stok) + O-8 ✅ (tombstone cap 1000) + O-9 ✅ (PWA navigateFallback + NetworkFirst) + O-10 ✅ (UI konfirmasi aman + urutan antrean kronologis) — angka test **397/397** (35 file) + build sukses.
 
 ---
 

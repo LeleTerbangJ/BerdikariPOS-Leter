@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { idbStorage } from '../utils/idbStorage';
-import { pruneTransactionsForStorage, filterTombstoned, pruneConfirmedTombstones } from '../utils/storagePrune';
+import { pruneTransactionsForStorage, filterTombstoned, pruneConfirmedTombstones, DEFAULT_TOMBSTONE_CAP } from '../utils/storagePrune';
 import type { Transaction, KitchenStatus, TxStatus } from '../types';
 
 // v4.1 TO DO 3.1/3.2: predicate tunggal pesanan pending — satu sumber kebenaran agar
@@ -27,6 +27,10 @@ interface TransactionState {
   lastKdsClearTime: string | null;
   // v4.5 TO DO 6.5: tombstone ID transaksi yang dihapus/rollback lokal — cegah re-hidrasi dari cloud (ghost)
   deletedLocalIds: string[];
+  // v4.7 TO DO 13.7 (O-5): id transaksi yang terkonfirmasi ada di cloud (badge "Belum Sync")
+  // TIDAK dipersist — dibangun ulang dari cloud tiap boot (pola cashMovementStore).
+  confirmedSyncIds: string[];
+  markTransactionConfirmed: (id: string) => void;
   addTransaction: (tx: Transaction) => void;
   updateKitchenStatus: (id: string, status: KitchenStatus) => void;
   updateTxStatus: (id: string, status: TxStatus) => void;
@@ -58,6 +62,14 @@ export const useTransactionStore = create<TransactionState>()(
       lastQueueDate: null,
       lastKdsClearTime: null,
       deletedLocalIds: [],
+      confirmedSyncIds: [],
+
+      markTransactionConfirmed: (id) => {
+        set((s) => {
+          if (s.confirmedSyncIds.includes(id)) return s;
+          return { confirmedSyncIds: [...s.confirmedSyncIds, id] };
+        });
+      },
 
       getNextQueueNumber: async () => {
         const today = getTodayDateStr();
@@ -92,6 +104,11 @@ export const useTransactionStore = create<TransactionState>()(
         }
 
         // Fallback to local calculation (offline-first)
+        // v4.7 TO DO 13.6 (O-6, batasan terdokumentasi): dua device OFFLINE bisa memberi
+        // nomor antrean yang sama (tanpa otoritas pusat). Setelah sync, `loadFromCloud`
+        // mendeteksi & menormalkan nextQueueNumber dari max gabungan; duplikat pada
+        // transaksi yang sudah terlanjur dibuat tetap mungkin (label #N kembar) —
+        // mitigasi penuh (alokasi range per device / renumber) di TO DO 13.6.
         const todayTxs = get().transactions.filter(
           (t) => t.date.startsWith(today) && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
         );
@@ -100,7 +117,10 @@ export const useTransactionStore = create<TransactionState>()(
       },
 
       addTransaction: (tx) => {
-        syncTransaction(tx); // Cloud sync
+        // v4.7 TO DO 13.7 (O-5): konfirmasi saat benar-benar sampai cloud (badge "Belum Sync" hilang)
+        void syncTransaction(tx).then((ok) => {
+          if (ok) get().markTransactionConfirmed(tx.id);
+        });
         set((s) => {
           const today = getTodayDateStr();
           const filteredExisting = s.transactions.filter((t) => t.id !== tx.id);
@@ -154,9 +174,11 @@ export const useTransactionStore = create<TransactionState>()(
         set((s) => ({
           transactions: s.transactions.filter((t) => t.id !== id),
           // v4.5 TO DO 6.5: tombstone anti-ghost — cegah re-hidrasi dari cloud selama
-          // penghapusan cloud belum dikonfirmasi (offline/queue). Cap 200 agar tidak membengkak;
-          // tombstones dibersihkan otomatis di loadFromCloud saat id sudah hilang dari cloud.
-          deletedLocalIds: [...s.deletedLocalIds, id].slice(-200),
+          // penghapusan cloud belum dikonfirmasi (offline/queue). v4.7 TO DO 13.12 (O-8):
+          // cap dinaikkan (store transaksi IndexedDB → kuota besar); tombstones dibersihkan
+          // otomatis di loadFromCloud saat id sudah hilang dari cloud (pruneConfirmedTombstones).
+          deletedLocalIds: [...s.deletedLocalIds, id].slice(-DEFAULT_TOMBSTONE_CAP),
+          confirmedSyncIds: s.confirmedSyncIds.filter((x) => x !== id),
         }));
       },
 
@@ -259,11 +281,15 @@ export const useTransactionStore = create<TransactionState>()(
           const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
           const newNextQueue = Math.max(s.nextQueueNumber, maxQueue + 1);
 
+          // v4.7 TO DO 13.7 (O-5): id yang ada di cloud terkonfirmasi (badge "Belum Sync" hilang)
+          const confirmed = new Set(s.confirmedSyncIds);
+          cloudTxFiltered.forEach((t) => confirmed.add(t.id));
           return {
             transactions: merged,
             nextQueueNumber: newNextQueue,
             lastQueueDate: today,
             deletedLocalIds: remainingTombstones,
+            confirmedSyncIds: Array.from(confirmed),
           };
         });
       },

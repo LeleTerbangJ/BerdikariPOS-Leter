@@ -11,11 +11,17 @@ import { syncInventoryItem, syncInventoryStock, deleteInventoryCloud, fetchInven
 import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
 import { findNegativeStocksAfterDeduction, type NegativeStockAlert } from '../utils/stockCheck';
 import { planCsvImportRow, type ParsedImportRow } from '../utils/stockImport';
+// v4.7 TO DO 13.5 (O-7): deteksi potensi konflik stok lintas device saat sync
+import { detectStockConflicts, type StockConflict } from '../utils/stockConflict';
 
 interface InventoryState {
   items: InventoryItem[];
   // v4.7 TO DO 8.4: item yang jadi negatif oleh deduksi terakhir (transient — untuk warning UI/test)
   lastNegativeStockAlerts: NegativeStockAlert[];
+  // v4.7 TO DO 13.5 (O-7): potensi konflik stok lintas device (cloud > lokal saat merge).
+  // Tidak dipersist — dibangun ulang tiap loadFromCloud; dikosongkan via "Pahami" di UI.
+  stockConflicts: StockConflict[];
+  clearStockConflicts: () => void;
   addItem: (item: InventoryItem, options?: { skipSync?: boolean }) => void;
   updateItem: (id: string, data: Partial<InventoryItem>, options?: { skipLog?: boolean; skipSync?: boolean }) => void;
   deleteItem: (id: string) => void;
@@ -34,6 +40,9 @@ export const useInventoryStore = create<InventoryState>()(
     (set, get) => ({
       items: seedInventory,
       lastNegativeStockAlerts: [],
+      stockConflicts: [],
+
+      clearStockConflicts: () => set({ stockConflicts: [] }),
 
       addItem: (item, options) => {
         if (!options?.skipSync) syncInventoryItem(item); // Cloud sync
@@ -234,6 +243,8 @@ export const useInventoryStore = create<InventoryState>()(
         if (cloudItems !== null) {
           if (cloudItems.length > 0) {
             set((s) => {
+              // v4.7 TO DO 13.5 (O-7): snapshot stok lokal SEBELUM merge untuk deteksi konflik
+              const localBefore = new Map(s.items.map((i) => [i.id, i]));
               const cloudIds = new Set(cloudItems.map((i) => i.id));
               let localOnly: InventoryItem[];
               if (fullSync) {
@@ -242,7 +253,15 @@ export const useInventoryStore = create<InventoryState>()(
               } else {
                 localOnly = s.items.filter((i) => !cloudIds.has(i.id));
               }
-              return { items: [...cloudItems, ...localOnly] };
+              const detected = detectStockConflicts(localBefore, cloudItems);
+              // Gabungkan dengan konflik lama (by id) — "Pahami" mengosongkan; konflik baru
+              // yang sama akan muncul lagi di sync berikutnya.
+              const conflictsById = new Map(s.stockConflicts.map((c) => [c.ingredientId, c]));
+              for (const c of detected) conflictsById.set(c.ingredientId, c);
+              return {
+                items: [...cloudItems, ...localOnly],
+                stockConflicts: Array.from(conflictsById.values()).sort((a, b) => b.diff - a.diff),
+              };
             });
           } else if (isFactoryResetSeedSkip()) {
             // v4.7 TO DO 12.1.3: setelah Factory Reset, jangan push stok demo lokal ke
@@ -258,6 +277,11 @@ export const useInventoryStore = create<InventoryState>()(
         }
       },
     }),
-    { name: 'rempah-inventory', storage: createJSONStorage(() => safeStorage) }
+    {
+      name: 'rempah-inventory',
+      storage: createJSONStorage(() => safeStorage),
+      // v4.7 TO DO 13.5 (O-7): stockConflicts transient TIDAK dipersist (dibangun ulang tiap sync)
+      partialize: (s) => ({ items: s.items, lastNegativeStockAlerts: s.lastNegativeStockAlerts }),
+    }
   )
 );

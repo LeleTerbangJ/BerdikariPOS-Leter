@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, hingga sistem **Promo & Loyalty lengkap**). Validasi: build produksi sukses, **370/370 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, hingga **mode offline andal**). Validasi: build produksi sukses, **397/397 tes otomatis lolos**.
 
 ---
 
@@ -29,6 +29,20 @@ Checksum anti-tamper, restore mode Merge/Replace, foto menu & struktur bundle ik
 
 ### 6. Stock Opname Aman
 Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih besar **hanya oleh Manager** (identitas + waktu tercatat), alasan penyesuaian wajib, stok negatif/NaN otomatis dikunci ke 0.
+
+### 7. Kasir Lebih Cepat (UX POS)
+- **Pencarian pelanggan di keranjang** — dropdown pelanggan kini bisa dicari dengan mengetik (nama / nomor HP / email); `Enter` memilih hasil pertama, `Escape` menutup, opsi "Lepaskan pelanggan".
+- **Tambah pelanggan langsung dari POS** — tombol shortcut **"Baru"** di samping pemilih pelanggan → form singkat (nama/HP/email/catatan) → pelanggan **langsung terpilih** (diskon loyalty, poin, dan promo per-pelanggan langsung aktif) + tercatat di audit log — kasir tidak perlu pindah ke halaman Pelanggan.
+
+### 8. Mode Offline Andal — tetap jalan walau internet putus
+- **Antrean offline di IndexedDB** — transaksi besar tidak hilang saat kuota lokal penuh; data lama otomatis dimigrasikan.
+- **Retry otomatis tiap 30 detik** + saat tab kembali terlihat; error jaringan sementara (mis. Wi-Fi tanpa internet) tidak menghabiskan batas percobaan.
+- **Daftar operasi gagal** — tidak ada data yang di-drop diam-diam: badge merah → modal daftar berisi alasan error → tombol **Coba Lagi** / **Hapus** (dengan konfirmasi) + tercatat di audit log.
+- **Banner status global** di semua perangkat & role (termasuk mobile): "📡 Offline", "⏳ N belum sinkron" (klik = kirim sekarang), "⚠️ N gagal".
+- **Badge "Belum Sync" per transaksi** di Riwayat Transaksi — kasir langsung tahu transaksi mana yang belum terkirim; hilang otomatis saat tersinkron.
+- **Peringatan perangkat baru** (cold start) — membedakan "belum pernah online" vs "koneksi putus" — dan **deteksi konflik stok** lintas device (banner kuning di Inventaris bila stok lokal tertimpa data perangkat lain).
+- **PWA offline** — aplikasi tetap terbuka & bisa dipakai tanpa internet (app shell precache + NetworkFirst).
+- Urutan sinkron **kronologis** — konsistensi antar tabel terjaga (mis. Rekap Kas selalu mengikuti transaksi induknya).
 
 ---
 
@@ -94,8 +108,18 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **370/370 test lolos** (31 file)
+- `npx vitest run` → **397/397 test lolos** (35 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA)
+- **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
+
+---
+
+## 🛠️ Apa artinya untuk operasional sehari-hari
+
+- **Internet putus bukan lagi alasan berhenti jualan** — kasir tetap mencatat pesanan, Rekap Kas, dan pesanan gantung; semuanya tersinkron otomatis saat koneksi kembali (tanpa tombol manual, tanpa duplikat).
+- **Aplikasi tidak "hilang" saat offline** — tetap terbuka & bisa dipakai (PWA), dan data tidak hilang walau aplikasi ditutup di tengah offline (IndexedDB).
+- **Tidak ada lagi data raib diam-diam** — setiap operasi yang gagal tersinkron selalu terlihat (badge/banner + daftar dengan alasan) dan bisa dicoba lagi.
+- **Panduan verifikasi**: [`TESTING-OFFLINE.md`](./TESTING-OFFLINE.md) — 6 tahap uji (≈ 30–45 menit) untuk memastikan semua perilaku di atas bekerja di perangkat Anda.
 
 ---
 

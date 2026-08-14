@@ -47,7 +47,8 @@ import {
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Transactions() {
-  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta } = useTransactionStore();
+  // v4.7 TO DO 13.7 (O-5): confirmedSyncIds — badge "Belum Sync" per transaksi
+  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta, confirmedSyncIds } = useTransactionStore();
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const { menus } = useMenuStore();
@@ -86,13 +87,25 @@ export default function Transactions() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
-    const channel = subscribeToTransactions(() => {
+    const refreshFromCloud = (fullSync = false) => {
       fetchTransactionsFromCloud().then((cloudTx) => {
-        if (cloudTx) loadFromCloud(cloudTx, true); // fullSync: cloud is authoritative
+        if (cloudTx) loadFromCloud(cloudTx, fullSync);
       });
+    };
+
+    const channel = subscribeToTransactions(() => {
+      refreshFromCloud(true); // fullSync: cloud is authoritative
     });
 
-    return () => { if (channel) unsubscribeChannel(channel); };
+    // v4.7 TO DO 13.7 (O-5): saat koneksi pulih, tarik cloud → confirmedSyncIds diperbarui
+    // (badge "Belum Sync" hilang untuk transaksi yang baru saja ter-flush dari offline queue)
+    const handleOnline = () => refreshFromCloud(true);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      if (channel) unsubscribeChannel(channel);
+      window.removeEventListener('online', handleOnline);
+    };
   }, []);
 
   // BUG-03 fix: Filter transactions dynamically based on Date Filter, Status Filter & Search Query
@@ -436,6 +449,15 @@ export default function Transactions() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📋 Riwayat Transaksi</h1>
+        {/* v4.7 TO DO 13.7 (O-5): hitung transaksi yang belum terkonfirmasi sync */}
+        {(() => {
+          const unsynced = filteredTx.filter((t) => !confirmedSyncIds.includes(t.id)).length;
+          return unsynced > 0 ? (
+            <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 whitespace-nowrap">
+              <Clock size={12} /> ⚠️ {unsynced} belum sync
+            </span>
+          ) : null;
+        })()}
       </div>
 
       {/* Summary Cards */}
@@ -605,6 +627,15 @@ export default function Transactions() {
                     {/* v4.7 TO DO 11.2 (P0.2): badge transaksi yang sudah di-refund */}
                     {tx.refunded && (
                       <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"><RotateCcw size={12} /> Refund</span>
+                    )}
+                    {/* v4.7 TO DO 13.7 (O-5): badge "Belum Sync" per transaksi */}
+                    {!confirmedSyncIds.includes(tx.id) && (
+                      <span
+                        className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"
+                        title="Transaksi ini belum tersinkron ke cloud — akan dikirim otomatis saat online"
+                      >
+                        <Clock size={12} /> Belum Sync
+                      </span>
                     )}
                   </div>
                 </div>

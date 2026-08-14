@@ -12,6 +12,11 @@ export const DEFAULT_TRANSACTION_KEEP = 300; // maksimum transaksi tersimpan lok
 export const DEFAULT_TRANSACTION_TTL_DAYS = 90; // jendela waktu transaksi tersimpan lokal
 export const DEFAULT_AUDIT_LOG_CAP = 2000; // cap audit log lokal
 export const DEFAULT_STOCK_LOG_CAP = 500; // cap stock log lokal
+// v4.7 TO DO 13.12 (O-8): cap tombstone transaksi — store transaksi sudah IndexedDB
+// (kuota besar), jadi cap dinaikkan 200 → 1000 (anti ghost saat > 200 penghapusan
+// offline sebelum konfirmasi cloud); pruneConfirmedTombstones tetap membersihkan
+// yang sudah terkonfirmasi di tiap loadFromCloud.
+export const DEFAULT_TOMBSTONE_CAP = 1000;
 
 const isPendingTx = (t: Transaction): boolean =>
   t.txStatus === 'Pending' || t.isPending === true;

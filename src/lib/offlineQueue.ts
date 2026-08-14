@@ -10,6 +10,10 @@
  */
 
 import { supabase, isSupabaseConfigured } from './supabase';
+// v4.7 TO DO 13.1 (O-1): antrean offline dipersist ke IndexedDB (kuota besar) dengan
+// migrasi one-time dari localStorage legacy + fallback safeStorage bila IDB tidak tersedia.
+import { idbGet, idbSet, idbRemove } from '../utils/idbStorage';
+import { safeStorage } from '../utils/safeStorage';
 
 export type QueueOperation = {
   id: string;
@@ -28,23 +32,207 @@ const MAX_RETRIES = 5;
 // QUEUE MANAGEMENT
 // ============================================================
 
+// Mirror in-memory — source of truth SINKRON untuk semua pembaca (getQueue/addToQueue/
+// flushQueue). Persistensi (IndexedDB primary, localStorage fallback) bersifat async;
+// kegagalan persist TIDAK pernah melempar ke pemanggil (data tetap hidup di memory
+// & di-flush ulang saat online).
+let memoryQueue: QueueOperation[] | null = null;
+// Guard race boot: sebelum hydrateQueue selesai, saveQueue TIDAK menulis ke penyimpanan
+// (jika tidak, antrean tersimpan dari sesi sebelumnya bisa ditimpa oleh op yang baru
+// ditambahkan sebelum hidrasi). hydrateQueue yang menggabungkan & mempersist hasil akhir.
+let hydrated = false;
+
 function getQueue(): QueueOperation[] {
-  try {
-    const raw = localStorage.getItem(QUEUE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return memoryQueue ?? [];
 }
 
 function saveQueue(queue: QueueOperation[]) {
+  memoryQueue = queue;
+  if (!hydrated) return; // defer persist ke hydrateQueue (hindari clobber antrean tersimpan)
+  let raw: string;
   try {
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
-  } catch (e) {
-    // v4.5 TO DO 6.1: jangan lempar QuotaExceededError ke pemanggil (smartUpsert/sync)
-    // — antrean tetap hidup di memory; operasi cloud akan di-flush ulang saat online.
-    console.warn('[OfflineQueue] Gagal menyimpan antrean ke localStorage (kemungkinan kuota penuh):', e);
+    raw = JSON.stringify(queue);
+  } catch {
+    return;
   }
+  // Primary: IndexedDB (kuota jauh lebih besar dari localStorage — payload transaksi
+  // besar tidak lagi hilang saat kuota localStorage penuh).
+  void idbSet(QUEUE_KEY, raw).then((ok) => {
+    if (ok) {
+      // IDB sukses → bebaskan kuota localStorage dari salinan legacy bila ada.
+      safeStorage.removeItem(QUEUE_KEY);
+    } else {
+      // IDB tidak tersedia (private mode / SSR / test) → fallback safeStorage (anti-throw).
+      try {
+        safeStorage.setItem(QUEUE_KEY, raw);
+      } catch (e) {
+        console.warn('[OfflineQueue] Gagal menyimpan antrean (IDB & localStorage):', e);
+      }
+    }
+  });
+}
+
+/**
+ * Hidrasi antrean dari penyimpanan persisten (dipanggil sekali saat boot).
+ * - Primary: IndexedDB; fallback: localStorage (legacy / saat IDB tidak tersedia).
+ * - Migrasi one-time: antrean lama di localStorage dipindahkan ke IndexedDB.
+ * - Aman terhadap race boot: op yang ditambahkan sebelum hidrasi selesai TIDAK ditimpa
+ *   (digabung, id yang sama dimenangkan oleh memori).
+ */
+export async function hydrateQueue(): Promise<QueueOperation[]> {
+  let raw: string | null = null;
+  try {
+    raw = await idbGet(QUEUE_KEY);
+  } catch {
+    raw = null;
+  }
+  if (raw === null) {
+    // Migrasi / fallback: antrean legacy di localStorage
+    try {
+      raw = safeStorage.getItem(QUEUE_KEY);
+    } catch {
+      raw = null;
+    }
+  }
+  let stored: QueueOperation[] = [];
+  if (raw) {
+    try {
+      stored = JSON.parse(raw);
+    } catch {
+      stored = [];
+    }
+  }
+  if (!Array.isArray(stored)) stored = [];
+
+  // Race boot: op yang ditambahkan sebelum hidrasi selesai tidak boleh ditimpa.
+  if (memoryQueue !== null && memoryQueue.length > 0) {
+    const memIds = new Set(memoryQueue.map((o) => o.id));
+    stored = [...memoryQueue, ...stored.filter((o) => !memIds.has(o.id))];
+  }
+  memoryQueue = stored;
+  hydrated = true;
+
+  // Muat daftar op gagal permanen (O-3) — IDB primary, fallback localStorage.
+  let failedRaw: string | null = null;
+  try {
+    failedRaw = await idbGet(FAILED_KEY);
+  } catch {
+    failedRaw = null;
+  }
+  if (failedRaw === null) {
+    try {
+      failedRaw = safeStorage.getItem(FAILED_KEY);
+    } catch {
+      failedRaw = null;
+    }
+  }
+  let failedStored: FailedQueueOperation[] = [];
+  if (failedRaw) {
+    try {
+      failedStored = JSON.parse(failedRaw);
+    } catch {
+      failedStored = [];
+    }
+  }
+  if (!Array.isArray(failedStored)) failedStored = [];
+  memoryFailed = failedStored;
+  updateFailedCount();
+
+  // Persist hasil gabungan + bebaskan localStorage bila IDB menerimanya.
+  const rawNow = JSON.stringify(stored);
+  void idbSet(QUEUE_KEY, rawNow).then((ok) => {
+    if (ok) safeStorage.removeItem(QUEUE_KEY);
+  });
+  const failedRawNow = JSON.stringify(failedStored);
+  void idbSet(FAILED_KEY, failedRawNow).then((ok) => {
+    if (ok) safeStorage.removeItem(FAILED_KEY);
+  });
+
+  updateQueueCount();
+  return stored;
+}
+
+// ============================================================
+// FAILED OPERATIONS (v4.7 TO DO 13.2 — O-3: jangan drop diam-diam)
+// ============================================================
+
+/** Op yang gagal permanen setelah MAX_RETRIES — bisa di-retry manual / dihapus sadar. */
+export type FailedQueueOperation = QueueOperation & {
+  reason: string;
+  lastError: string;
+  failedAt: string;
+};
+
+const FAILED_KEY = 'rempah-offline-queue-failed';
+
+let memoryFailed: FailedQueueOperation[] = [];
+let onFailedChange: ((count: number) => void) | null = null;
+
+export function setFailedOpsListener(listener: (count: number) => void) {
+  onFailedChange = listener;
+}
+
+function updateFailedCount() {
+  if (onFailedChange) onFailedChange(memoryFailed.length);
+}
+
+export function getFailedOps(): FailedQueueOperation[] {
+  return memoryFailed;
+}
+
+export function getFailedOpsCount(): number {
+  return memoryFailed.length;
+}
+
+function saveFailedOps(list: FailedQueueOperation[]) {
+  memoryFailed = list;
+  updateFailedCount();
+  if (!hydrated) return; // defer persist ke hydrateQueue (pola sama dengan queue)
+  let raw: string;
+  try {
+    raw = JSON.stringify(list);
+  } catch {
+    return;
+  }
+  void idbSet(FAILED_KEY, raw).then((ok) => {
+    if (ok) {
+      safeStorage.removeItem(FAILED_KEY);
+    } else {
+      try {
+        safeStorage.setItem(FAILED_KEY, raw);
+      } catch (e) {
+        console.warn('[OfflineQueue] Gagal menyimpan daftar gagal (IDB & localStorage):', e);
+      }
+    }
+  });
+}
+
+/**
+ * Pindahkan semua op yang gagal permanen kembali ke antrean aktif (retry manual).
+ * Return jumlah op yang dihidupkan kembali.
+ */
+export async function retryFailedOps(): Promise<number> {
+  const failed = memoryFailed;
+  if (failed.length === 0) return 0;
+  const queue = getQueue();
+  const existingIds = new Set(queue.map((o) => o.id));
+  const revived = failed
+    .map((f) => {
+      const { reason: _reason, lastError: _lastError, failedAt: _failedAt, ...op } = f;
+      return { ...op, retries: 0 };
+    })
+    .filter((o) => !existingIds.has(o.id));
+  saveQueue([...queue, ...revived]);
+  clearFailedOps();
+  return revived.length;
+}
+
+/** Hapus daftar op yang gagal permanen (konfirmasi user di UI). */
+export function clearFailedOps() {
+  memoryFailed = [];
+  updateFailedCount();
+  void idbRemove(FAILED_KEY);
+  safeStorage.removeItem(FAILED_KEY);
 }
 
 export function addToQueue(op: Omit<QueueOperation, 'id' | 'timestamp' | 'retries'>) {
@@ -98,22 +286,45 @@ export function getQueueLength(): number {
 
 let isFlushing = false;
 
-export async function flushQueue(): Promise<{ success: number; failed: number }> {
-  if (!isSupabaseConfigured || isFlushing) return { success: 0, failed: 0 };
+/**
+ * Klasifikasi error transient (jaringan) vs permanen (RLS/constraint/kolom).
+ * Error jaringan TIDAK menaikkan retries — op tetap di antrean dan dicoba lagi oleh
+ * retry berkala (O-2), karena "navigator.onLine" bisa salah (Wi-Fi tanpa internet).
+ */
+function isTransientError(error: any): boolean {
+  if (!error) return false;
+  const msg = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('fetch failed') ||
+    msg.includes('networkerror') ||
+    msg.includes('network request failed') ||
+    msg.includes('load failed') ||
+    msg.includes('socket') ||
+    msg.includes('timeout') ||
+    error instanceof TypeError
+  );
+}
+
+export async function flushQueue(): Promise<{ success: number; failed: number; pending: number }> {
+  if (!isSupabaseConfigured || isFlushing) return { success: 0, failed: 0, pending: getQueue().length };
   
   isFlushing = true;
   const queue = getQueue();
-  if (queue.length === 0) { isFlushing = false; return { success: 0, failed: 0 }; }
+  if (queue.length === 0) { isFlushing = false; return { success: 0, failed: 0, pending: 0 }; }
 
-  // LOGIC-ERR-04 fix: Sort queue to respect dependency ordering
-  // insert → upsert → update → delete ensures parent records exist before child ops
+  // v4.7 TO DO 13.11 (O-10): urut KRONOLOGIS (timestamp) — urutan kejadian nyata antar
+  // entitas dipertahankan (mis. cash movement refund setelah transaksi induknya, bukan
+  // didahulukan karena action 'insert'). Tie-break action order (insert → upsert → update
+  // → delete) hanya untuk timestamp sama (keamanan dependensi parent-before-child).
   const actionOrder: Record<string, number> = { insert: 0, upsert: 1, update: 2, delete: 3 };
   const sortedQueue = [...queue].sort((a, b) => {
+    const timeCmp = a.timestamp.localeCompare(b.timestamp);
+    if (timeCmp !== 0) return timeCmp;
     const orderA = actionOrder[a.action] ?? 1;
     const orderB = actionOrder[b.action] ?? 1;
     if (orderA !== orderB) return orderA - orderB;
-    // Within same action type, preserve chronological order
-    return a.timestamp.localeCompare(b.timestamp);
+    return a.id.localeCompare(b.id);
   });
 
   console.log(`[OfflineQueue] Flushing ${sortedQueue.length} pending operations...`);
@@ -121,6 +332,29 @@ export async function flushQueue(): Promise<{ success: number; failed: number }>
   let success = 0;
   let failed = 0;
   const remaining: QueueOperation[] = [];
+  const newlyFailed: FailedQueueOperation[] = [];
+
+  // O-3: op yang gagal permanen dipindah ke daftar gagal (bukan di-drop diam-diam);
+  // error transient (jaringan) tetap di antrean tanpa menaikkan retries.
+  const failOp = (op: QueueOperation, error: any) => {
+    if (isTransientError(error)) {
+      remaining.push(op);
+      return;
+    }
+    const errMsg = typeof error?.message === 'string' ? error.message : String(error || 'Unknown error');
+    op.retries++;
+    if (op.retries >= MAX_RETRIES) {
+      newlyFailed.push({
+        ...op,
+        reason: `Gagal permanen setelah ${MAX_RETRIES} percobaan`,
+        lastError: errMsg,
+        failedAt: new Date().toISOString(),
+      });
+      failed++;
+    } else {
+      remaining.push(op);
+    }
+  };
 
   for (const op of sortedQueue) {
     try {
@@ -171,35 +405,37 @@ export async function flushQueue(): Promise<{ success: number; failed: number }>
       }
 
       if (error) {
-        op.retries++;
-        if (op.retries < MAX_RETRIES) {
-          remaining.push(op);
-        }
-        failed++;
-        console.warn(`[OfflineQueue] Failed (attempt ${op.retries}):`, op.table, error.message);
+        console.warn(`[OfflineQueue] Failed (attempt ${op.retries + 1}):`, op.table, error.message);
+        failOp(op, error);
       } else {
         success++;
       }
     } catch (e) {
-      op.retries++;
-      if (op.retries < MAX_RETRIES) {
-        remaining.push(op);
-      }
-      failed++;
+      failOp(op, e);
     }
   }
 
+  if (newlyFailed.length > 0) {
+    saveFailedOps([...memoryFailed, ...newlyFailed]);
+  }
   saveQueue(remaining);
   updateQueueCount();
   isFlushing = false;
 
-  console.log(`[OfflineQueue] Done. Success: ${success}, Failed: ${failed}, Remaining: ${remaining.length}`);
-  return { success, failed };
+  console.log(`[OfflineQueue] Done. Success: ${success}, Failed: ${failed}, Remaining: ${remaining.length}, FailedList: ${newlyFailed.length}`);
+  return { success, failed, pending: remaining.length };
 }
 
 export function clearQueue() {
-  saveQueue([]);
+  memoryQueue = [];
+  memoryFailed = [];
   updateQueueCount();
+  updateFailedCount();
+  // Bersihkan kedua lapisan (IDB primary + localStorage legacy/fallback).
+  void idbRemove(QUEUE_KEY);
+  void idbRemove(FAILED_KEY);
+  safeStorage.removeItem(QUEUE_KEY);
+  safeStorage.removeItem(FAILED_KEY);
 }
 
 // ============================================================
@@ -217,9 +453,18 @@ function updateQueueCount() {
   if (onQueueChange) onQueueChange(getQueue().length);
 }
 
-export function initOfflineQueue() {
+// v4.7 TO DO 13.3 (O-2): retry berkala — navigator.onLine bisa salah (Wi-Fi tanpa
+// internet); timer mencoba flush selama masih ada antrean, error transient tidak
+// membakar retries sehingga op tidak pernah di-drop karena jaringan putus.
+const SYNC_RETRY_INTERVAL_MS = 30000;
+
+export async function initOfflineQueue() {
   if (initialized) return;
   initialized = true;
+
+  // Hidrasi antrean dari IndexedDB/localStorage sebelum listener & flush pertama
+  // (antrean dari sesi sebelumnya tidak boleh hilang / tertimpa).
+  await hydrateQueue();
 
   // Flush when coming back online
   window.addEventListener('online', () => {
@@ -230,6 +475,21 @@ export function initOfflineQueue() {
   // Log when going offline
   window.addEventListener('offline', () => {
     console.log('[OfflineQueue] Device went offline. Operations will be queued.');
+  });
+
+  // O-2: retry berkala selama ada antrean (30 detik) — mengatasi "online tapi tanpa
+  // internet" yang tidak memicu event 'online'.
+  window.setInterval(() => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    if (getQueue().length === 0) return;
+    void flushQueue();
+  }, SYNC_RETRY_INTERVAL_MS);
+
+  // O-2: kembali ke tab (visible) dengan antrean tersisa → coba flush segera.
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && getQueue().length > 0) {
+      setTimeout(flushQueue, 500);
+    }
   });
 
   // Try to flush on init (in case there are pending items from last session)

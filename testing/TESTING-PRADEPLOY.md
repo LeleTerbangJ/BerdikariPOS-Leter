@@ -61,7 +61,7 @@ Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DE
 1. **Device 1 (Kasir)** buat data baru:
    - Tambah 1 menu + 1 bahan baku di Inventory (atau ubah harga/stock).
    - Buat **promo** baru (mis. BOGO "Beli 2 Gratis 1") di Promo & Loyalty.
-   - Tambah 1 **pelanggan** baru.
+   - Tambah 1 **pelanggan** baru (bisa langsung dari POS via tombol **"Baru"** di keranjang — tidak perlu ke halaman Pelanggan).
 2. **Device 2 (Dapur/Manager)**: refresh / buka halaman terkait.
    **Hasil yang diharapkan**: ✅ Menu baru, stok, promo, dan pelanggan **muncul di device 2** (tanpa restart berulang).
 3. **Device 2 (Dapur)** proses pesanan → **Device 1 (Kasir)** cek halaman Transaksi.
@@ -78,15 +78,17 @@ Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DE
 
 **Tujuan**: memastikan transaksi tetap jalan saat offline dan tersinkron otomatis saat online.
 
+> 📖 **Uji offline lengkap** (antrean IndexedDB, retry 30 dtk, failed-ops list, badge "Belum Sync" per transaksi, banner offline/cold start, konflik stok, PWA offline): **[`TESTING-OFFLINE.md`](./TESTING-OFFLINE.md)** — tahap A–F. Di bawah ini **smoke test ringkas** (≈ 5 menit) yang cukup untuk verifikasi pra-deploy.
+
 1. **Device 1 (Kasir)**: matikan internet (airplane mode / cabut Wi-Fi).
 2. Buat **transaksi** (Selesai) dan catat **Kas Masuk/Keluar** di Rekap Kas.
-   **Hasil yang diharapkan**: ✅ Transaksi sukses; di halaman Transaksi/Rekap Kas muncul badge **"Belum Sync"** di item baru.
-3. Nyalakan kembali internet → tunggu beberapa detik (auto-retry).
-   **Hasil yang diharapkan**: ✅ Badge "Belum Sync" hilang; di **Device 2** data muncul setelah refresh.
-4. **Uji pesanan gantung**: offline → Simpan Pending → online → resume/lunasi → tidak ada transaksi ganda (idempotency).
-5. Periksa **offline queue** tidak menumpuk: console browser tanpa error berulang setelah online.
+   **Hasil yang diharapkan**: ✅ Transaksi sukses; di halaman Transaksi/Rekap Kas muncul badge **"Belum Sync"** di item baru; banner **"Offline — data tersimpan lokal, akan tersinkron otomatis"** tampil di atas konten (semua device/role, termasuk mobile).
+3. Nyalakan kembali internet → tunggu **≤ 30–40 detik** (auto-retry berkala — tidak perlu tombol manual).
+   **Hasil yang diharapkan**: ✅ Badge "Belum Sync" & banner hilang otomatis; di **Device 2** data muncul setelah refresh.
+4. **Uji pesanan gantung**: offline → Simpan Pending → **tutup aplikasi** → buka lagi (offline) → online → resume/lunasi → tidak ada transaksi ganda (idempotency) — sekaligus membuktikan antrean tersimpan di IndexedDB (tidak hilang saat aplikasi ditutup).
+5. Periksa **offline queue** tidak menumpuk: console browser tanpa error berulang setelah online; bila ada operasi gagal permanen, badge merah `N!` + banner "N operasi gagal sinkron" muncul (bukan data hilang diam-diam) — detail pemulihannya di `TESTING-OFFLINE.md` tahap C.
 
-**Hasil akhir D**: ✅ Transaksi & Rekap Kas offline tersinkron otomatis, tanpa duplikat.
+**Hasil akhir D**: ✅ Transaksi & Rekap Kas offline tersinkron otomatis, tanpa duplikat; antrean bertahan saat aplikasi ditutup.
 
 ---
 

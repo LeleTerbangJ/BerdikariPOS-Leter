@@ -28,7 +28,7 @@ Panduan ini menguji fitur **Struk Digital (WhatsApp / Email)** yang ditambahkan 
 
 **Tujuan**: struk terkirim ke WA pelanggan dengan isi lengkap, kontak terisi otomatis dari CRM, dan tercatat di Audit Log.
 
-1. Login sebagai **`kasir`** → buat **1 transaksi** (pilih pelanggan **Budi** di checkout) → selesaikan pembayaran.
+1. Login sebagai **`kasir`** → buat **1 transaksi** (pilih pelanggan **Budi** di checkout — ketik `Budi` di kolom "Cari pelanggan", atau pakai tombol **"Baru"** untuk pelanggan baru) → selesaikan pembayaran.
 2. Buka menu **Transaksi** → cari transaksi tadi.
 3. Klik tombol **💬 Struk Digital** (hijau, di samping "Cetak Ulang").
 
@@ -82,7 +82,7 @@ Panduan ini menguji fitur **Struk Digital (WhatsApp / Email)** yang ditambahkan 
 **Tujuan**: setelah checkout sukses, WhatsApp terbuka dengan struk terisi otomatis tanpa klik tambahan.
 
 1. **Settings** → tab **General** → bagian **Pengaturan Format & Preview Struk** → aktifkan toggle **"Kirim Struk Digital Otomatis via WhatsApp"** (kotak hijau).
-2. Login sebagai **`kasir`** → di **POS**, pilih pelanggan **Budi** (punya nomor valid) → tambah menu → **Bayar** (Cash) → konfirmasi checkout.
+2. Login sebagai **`kasir`** → di **POS**, pilih pelanggan **Budi** (punya nomor valid — ketik `Budi` di kolom "Cari pelanggan") → tambah menu → **Bayar** (Cash) → konfirmasi checkout.
 
 **Hasil yang diharapkan:**
 - ✅ Setelah toast **"Transaksi #<no> berhasil! 🎉"**, jendela WhatsApp **otomatis terbuka** dengan **struk terisi lengkap** dan penerima `6281234567890`.

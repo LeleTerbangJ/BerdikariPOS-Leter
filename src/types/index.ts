@@ -460,7 +460,9 @@ export type AuditAction =
   | 'update_settings' | 'create_promo' | 'update_promo' | 'delete_promo'
   | 'create_customer' | 'update_customer' | 'delete_customer'
   | 'update_cash_movement' | 'delete_cash_movement'
-  | 'stock_opname';
+  | 'stock_opname'
+  // v4.7 TO DO 13.2 (O-3): operasi sync yang gagal permanen (retry / dihapus dari daftar)
+  | 'sync_failed' | 'sync_retry' | 'sync_failed_cleared';
 
 export interface AuditLogEntry {
   id: string;
