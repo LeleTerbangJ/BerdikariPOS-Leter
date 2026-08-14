@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useShiftStore } from '../store/shiftStore';
+import { useToastStore } from '../store/toastStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { connectBluetoothPrinter, disconnectBluetoothPrinter, isBluetoothConnected, CASHIER_PRINTER_ID, getBluetoothStatus, getDuplicateDeviceInfo, testPrintBluetooth } from '../utils/printer';
 import { resetToDefault, clearOperationalData, factoryReset, type ResetActor } from '../utils/dataManager';
@@ -42,6 +43,8 @@ export default function SettingsPage() {
   const { settings, updateSettings } = useSettingsStore();
   const { addLog } = useAuditLogStore();
   const { shifts } = useShiftStore();
+  // TO DO 14.6: ganti alert() pada alur printer dengan toast (konsisten dengan jalur lain)
+  const addToast = useToastStore((s) => s.addToast);
 
   // v4.7 TO DO 12.1.3 / P-A1: backup otomatis sebelum aksi reset (default ON)
   const [backupBeforeReset, setBackupBeforeReset] = useState(true);
@@ -896,6 +899,17 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* TO DO 14.5: fallback eksplisit — bila Bluetooth gagal, cetak lewat dialog browser */}
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-amber-800 dark:text-amber-300">
+                <input
+                  type="checkbox"
+                  checked={settings.cashierFallbackBrowser !== false}
+                  onChange={(e) => updateSettings({ cashierFallbackBrowser: e.target.checked })}
+                  className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                />
+                <span>Fallback Browser Print bila Bluetooth gagal</span>
+              </label>
+
               {/* Actions */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -906,7 +920,7 @@ export default function SettingsPage() {
                         cashierBluetoothDeviceId: result.deviceId,
                         cashierBluetoothDeviceName: result.deviceName,
                       });
-                      alert(`Printer Kasir berhasil terhubung ke "${result.deviceName}"!`);
+                      addToast(`Printer Kasir berhasil terhubung ke "${result.deviceName}"!`, 'success');
                     }
                   }}
                   className="btn-primary text-xs"
@@ -919,9 +933,9 @@ export default function SettingsPage() {
                       onClick={async () => {
                         try {
                           await testPrintBluetooth(CASHIER_PRINTER_ID, 'Printer Kasir', 'Kasir', settings.printerWidth);
-                          alert('Test Print Kasir berhasil!');
+                          addToast('Test Print Kasir berhasil!', 'success');
                         } catch (err: any) {
-                          alert(`Test Print gagal: ${err.message}`);
+                          addToast(`Test Print gagal: ${err.message}`, 'error');
                         }
                       }}
                       className="btn-secondary text-xs"
@@ -929,7 +943,7 @@ export default function SettingsPage() {
                       🖨️ Test Print
                     </button>
                     <button
-                      onClick={() => { disconnectBluetoothPrinter(CASHIER_PRINTER_ID); alert('Printer Kasir diputus.'); }}
+                      onClick={() => { disconnectBluetoothPrinter(CASHIER_PRINTER_ID); addToast('Printer Kasir diputus.', 'info'); }}
                       className="btn-secondary text-xs text-red-600"
                     >
                       Putuskan
@@ -1100,6 +1114,21 @@ export default function SettingsPage() {
                           </p>
                         </div>
 
+                        {/* TO DO 14.5: fallback eksplisit per printer dapur — browser print bila Bluetooth gagal */}
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-600 dark:text-slate-400">
+                          <input
+                            type="checkbox"
+                            checked={kp.fallbackBrowser !== false}
+                            onChange={(e) => {
+                              const newPrinters = [...(settings.kitchenPrinters || [])];
+                              newPrinters[idx] = { ...kp, fallbackBrowser: e.target.checked };
+                              updateSettings({ kitchenPrinters: newPrinters });
+                            }}
+                            className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <span>Fallback Browser Print bila gagal</span>
+                        </label>
+
                         {/* Bluetooth Actions */}
                         <div className="flex flex-wrap gap-1.5">
                           <button
@@ -1109,7 +1138,7 @@ export default function SettingsPage() {
                                 // Check duplicate device
                                 const duplicate = getDuplicateDeviceInfo(result.deviceId!, kp.id, settings);
                                 if (duplicate) {
-                                  alert(`⚠️ Perhatian: Device "${result.deviceName}" juga digunakan oleh "${duplicate.printerName}". Dua printer mengirim ke device fisik yang sama.`);
+                                  addToast(`⚠️ Perhatian: Device "${result.deviceName}" juga digunakan oleh "${duplicate.printerName}". Dua printer mengirim ke device fisik yang sama.`, 'warning', 6000);
                                 }
                                 // Save device info
                                 const newPrinters = [...(settings.kitchenPrinters || [])];
@@ -1119,7 +1148,7 @@ export default function SettingsPage() {
                                   bluetoothDeviceName: result.deviceName,
                                 };
                                 updateSettings({ kitchenPrinters: newPrinters });
-                                alert(`"${kp.name}" terhubung ke "${result.deviceName}"!`);
+                                addToast(`"${kp.name}" terhubung ke "${result.deviceName}"!`, 'success');
                               }
                             }}
                             className="text-[11px] px-2 py-1 rounded bg-brand-600 text-white hover:bg-brand-700"
@@ -1132,9 +1161,9 @@ export default function SettingsPage() {
                                 onClick={async () => {
                                   try {
                                     await testPrintBluetooth(kp.id, kp.name, kp.targetCategory, kp.width);
-                                    alert(`Test Print "${kp.name}" berhasil!`);
+                                    addToast(`Test Print "${kp.name}" berhasil!`, 'success');
                                   } catch (err: any) {
-                                    alert(`Test Print gagal: ${err.message}`);
+                                    addToast(`Test Print gagal: ${err.message}`, 'error');
                                   }
                                 }}
                                 className="text-[11px] px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600"
@@ -1144,7 +1173,7 @@ export default function SettingsPage() {
                               <button
                                 onClick={() => {
                                   disconnectBluetoothPrinter(kp.id);
-                                  alert(`"${kp.name}" diputus.`);
+                                  addToast(`"${kp.name}" diputus.`, 'info');
                                 }}
                                 className="text-[11px] px-2 py-1 rounded text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40"
                               >

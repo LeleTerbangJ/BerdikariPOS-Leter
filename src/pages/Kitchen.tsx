@@ -7,8 +7,10 @@ import { isSplitSubBill } from '../utils/splitAllocation';
 import { playNewOrderSound, playAlertSound } from '../utils/sound';
 import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { useSettingsStore } from '../store/settingsStore';
+import { usePrinterCrossTab } from '../hooks/usePrinterCrossTab';
 import type { KitchenStatus } from '../types';
-import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX } from 'lucide-react';
+import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw } from 'lucide-react';
 
 const columns: { status: KitchenStatus; label: string; color: string; icon: any }[] = [
   { status: 'Waiting', label: 'Antrean Menunggu', color: 'border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-600/50', icon: Clock },
@@ -22,6 +24,10 @@ export default function Kitchen() {
   const { transactions, updateKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
   const { shifts } = useShiftStore();
   const { currentUser } = useAuthStore();
+  const { settings } = useSettingsStore();
+  // TO DO 14.4: status koneksi printer dapur lintas-tab (indikator di header KDS)
+  const { getStatus, tryReconnectSilent, isLocalConnected } = usePrinterCrossTab();
+  const [reconnectingPrinter, setReconnectingPrinter] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [isMuted, setIsMuted] = useState(false); // GAP-6 fix: Mute state
   const prevWaitingCount = useRef(0);
@@ -148,6 +154,49 @@ export default function Kitchen() {
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">🍳 Kitchen Display System</h1>
         <div className="flex items-center gap-2 justify-center w-full sm:w-auto">
+          {/* TO DO 14.4: indikator status printer dapur lintas-tab */}
+          {(settings.kitchenPrinters || []).filter((kp) => kp.enabled && kp.type === 'bluetooth').length > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
+              {(settings.kitchenPrinters || [])
+                .filter((kp) => kp.enabled && kp.type === 'bluetooth')
+                .map((kp) => {
+                  const st = getStatus(kp.id);
+                  const connected = st.connected;
+                  return (
+                    <span
+                      key={kp.id}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                        connected
+                          ? 'bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-700 text-green-700 dark:text-green-400'
+                          : 'bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-700 text-red-600 dark:text-red-400'
+                      }`}
+                      title={connected ? `${kp.name} tersambung` : `${kp.name} terputus — klik ikon untuk coba sambungkan ulang`}
+                    >
+                      <Printer size={12} />
+                      <span className="hidden md:inline max-w-[140px] truncate">{kp.name}</span>
+                      {connected ? (
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            setReconnectingPrinter(kp.id);
+                            await tryReconnectSilent(kp.id);
+                            // Status langsung di-refresh via event broadcast / registry
+                            setReconnectingPrinter(null);
+                          }}
+                          disabled={reconnectingPrinter !== null}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold hover:underline"
+                          title="Coba sambungkan ulang (senyap — tanpa jendela pilih device)"
+                        >
+                          <RefreshCw size={10} className={reconnectingPrinter === kp.id ? 'animate-spin' : ''} />
+                          <span className="hidden sm:inline">{reconnectingPrinter === kp.id ? 'Menghubungkan...' : 'Hubungkan'}</span>
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+            </div>
+          )}
           {overdueCount > 0 && (
             <div className="flex items-center gap-2 px-4 py-2 bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-700 rounded-xl animate-pulse">
               <AlertTriangle size={18} className="text-red-500" />

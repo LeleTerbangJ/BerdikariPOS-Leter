@@ -12,6 +12,28 @@
 import type { AppSettings, Transaction, CartItem, KitchenPrinterConfig } from '../types';
 import { formatRupiah } from './format';
 import { buildEqualSplitReceipt } from './splitAllocation';
+import { useToastStore } from '../store/toastStore';
+
+// ============================================================
+// UNIFIED PRINT FALLBACK (TO DO 14.2) — satu kebijakan untuk semua
+// jalur cetak Bluetooth: (1) re-pair senyap via getDevices(), (2) kalau
+// gagal → fallback browser print + toast peringatan jelas. Tidak pernah
+// membuka device picker tanpa klik eksplisit user (P-3).
+// ============================================================
+
+function notifyPrinterFallback(printerName: string) {
+  try {
+    useToastStore
+      .getState()
+      .addToast(
+        `Printer "${printerName}" terputus — struk dicetak lewat dialog browser. Klik banner printer untuk menyambungkan kembali.`,
+        'warning',
+        5000
+      );
+  } catch {
+    // toast store belum siap (mis. saat boot) — abaikan
+  }
+}
 
 // ============================================================
 // RECEIPT DATA TYPES
@@ -109,6 +131,138 @@ const printerRegistry = new Map<string, BluetoothConnection>();
 export const CASHIER_PRINTER_ID = '__cashier__';
 
 // ============================================================
+// CROSS-TAB STATUS (TO DO 14.4) — BroadcastChannel agar status koneksi
+// terlihat di semua tab (POS, Settings, Kitchen/Dapur). Registry tetap
+// in-memory per tab (Web Bluetooth), tapi peristiwa connect/disconnect
+// dibagikan ke tab lain sebagai sinyal UI.
+// ============================================================
+
+export type PrinterEvent =
+  | { type: 'connected'; printerId: string; deviceName?: string }
+  | { type: 'disconnected'; printerId: string };
+
+function getPrinterChannel(): BroadcastChannel | null {
+  try {
+    if (typeof BroadcastChannel === 'undefined') return null;
+    return new BroadcastChannel('rempah-printer-events');
+  } catch {
+    return null;
+  }
+}
+
+function broadcastPrinterEvent(event: PrinterEvent) {
+  const ch = getPrinterChannel();
+  if (!ch) return;
+  try {
+    ch.postMessage(event);
+  } catch {
+    // abaikan — hanya sinyal UI
+  }
+}
+
+/**
+ * Ekspor helper untuk tab lain (mis. halaman Kitchen): daftarkan listener
+ * peristiwa printer dari tab lain. Return cleanup.
+ */
+export function subscribePrinterEvents(listener: (event: PrinterEvent) => void): () => void {
+  const ch = getPrinterChannel();
+  if (!ch) return () => {};
+  const handler = (e: MessageEvent) => {
+    try {
+      listener(e.data as PrinterEvent);
+    } catch {
+      // abaikan pesan tidak dikenal
+    }
+  };
+  ch.addEventListener('message', handler);
+  return () => {
+    ch.removeEventListener('message', handler);
+    ch.close();
+  };
+}
+
+// ============================================================
+// SESSION-STATE (P-2: TO DO 14.1) — tahu printer mana yang tadinya tersambung
+// agar banner reconnect tampil agresif setelah page refresh (Web Bluetooth tidak
+// bisa auto-reconnect tanpa user gesture; state ini memungkinkan UI memandu 1-klik).
+// ============================================================
+
+const SESSION_KEY = 'rempah-printer-session';
+
+interface PrinterSessionState {
+  [printerId: string]: { deviceId?: string; deviceName?: string; connectedAt: number };
+}
+
+function readSessionState(): PrinterSessionState {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as PrinterSessionState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionState(state: PrinterSessionState) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(state));
+  } catch {
+    // sessionStorage penuh/diblokir — abaikan (hanya sinyal UX)
+  }
+}
+
+/**
+ * Tandai printer sebagai "tadinya tersambung di sesi ini" (dipanggil setelah connect).
+ */
+export function markPrinterSession(printerId: string, deviceId?: string, deviceName?: string) {
+  const state = readSessionState();
+  state[printerId] = { deviceId, deviceName, connectedAt: Date.now() };
+  writeSessionState(state);
+}
+
+/**
+ * Hapus tanda sesi (dipanggil saat user memutus printer secara manual).
+ */
+export function clearPrinterSession(printerId: string) {
+  const state = readSessionState();
+  delete state[printerId];
+  writeSessionState(state);
+}
+
+/**
+ * Daftar printer yang tersambung SEBELUM refresh terakhir (untuk banner reconnect pasca-refresh).
+ */
+export function getPrinterSessionState(): PrinterSessionState {
+  return readSessionState();
+}
+
+// ============================================================
+// DEVICE IDENTITY — SATU SUMBER KEBENARAN (TO DO 14.6)
+// ============================================================
+// Settings (`bluetoothDeviceId` persisten) adalah sumber kanonik device identity;
+// sessionStorage hanya penanda "pernah tersambung di sesi ini" (fallback bila settings
+// belum tersimpan, mis. koneksi dibuat di tab lain). Semua jalur re-pair
+// (usePrinterMonitor, usePrinterCrossTab, print paths) memakai helper ini agar
+// tidak ada dua sumber device id yang bisa berbeda hasil.
+
+export function getPrinterDeviceId(printerId: string, settings?: AppSettings): string | undefined {
+  if (!settings) return getPrinterSessionState()[printerId]?.deviceId;
+  if (printerId === CASHIER_PRINTER_ID) {
+    return settings.cashierBluetoothDeviceId || getPrinterSessionState()[printerId]?.deviceId;
+  }
+  const kp = (settings.kitchenPrinters || []).find((k) => k.id === printerId);
+  return kp?.bluetoothDeviceId || getPrinterSessionState()[printerId]?.deviceId;
+}
+
+export function getPrinterDeviceName(printerId: string, settings?: AppSettings): string | undefined {
+  if (!settings) return getPrinterSessionState()[printerId]?.deviceName;
+  if (printerId === CASHIER_PRINTER_ID) {
+    return settings.cashierBluetoothDeviceName || getPrinterSessionState()[printerId]?.deviceName;
+  }
+  const kp = (settings.kitchenPrinters || []).find((k) => k.id === printerId);
+  return kp?.bluetoothDeviceName || getPrinterSessionState()[printerId]?.deviceName;
+}
+
+// ============================================================
 // BLUETOOTH CONNECTION MANAGEMENT
 // ============================================================
 
@@ -121,7 +275,8 @@ export async function connectBluetoothPrinter(
 ): Promise<{ success: boolean; deviceId?: string; deviceName?: string }> {
   try {
     if (!navigator.bluetooth) {
-      alert('Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome atau Edge.');
+      // TO DO 14.6: alert() → toast (konsisten dengan jalur print lain)
+      useToastStore.getState().addToast('Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome atau Edge.', 'warning', 5000);
       return { success: false };
     }
 
@@ -138,61 +293,109 @@ export async function connectBluetoothPrinter(
 
     if (!device) return { success: false };
 
-    const gatt = device.gatt;
-    if (!gatt) {
-      alert('Printer tidak mendukung GATT. Coba pairing ulang.');
+    const ok = await establishConnection(printerId, device);
+    if (!ok) {
+      useToastStore.getState().addToast('Printer ditemukan tapi tidak bisa menulis. Pastikan printer thermal Bluetooth kompatibel.', 'error', 5000);
       return { success: false };
     }
-    const server = await gatt.connect();
-
-    // Try common thermal printer services
-    const serviceUUIDs = [
-      '000018f0-0000-1000-8000-00805f9b34fb',
-      '0000ff00-0000-1000-8000-00805f9b34fb',
-      'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
-    ];
-
-    for (const uuid of serviceUUIDs) {
-      try {
-        const service = await server.getPrimaryService(uuid);
-        const characteristics = await service.getCharacteristics();
-        for (const char of characteristics) {
-          if (char.properties.write || char.properties.writeWithoutResponse) {
-            // Register connection under this printerId
-            printerRegistry.set(printerId, {
-              device,
-              characteristic: char,
-              deviceName: device.name || 'Unknown Printer',
-              deviceId: device.id,
-            });
-
-            // Listen for disconnection
-            device.addEventListener('gattserverdisconnected', () => {
-              printerRegistry.delete(printerId);
-              console.log(`[PrinterRegistry] ${printerId} disconnected (${device.name})`);
-            });
-
-            return {
-              success: true,
-              deviceId: device.id,
-              deviceName: device.name || 'Unknown Printer',
-            };
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    alert('Printer ditemukan tapi tidak bisa menulis. Pastikan printer thermal Bluetooth kompatibel.');
-    return { success: false };
+    return { success: true, deviceId: device.id, deviceName: device.name || 'Unknown Printer' };
   } catch (err: any) {
     if (err.name !== 'NotFoundError') {
       console.error('Bluetooth error:', err);
-      alert(`Gagal connect: ${err.message}`);
+      useToastStore.getState().addToast(`Gagal connect: ${err.message}`, 'error', 5000);
     }
     return { success: false };
   }
+}
+
+/**
+ * Silent re-pair (TO DO 14.1 P-1): hubungkan ulang printer yang sudah pernah dipairing
+ * TANPA membuka device picker. Memakai `navigator.bluetooth.getDevices()` (daftar device
+ * yang pernah dipairing) dan mencocokkan `device.id` dengan `bluetoothDeviceId` tersimpan
+ * di settings, lalu `gatt.connect()` + discovery service/characteristic.
+ *
+ * Catatan: `getDevices()` hanya berisi device yang dipairing dengan izin "remember device";
+ * butuh user activation (klik) minimal sekali di sesi. Gagal → return false (UI fallback picker).
+ */
+export async function reconnectBluetoothPrinter(
+  printerId: string,
+  expectedDeviceId?: string
+): Promise<{ success: boolean; deviceId?: string; deviceName?: string }> {
+  try {
+    if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
+      return { success: false };
+    }
+    if (!expectedDeviceId) return { success: false };
+
+    const devices = await navigator.bluetooth.getDevices();
+    const device = devices.find((d) => d.id === expectedDeviceId);
+    if (!device) {
+      console.log(`[PrinterRegistry] Silent re-pair: device ${expectedDeviceId} tidak ada di daftar getDevices() — butuh picker.`);
+      return { success: false };
+    }
+
+    const ok = await establishConnection(printerId, device);
+    if (!ok) return { success: false };
+    console.log(`[PrinterRegistry] ${printerId} silent re-paired (${device.name})`);
+    return { success: true, deviceId: device.id, deviceName: device.name || 'Unknown Printer' };
+  } catch (err: any) {
+    // NotFoundError = user menutup picker dulu; SecurityError = butuh user gesture — keduanya normal
+    console.log(`[PrinterRegistry] Silent re-pair gagal untuk ${printerId}:`, err?.name || err);
+    return { success: false };
+  }
+}
+
+/**
+ * Internal: konek GATT + temukan service/characteristic tulis, lalu daftarkan di registry.
+ * Dipakai bersama oleh connectBluetoothPrinter (picker) & reconnectBluetoothPrinter (senyap).
+ */
+async function establishConnection(printerId: string, device: BluetoothDevice): Promise<boolean> {
+  const gatt = device.gatt;
+  if (!gatt) return false;
+  const server = await gatt.connect();
+
+  // Try common thermal printer services
+  const serviceUUIDs = [
+    '000018f0-0000-1000-8000-00805f9b34fb',
+    '0000ff00-0000-1000-8000-00805f9b34fb',
+    'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+  ];
+
+  for (const uuid of serviceUUIDs) {
+    try {
+      const service = await server.getPrimaryService(uuid);
+      const characteristics = await service.getCharacteristics();
+      for (const char of characteristics) {
+        if (char.properties.write || char.properties.writeWithoutResponse) {
+          // Register connection under this printerId
+          printerRegistry.set(printerId, {
+            device,
+            characteristic: char,
+            deviceName: device.name || 'Unknown Printer',
+            deviceId: device.id,
+          });
+
+          // Listen for disconnection
+          device.addEventListener('gattserverdisconnected', () => {
+            printerRegistry.delete(printerId);
+            console.log(`[PrinterRegistry] ${printerId} disconnected (${device.name})`);
+            // TO DO 14.4: beri tahu tab lain (mis. halaman Kitchen) bahwa printer terputus
+            broadcastPrinterEvent({ type: 'disconnected', printerId });
+          });
+
+          // P-2: tandai sesi agar banner pasca-refresh tahu printer ini pernah tersambung
+          markPrinterSession(printerId, device.id, device.name || 'Unknown Printer');
+          // TO DO 14.4: beri tahu tab lain (mis. halaman Kitchen) bahwa printer tersambung
+          broadcastPrinterEvent({ type: 'connected', printerId, deviceName: device.name || 'Unknown Printer' });
+
+          return true;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 /**
@@ -226,6 +429,7 @@ export async function disconnectBluetoothPrinter(printerId: string = CASHIER_PRI
     conn.device.gatt.disconnect();
   }
   printerRegistry.delete(printerId);
+  clearPrinterSession(printerId);
 }
 
 /**
@@ -272,7 +476,7 @@ export function getAllPrinterStatuses(): PrinterStatus[] {
 // INTERNAL: Send ESC/POS byte data to a specific printer
 // ============================================================
 
-async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Promise<void> {
+async function writeToPrinter(printerId: string, data: Uint8Array): Promise<void> {
   const conn = printerRegistry.get(printerId);
   if (!conn || !conn.characteristic) {
     throw new Error(`Printer "${printerId}" tidak terhubung.`);
@@ -293,6 +497,71 @@ async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Prom
       await conn.characteristic.writeValue(chunk);
     }
     await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+// ============================================================
+// PRINT QUEUE PER PRINTER (TO DO 14.3) — FIFO + retry 1× untuk
+// error transient (GATT busy / disconnect sesaat). Mencegah tumpang
+// tindih saat banyak job (struk kasir + tiket dapur + split) tiba bersamaan.
+// ============================================================
+
+interface PrintQueueJob {
+  printerId: string;
+  data: Uint8Array;
+  attempts: number;
+}
+
+const printQueue: PrintQueueJob[] = [];
+const drainingPrinters = new Set<string>();
+
+function enqueuePrint(printerId: string, data: Uint8Array) {
+  printQueue.push({ printerId, data, attempts: 0 });
+  void drainPrintQueue();
+}
+
+async function drainPrintQueue() {
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const job of [...printQueue]) {
+      if (drainingPrinters.has(job.printerId)) continue; // printer sedang sibuk — tunggu job sebelumnya
+
+      drainingPrinters.add(job.printerId);
+      try {
+        await writeToPrinter(job.printerId, job.data);
+        const idx = printQueue.indexOf(job);
+        if (idx >= 0) printQueue.splice(idx, 1);
+        progressed = true;
+      } catch (err: any) {
+        const idx = printQueue.indexOf(job);
+        if (idx < 0) continue;
+        if (job.attempts < 1) {
+          // Retry sekali untuk error transient (GATT busy / disconnect sesaat)
+          job.attempts += 1;
+          printQueue[idx] = job;
+          await new Promise((r) => setTimeout(r, 150));
+        } else {
+          printQueue.splice(idx, 1);
+          console.warn(`[PrintQueue] ${job.printerId} gagal ${job.attempts + 1}x:`, err?.message || err);
+        }
+        progressed = true;
+      } finally {
+        drainingPrinters.delete(job.printerId);
+      }
+    }
+  }
+}
+
+/**
+ * Kirim data ke printer Bluetooth lewat antrean FIFO per printer (TO DO 14.3).
+ * Semua jalur cetak (struk, tiket dapur, test print) melewati fungsi ini.
+ */
+async function sendToBluetoothPrinter(printerId: string, data: Uint8Array): Promise<void> {
+  enqueuePrint(printerId, data);
+  // Tunggu sampai job ini selesai (atau gagal setelah retry) — tetap serial per printer.
+  while (printQueue.some((j) => j.data === data && j.printerId === printerId)) {
+    await new Promise((r) => setTimeout(r, 25));
   }
 }
 
@@ -690,14 +959,37 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   return new Uint8Array(commands);
 }
 
-async function printReceiptBluetooth(data: ReceiptData, width: '58mm' | '80mm') {
+/**
+ * Cetak struk kasir via Bluetooth. Return true bila berhasil dicetak (termasuk via
+ * fallback browser bila diaktifkan); false bila Bluetooth gagal & fallback nonaktif
+ * (pemanggil mencatat status error — TO DO 14.5 fallback eksplisit per printer).
+ */
+async function printReceiptBluetooth(data: ReceiptData, width: '58mm' | '80mm', settings?: AppSettings): Promise<boolean> {
   if (!isBluetoothConnected(CASHIER_PRINTER_ID)) {
-    const result = await connectBluetoothPrinter(CASHIER_PRINTER_ID);
-    if (!result.success) return;
+    // TO DO 14.1 P-3 + 14.2: re-pair senyap dulu (tanpa picker); gagal → fallback browser
+    // print + toast peringatan (bukan error diam-diam, bukan picker di tengah checkout).
+    // TO DO 14.5: fallback hanya dipakai bila opsi eksplisit per-printer aktif (default true).
+    const expected = getPrinterDeviceId(CASHIER_PRINTER_ID, settings);
+    if (expected) {
+      const result = await reconnectBluetoothPrinter(CASHIER_PRINTER_ID, expected);
+      if (result.success) {
+        const escposData = await buildReceiptESCPOS(data, width);
+        await sendToBluetoothPrinter(CASHIER_PRINTER_ID, escposData);
+        return true;
+      }
+    }
+    if (settings?.cashierFallbackBrowser === false) {
+      notifyPrinterFallback('Printer Kasir');
+      return false;
+    }
+    printReceiptBrowser(data, width);
+    notifyPrinterFallback('Printer Kasir');
+    return true;
   }
 
   const escposData = await buildReceiptESCPOS(data, width);
   await sendToBluetoothPrinter(CASHIER_PRINTER_ID, escposData);
+  return true;
 }
 
 // ============================================================
@@ -837,13 +1129,41 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   return new Uint8Array(commands);
 }
 
-async function printKitchenReceiptBluetooth(data: ReceiptData, items: CartItem[], kp: KitchenPrinterConfig): Promise<void> {
+/**
+ * Cetak tiket dapur via Bluetooth. Return true bila berhasil dicetak (termasuk via
+ * fallback browser bila diaktifkan); false bila Bluetooth gagal & fallback nonaktif
+ * (TO DO 14.5 fallback eksplisit per printer dapur).
+ */
+async function printKitchenReceiptBluetooth(
+  data: ReceiptData,
+  items: CartItem[],
+  kp: KitchenPrinterConfig,
+  settings?: AppSettings
+): Promise<boolean> {
   if (!isBluetoothConnected(kp.id)) {
-    throw new Error(`Printer Bluetooth "${kp.name}" belum terhubung. Sambungkan printer terlebih dahulu di Settings.`);
+    // TO DO 14.1 P-3 + 14.2: re-pair senyap dulu; gagal → fallback browser print + toast
+    // (tiket dapur tetap keluar, dapur tidak kehilangan pesanan karena printer terputus).
+    const expected = getPrinterDeviceId(kp.id, settings) || kp.bluetoothDeviceId;
+    if (expected) {
+      const result = await reconnectBluetoothPrinter(kp.id, expected);
+      if (result.success) {
+        const escposData = await buildKitchenESCPOS(data, items, kp);
+        await sendToBluetoothPrinter(kp.id, escposData);
+        return true;
+      }
+    }
+    if (kp.fallbackBrowser === false) {
+      notifyPrinterFallback(kp.name);
+      return false;
+    }
+    printKitchenReceiptBrowser(data, items, kp);
+    notifyPrinterFallback(kp.name);
+    return true;
   }
 
   const escposData = await buildKitchenESCPOS(data, items, kp);
   await sendToBluetoothPrinter(kp.id, escposData);
+  return true;
 }
 
 // ============================================================
@@ -862,11 +1182,21 @@ export async function printReceipt(
   if (settings.printerEnabled && targetPrinter !== 'kitchen') {
     try {
       if (settings.printerType === 'bluetooth') {
-        await printReceiptBluetooth(data, settings.printerWidth);
+        // TO DO 14.5: return boolean — false berarti BT gagal & fallback browser nonaktif
+        const ok = await printReceiptBluetooth(data, settings.printerWidth, settings);
+        if (ok) {
+          results.push({ printer: 'Printer Kasir', status: 'success' });
+        } else {
+          results.push({
+            printer: 'Printer Kasir',
+            status: 'error',
+            error: 'Koneksi Bluetooth terputus dan fallback browser nonaktif untuk printer ini.',
+          });
+        }
       } else {
         printReceiptBrowser(data, settings.printerWidth, preOpenedWindow);
+        results.push({ printer: 'Printer Kasir', status: 'success' });
       }
-      results.push({ printer: 'Printer Kasir', status: 'success' });
     } catch (err: any) {
       console.error('[PrintReceipt] Cashier print failed:', err);
       results.push({ printer: 'Printer Kasir', status: 'error', error: err.message });
@@ -896,10 +1226,16 @@ export async function printReceipt(
 
         try {
           if (kp.type === 'bluetooth') {
-            await printKitchenReceiptBluetooth(data, matchingItems, kp);
-          } else {
-            printKitchenReceiptBrowser(data, matchingItems, kp);
+            // TO DO 14.5: return boolean — false berarti BT gagal & fallback browser nonaktif
+            const ok = await printKitchenReceiptBluetooth(data, matchingItems, kp, settings);
+            if (ok) return { printer: kp.name, status: 'success' };
+            return {
+              printer: kp.name,
+              status: 'error',
+              error: 'Koneksi Bluetooth terputus dan fallback browser nonaktif untuk printer ini.',
+            };
           }
+          printKitchenReceiptBrowser(data, matchingItems, kp);
           return { printer: kp.name, status: 'success' };
         } catch (err: any) {
           console.error(`[PrintReceipt] Kitchen print failed for ${kp.name}:`, err);
@@ -974,19 +1310,33 @@ export async function testPrintBluetooth(
 // RAW TEXT PRINTING (for shift summary etc.)
 // ============================================================
 
-export async function printTextRaw(lines: string[], settings: AppSettings) {
+export async function printTextRaw(lines: string[], settings: AppSettings): Promise<boolean> {
   if (!settings.printerEnabled) {
     fallbackBrowserPrintText(lines, '58mm');
-    return;
+    return true;
   }
 
   if (settings.printerType === 'bluetooth') {
-    // Ensure cashier printer is connected
+    // Ensure cashier printer is connected — TO DO 14.1 P-3 + 14.2: re-pair senyap dulu,
+    // tanpa membuka picker; kalau gagal → fallback browser print + toast (tidak memblokir shift).
+    // TO DO 14.5: fallback hanya bila opsi eksplisit aktif (default true); kalau nonaktif
+    // → return false (pemanggil, mis. tutup shift, memutuskan — tidak melempar agar kasir
+    // tidak terkunci, lihat TO DO 6.4).
     if (!isBluetoothConnected(CASHIER_PRINTER_ID)) {
-      const result = await connectBluetoothPrinter(CASHIER_PRINTER_ID);
-      if (!result.success) {
+      const expected = getPrinterDeviceId(CASHIER_PRINTER_ID, settings);
+      let connected = false;
+      if (expected) {
+        const result = await reconnectBluetoothPrinter(CASHIER_PRINTER_ID, expected);
+        connected = result.success;
+      }
+      if (!connected) {
+        if (settings.cashierFallbackBrowser === false) {
+          notifyPrinterFallback('Printer Kasir');
+          return false;
+        }
         fallbackBrowserPrintText(lines, settings.printerWidth);
-        return;
+        notifyPrinterFallback('Printer Kasir');
+        return true;
       }
     }
 
@@ -1009,12 +1359,19 @@ export async function printTextRaw(lines: string[], settings: AppSettings) {
     const data = new Uint8Array(commands);
     try {
       await sendToBluetoothPrinter(CASHIER_PRINTER_ID, data);
+      return true;
     } catch (err) {
       console.error('printTextRaw Bluetooth error:', err);
+      if (settings.cashierFallbackBrowser === false) {
+        notifyPrinterFallback('Printer Kasir');
+        return false;
+      }
       fallbackBrowserPrintText(lines, settings.printerWidth);
+      return true;
     }
   } else {
     fallbackBrowserPrintText(lines, settings.printerWidth);
+    return true;
   }
 }
 

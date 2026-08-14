@@ -1498,6 +1498,14 @@ export default function POS() {
                   </button>
                 )}
               </div>
+              {activePromos.length > 0 && !appliedPromoId && (
+                <select onChange={(e) => selectPromo(e.target.value)} className="input text-xs w-full py-1.5" value="">
+                  <option value="">Pilih promo...</option>
+                  {activePromos.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.type === 'percentage' ? `${p.value}%` : formatRupiah(p.value)})</option>
+                  ))}
+                </select>
+              )}
               {appliedPromoId && (
                 <p className="text-[11px] text-green-600 dark:text-green-400 font-medium">
                   ✓ Promo berhasil diterapkan (-{formatRupiah(discountCalc.promoApplied)})
