@@ -133,8 +133,9 @@ export default function SplitBillModal({
       setActiveBillIdx(0);
       setItemAssignments({});
       setPaidState({});
-      // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak struk) saat modal dibuka konteks baru
+      // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak semua) saat modal dibuka konteks baru
       setSkipSplitReceipt(false);
+      setSkipSplitKitchen(false);
     }
     // Rehydrate paidState dari sesi stock (fresh split) jika masih aktif dengan cart yang sama
     if (!parentTx) {
@@ -287,8 +288,9 @@ export default function SplitBillModal({
 
   // Active list of sub-bills depending on selected mode
   const [paidState, setPaidState] = useState<Record<number, { isPaid: boolean; tx?: Transaction; payMethod: PaymentMethod; cash: string }>>({});
-  // v4.7 TO DO 15.3: opsi "cetak tanpa struk" di split bill (default: cetak struk kasir)
+  // v4.7 TO DO 15.3: opsi cetak di split bill — dua toggle independen (default: cetak semua)
   const [skipSplitReceipt, setSkipSplitReceipt] = useState(false);
+  const [skipSplitKitchen, setSkipSplitKitchen] = useState(false);
 
   const activeBills = mode === 'equal' ? equalBills : itemBills;
 
@@ -478,13 +480,13 @@ export default function SplitBillModal({
 
     // Cetak struk sub-bill. Saat split fresh sub-bill pertama, cetak juga tiket dapur LENGKAP sekali
     // (dapur belum pernah menerima tiket). Split pending tidak mencetak ulang tiket (sudah saat pending dibuat).
+    // v4.7 TO DO 15.3: dua toggle independen — skipSplitReceipt (struk kasir dilewati) &
+    // skipSplitKitchen (tiket dapur dilewati — anti tiket DOBEL saat split dari pending).
     if (settings.printerEnabled || settings.autoPrintOnCheckout) {
       if (isFirstPaymentOfSession) {
-        // v4.7 TO DO 15.3: skip → struk kasir dilewati, tiket dapur (target 'all') TETAP dicetak
-        printSplitReceipt(subTx, null, settings, 'all', cartItems, skipSplitReceipt).catch(() => {});
-      } else if (!skipSplitReceipt) {
-        // Sub-bill berikutnya hanya struk kasir — bila skip, tidak perlu dipanggil sama sekali
-        printSplitReceipt(subTx, parentTx, settings, 'cashier').catch(() => {});
+        printSplitReceipt(subTx, null, settings, 'all', cartItems, skipSplitReceipt, skipSplitKitchen).catch(() => {});
+      } else {
+        printSplitReceipt(subTx, parentTx, settings, 'cashier', undefined, skipSplitReceipt, skipSplitKitchen).catch(() => {});
       }
     }
 
@@ -778,18 +780,31 @@ export default function SplitBillModal({
 
                 {/* v4.7 TO DO 15.3: opsi cetak tanpa struk per sub-bill (hemat kertas) */}
                 {(settings.printerEnabled || settings.autoPrintOnCheckout) && (
-                  <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={!skipSplitReceipt}
-                      onChange={(e) => setSkipSplitReceipt(!e.target.checked)}
-                      className="accent-brand-600 h-4 w-4"
-                    />
-                    <span>Cetak struk kasir</span>
-                    {skipSplitReceipt && (
-                      <span className="text-slate-400 dark:text-slate-500">(tiket dapur tetap dicetak)</span>
+                  <div className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={!skipSplitReceipt}
+                        onChange={(e) => setSkipSplitReceipt(!e.target.checked)}
+                        className="accent-brand-600 h-4 w-4"
+                      />
+                      <span>Cetak struk kasir</span>
+                    </label>
+                    {!parentTx && (
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={!skipSplitKitchen}
+                          onChange={(e) => setSkipSplitKitchen(!e.target.checked)}
+                          className="accent-brand-600 h-4 w-4"
+                        />
+                        <span>Cetak tiket dapur</span>
+                      </label>
                     )}
-                  </label>
+                    {skipSplitReceipt && skipSplitKitchen && (
+                      <span className="text-slate-400 dark:text-slate-500">(tidak ada cetakan sama sekali)</span>
+                    )}
+                  </div>
                 )}
 
                 <button

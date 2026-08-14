@@ -296,15 +296,21 @@ export class AtomicTransactionEngine {
     // Asynchronous Printing
     // suppressAutoPrint (v4.1 TO DO 1.5): sub-bill split mengelola print sendiri (printSplitReceipt),
     // sehingga engine tidak boleh mencetak struk + tiket dapur berulang per sub-bill.
+    // v4.7 TO DO 15.3: dua toggle independen — skipReceiptPrint (struk kasir dilewati, tiket dapur
+    // tetap bisa keluar) & skipKitchenPrint (tiket dapur dilewati — anti tiket DOBEL saat resume
+    // pending yang tiket dapurnya sudah tercetak saat Simpan Pending). Keduanya false → normal.
     if (!params.suppressAutoPrint) {
       try {
         if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
           const receiptData = buildReceiptFromTransaction(tx, params.settings);
-          // v4.7 TO DO 15.3: opsi "cetak tanpa struk" per-transaksi — skipReceiptPrint
-          // → cetak HANYA tiket dapur (target 'kitchen'), struk kasir dilewati
-          // (tiket dapur tetap keluar agar dapur tidak kehilangan pesanan).
-          const printTarget: 'all' | 'kitchen' = params.skipReceiptPrint ? 'kitchen' : 'all';
-          printReceipt(receiptData, params.settings, printTarget, params.preOpenedPrintWindow || undefined);
+          // 1. Struk kasir — dilewati bila skipReceiptPrint
+          if (!params.skipReceiptPrint) {
+            printReceipt(receiptData, params.settings, 'cashier', params.preOpenedPrintWindow || undefined);
+          }
+          // 2. Tiket dapur — dilewati bila skipKitchenPrint
+          if (!params.skipKitchenPrint) {
+            printReceipt(receiptData, params.settings, 'kitchen');
+          }
         }
       } catch (printErr) {
         console.warn('[AtomicEngine] Post-commit printer warning:', printErr);

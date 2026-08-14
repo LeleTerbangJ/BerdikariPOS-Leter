@@ -381,10 +381,13 @@ export default function POS() {
       setShowStockWarning(true);
       return;
     }
-    // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak struk) tiap modal dibuka
+    // v4.7 TO DO 15.3: reset opsi cetak ke default tiap modal dibuka — struk selalu ON;
+    // tiket dapur default OFF hanya saat finalize resume pending dengan item TIDAK berubah
+    // (tiket sudah tercetak saat Simpan Pending → anti tiket DOBEL), selain itu ON.
     setSkipReceiptPrint(false);
+    setSkipKitchenPrint(!!currentPendingTx && !pendingItemsChanged);
     setShowCheckout(true);
-  }, [cart.items, menus, inventory, orderType, tableNumber, settings.tableFeaturesEnabled, addToast]);
+  }, [cart.items, menus, inventory, orderType, tableNumber, settings.tableFeaturesEnabled, addToast, currentPendingTx, pendingItemsChanged]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -444,6 +447,9 @@ export default function POS() {
   const [cashReceived, setCashReceived] = useState('');
   // v4.7 TO DO 15.3: opsi "cetak tanpa struk" per-transaksi (default: cetak struk kasir)
   const [skipReceiptPrint, setSkipReceiptPrint] = useState(false);
+  // v4.7 TO DO 15.3: toggle kedua — tiket dapur. Default OFF saat resume pending dengan item TIDAK
+  // berubah (tiket dapur sudah tercetak saat Simpan Pending → anti tiket DOBEL); selain itu default ON.
+  const [skipKitchenPrint, setSkipKitchenPrint] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
   const [discountType, setDiscountType] = useState<'rp' | 'percent'>('rp');
 
@@ -707,8 +713,10 @@ export default function POS() {
   const proceedCheckoutAnyway = () => {
     setShowStockWarning(false);
     setStockWarnings([]);
-    // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak struk) tiap modal dibuka
+    // v4.7 TO DO 15.3: reset opsi cetak ke default tiap modal dibuka (struk ON; tiket dapur
+    // default OFF saat resume pending item tidak berubah — anti tiket dobel)
     setSkipReceiptPrint(false);
+    setSkipKitchenPrint(!!currentPendingTx && !pendingItemsChanged);
     setShowCheckout(true);
   };
 
@@ -792,8 +800,9 @@ export default function POS() {
       currentUser,
       settings,
       preOpenedPrintWindow,
-      // v4.7 TO DO 15.3: opsi cetak tanpa struk per-transaksi
+      // v4.7 TO DO 15.3: opsi cetak per-transaksi — dua toggle independen (struk & tiket dapur)
       skipReceiptPrint,
+      skipKitchenPrint,
       // v4.5 TO DO 5.5: pertahankan atribusi promo pada tx final (termasuk hasil resume pending)
       // agar laporan promo/transaksi tidak kehilangan metadata yang tersimpan saat save pending.
       appliedPromoId: appliedPromoId || undefined,
@@ -842,6 +851,7 @@ export default function POS() {
     cart.clearCart();
     setShowCheckout(false);
     setSkipReceiptPrint(false);
+    setSkipKitchenPrint(false);
     setDiscountInput('');
     setDiscountType('rp');
     setVoucherCode('');
@@ -1917,20 +1927,31 @@ export default function POS() {
             </div>
           )}
 
-          {/* v4.7 TO DO 15.3: opsi cetak tanpa struk per-transaksi (hemat kertas) */}
+          {/* v4.7 TO DO 15.3: opsi cetak per-transaksi — dua toggle independen (struk & tiket dapur) */}
           {(settings.printerEnabled || settings.autoPrintOnCheckout) && (
-            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none py-1">
-              <input
-                type="checkbox"
-                checked={!skipReceiptPrint}
-                onChange={(e) => setSkipReceiptPrint(!e.target.checked)}
-                className="accent-brand-600 h-4 w-4"
-              />
-              <span>Cetak struk kasir</span>
-              {skipReceiptPrint && (
-                <span className="text-slate-400 dark:text-slate-500">(tiket dapur tetap dicetak)</span>
+            <div className="flex flex-col gap-1 py-1 text-xs text-slate-600 dark:text-slate-300">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!skipReceiptPrint}
+                  onChange={(e) => setSkipReceiptPrint(!e.target.checked)}
+                  className="accent-brand-600 h-4 w-4"
+                />
+                <span>Cetak struk kasir</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!skipKitchenPrint}
+                  onChange={(e) => setSkipKitchenPrint(!e.target.checked)}
+                  className="accent-brand-600 h-4 w-4"
+                />
+                <span>Cetak tiket dapur</span>
+              </label>
+              {skipReceiptPrint && skipKitchenPrint && (
+                <span className="text-slate-400 dark:text-slate-500">(tidak ada cetakan sama sekali)</span>
               )}
-            </label>
+            </div>
           )}
 
           {/* Finalize / Split Bill Action Buttons */}

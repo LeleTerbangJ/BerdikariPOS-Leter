@@ -1539,9 +1539,11 @@ export async function printSplitReceipt(
   settings: AppSettings,
   target: 'cashier' | 'all' = 'cashier',
   allItems?: CartItem[],
-  // v4.7 TO DO 15.3: opsi "cetak tanpa struk" di split bill — struk kasir sub-bill dilewati,
-  // tiket dapur (target 'all') TETAP dicetak agar dapur tidak kehilangan pesanan.
-  skipCashierReceipt?: boolean
+  // v4.7 TO DO 15.3: dua toggle independen di split bill —
+  // skipCashierPrint = true → struk kasir sub-bill dilewati (tiket dapur tetap bisa keluar);
+  // skipKitchenPrint = true → tiket dapur dilewati (anti tiket DOBEL saat split dari pending).
+  skipCashierPrint?: boolean,
+  skipKitchenPrint?: boolean
 ): Promise<PrintJobResult[]> {
   const receiptData = buildReceiptFromTransaction(subTx, settings);
   const splitLabel = `[SPLIT BILL ${subTx.splitIndex || 1} OF ${subTx.totalSplitCount || 1}]`;
@@ -1563,14 +1565,15 @@ export async function printSplitReceipt(
 
   const results: PrintJobResult[] = [];
 
-  // 1. Struk kasir sub-bill (hanya item sub-bill itu) — dilewati bila skipCashierReceipt (hemat struk)
-  if (!skipCashierReceipt) {
+  // 1. Struk kasir sub-bill (hanya item sub-bill itu) — dilewati bila skipCashierPrint (hemat struk)
+  if (!skipCashierPrint) {
     results.push(...(await printReceipt(receiptData, settings, 'cashier')));
   }
 
   // 2. Tiket dapur lengkap — hanya saat target 'all' (split fresh, sub-bill pertama):
   //    dapur belum pernah menerima tiket, cetak semua item cart sekaligus agar tidak ada pesanan yang terlewat.
-  if (target === 'all') {
+  //    Dilewati bila skipKitchenPrint (tiket sudah keluar saat pesanan disimpan Pending → anti dobel).
+  if (target === 'all' && !skipKitchenPrint) {
     const kitchenData = allItems ? { ...receiptData, items: allItems } : receiptData;
     results.push(...(await printReceipt(kitchenData, settings, 'kitchen')));
   }
