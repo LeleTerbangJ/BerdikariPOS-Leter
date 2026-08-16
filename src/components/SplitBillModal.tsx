@@ -778,9 +778,10 @@ export default function SplitBillModal({
                   </div>
                 )}
 
-                {/* v4.7 TO DO 15.3: opsi cetak tanpa struk per sub-bill (hemat kertas) */}
+                {/* v4.7 TO DO 15.3: opsi cetak tanpa struk per sub-bill (hemat kertas)
+                    TO DO 17.2: berdampingan (row) di desktop, vertikal di mobile */}
                 {(settings.printerEnabled || settings.autoPrintOnCheckout) && (
-                  <div className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300">
+                  <div className="flex flex-col gap-1.5 text-xs text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:gap-6">
                     <label className="flex items-center gap-2 cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -802,7 +803,7 @@ export default function SplitBillModal({
                       </label>
                     )}
                     {skipSplitReceipt && skipSplitKitchen && (
-                      <span className="text-slate-400 dark:text-slate-500">(tidak ada cetakan sama sekali)</span>
+                      <span className="text-slate-400 dark:text-slate-500 sm:basis-full">(tidak ada cetakan sama sekali)</span>
                     )}
                   </div>
                 )}

@@ -3,14 +3,25 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { safeStorage } from '../utils/safeStorage';
 import type { CartItem } from '../types';
 
+// v4.7 TO DO 17.3: identitas pending yang di-resume — PERSIST (ikut cart tersimpan) agar
+// saat POS di-mount ulang (pindah halaman / refresh) finalize tetap memakai ID pending yang
+// sama (bukan UUID baru → transaksi duplikat: pending lama + selesai baru).
+export interface ResumeContext {
+  id: string;
+  queueNumber?: number;
+  kitchenStatus?: string;
+}
+
 interface CartState {
   items: CartItem[];
   discount: number;
+  resumeContext: ResumeContext | null;
   addItem: (item: CartItem) => void;
   addBundleItem: (parentItem: CartItem, childItems: CartItem[]) => void;
   removeItem: (lineId: string) => void;
   updateQuantity: (lineId: string, qty: number) => void;
   setDiscount: (amount: number) => void;
+  setResumeContext: (ctx: ResumeContext | null) => void;
   clearCart: () => void;
   getSubtotal: () => number;
   getTotal: () => number;
@@ -21,6 +32,7 @@ export const useCartStore = create<CartState>()(
     (set, get) => ({
       items: [],
       discount: 0,
+      resumeContext: null,
 
       addItem: (item) => set((s) => {
         const existingIdx = s.items.findIndex((i) => {
@@ -54,10 +66,15 @@ export const useCartStore = create<CartState>()(
       })),
 
       removeItem: (lineId) =>
-        set((s) => ({
-          // Remove target item and any child items linked to it
-          items: s.items.filter((i) => i.lineId !== lineId && i.parentLineId !== lineId),
-        })),
+        set((s) => {
+          const items = s.items.filter((i) => i.lineId !== lineId && i.parentLineId !== lineId);
+          return {
+            items,
+            // v4.7 TO DO 17.3: keranjang kosong = resume pending dibatalkan (semua item dihapus)
+            // → bersihkan konteks resume agar order baru nanti tidak salah me-restore pending lama.
+            resumeContext: items.length === 0 ? null : s.resumeContext,
+          };
+        }),
 
       updateQuantity: (lineId, qty) =>
         set((s) => {
@@ -85,7 +102,10 @@ export const useCartStore = create<CartState>()(
 
       setDiscount: (amount) => set({ discount: amount }),
 
-      clearCart: () => set({ items: [], discount: 0 }),
+      // v4.7 TO DO 17.3: setter konteks resume pending (dipanggil handleResumePendingOrder POS)
+      setResumeContext: (ctx) => set({ resumeContext: ctx }),
+
+      clearCart: () => set({ items: [], discount: 0, resumeContext: null }),
 
       getSubtotal: () => get().items.reduce((a, b) => a + b.subtotal, 0),
 

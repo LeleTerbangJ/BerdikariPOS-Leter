@@ -113,7 +113,7 @@ END $$;
 
 ## v4.7.0 — Stabilitas Stok, Opname Aman, Backup Lengkap, PPN, Refund & Struk Digital
 
-> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§21) dan `TO DO.md` (Prioritas 7–16 + P0.1/P0.2/P0.4).
+> Ringkasan untuk klien/tim. Detail teknis lengkap ada di `AI-HANDOFF.md` (§12–§22) dan `TO DO.md` (Prioritas 7–17 + P0.1/P0.2/P0.4).
 
 ### ✨ Fitur Baru
 
@@ -179,6 +179,11 @@ END $$;
 - **Perbandingan kesegaran per transaksi** — `loadFromCloud` kini memilih versi yang **lebih baru** antara lokal vs cloud (field baru `updatedAt`, fallback `date` untuk data lama); versi cloud yang kalah tidak lagi menghasilkan **duplikat baris** ber-ID sama.
 - Berlaku juga untuk **void/batal, status dapur, dan perubahan metode bayar/refund** — jalur update yang tidak mengubah tanggal transaksi kini terlindungi dari data cloud yang basi.
 
+**Edit Menu & Opsi Cetak Lebih Rapi + Anti Duplikat Transaksi (Prioritas 17):**
+- **Edit Menu tidak lagi menumpuk** — baris toggle **Best Seller ⭐ / Level Gula 🍬 / Pilihan Suhu 🌡️** kini membentang penuh di form (desktop) dan wrap rapi ke baris berikutnya di layar sempit/mobile.
+- **Checkbox "Cetak struk kasir" & "Cetak tiket dapur" berdampingan di desktop** (tetap vertikal di mobile) — modal pembayaran POS dan Payment Box Split Bill konsisten; catatan "(tidak ada cetakan sama sekali)" tetap di baris tersendiri.
+- **Anti duplikat transaksi saat pesanan gantung diedit & dibayar** — sebelumnya, bila kasir **pindah halaman / aplikasi di-refresh** setelah resume pesanan gantung, identitas pending hilang tapi isi keranjang tetap → pembayaran memakai nomor transaksi baru → riwayat jadi **2 transaksi** (pending lama masih Pending + transaksi Selesai baru). Kini identitas pending **tersimpan bersama keranjang** dan dipulihkan otomatis saat kembali ke POS → pending yang diedit di-update ke Selesai (**1 transaksi**). Bonus: identitas pending juga dibersihkan setelah pembayaran agar tidak bocor ke order berikutnya.
+
 (Settings → Backup):
 - Backup **FULL / MASTER_DATA** dengan **checksum berbasis isi** — file yang diubah (harga menu, logo, dll.) walau jumlah item sama akan **ditolak** saat restore (anti-tamper).
 - Restore **2 mode**: **Merge** (gabung dengan data lama) atau **Replace/Snapshot** (sinkron penuh — data zombie tidak kembali lintas device).
@@ -204,6 +209,7 @@ END $$;
 - **Peringatan stok negatif** setelah transaksi (mis. dua device checkout bahan terakhir bersamaan) — kasir **tidak diblokir**, hanya diberi tahu via notifikasi.
 - Otorisasi opname tidak lagi bisa dilakukan oleh siapa pun yang sekadar tahu PIN global — wajib akun Manager.
 - **Item pesanan gantung yang diubah (tambah/kurangi menu) kini selalu muncul di riwayat transaksi** — sinkronisasi realtime/refresh tidak lagi menimpa update lokal dengan versi cloud yang basi; perbandingan kesegaran per transaksi (`updatedAt` fallback `date`) + anti duplikat baris ber-ID sama.
+- **Tidak ada lagi transaksi ganda saat pesanan gantung diedit lalu dibayar setelah pindah halaman/refresh** — identitas pesanan gantung kini tersimpan bersama keranjang dan dipulihkan otomatis, sehingga pembayaran meng-update pending yang sama (bukan membuat transaksi baru); identitas juga dibersihkan pasca-bayar agar tidak bocor ke order berikutnya.
 
 ### ⚙️ Langkah yang Wajib Dijalankan (Database Lama)
 
@@ -262,7 +268,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **449/449 test lolos** (43 file)
+- `npx vitest run` → **460/460 test lolos** (44 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

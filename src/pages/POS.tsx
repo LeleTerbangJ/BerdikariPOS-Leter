@@ -4,6 +4,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useMenuStore } from '../store/menuStore';
 import { useCartStore } from '../store/cartStore';
 import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
+// v4.7 TO DO 17.3: restore konteks resume pending setelah remount (anti transaksi duplikat)
+import { resolveResumeRestore } from '../utils/pendingResume';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
 import { useCustomerStore } from '../store/customerStore';
@@ -292,8 +294,36 @@ export default function POS() {
     }
     setCurrentPendingTx(tx);
     setCheckoutTxId(tx.id);
+    // v4.7 TO DO 17.3: persist identitas pending yang di-resume di cartStore (IndexedDB) —
+    // saat POS di-mount ulang (pindah halaman/refresh) state currentPendingTx/checkoutTxId
+    // hilang tapi cart tetap ada → tanpa ini finalize memakai UUID baru → transaksi DUPLIKAT.
+    useCartStore.getState().setResumeContext({
+      id: tx.id,
+      queueNumber: tx.queueNumber,
+      kitchenStatus: tx.kitchenStatus,
+    });
     addToast(`Pesanan gantung #${tx.queueNumber} dimuat ke keranjang.`, 'info');
   };
+
+  // v4.7 TO DO 17.3: restore identitas pending setelah remount (mount ulang POS).
+  // Efek ini satu-satunya konsumen resumeContext — setelah restore, currentPendingTx/
+  // checkoutTxId kembali seperti sebelum navigasi sehingga semua logika turunan
+  // (pendingItemsChanged, parentTx split, status dapur, default skip tiket dapur) konsisten.
+  useEffect(() => {
+    const cartStore = useCartStore.getState();
+    const { tx, stale } = resolveResumeRestore(
+      cartStore.resumeContext,
+      cartStore.items,
+      useTransactionStore.getState().transactions
+    );
+    // Konteks basi (pending sudah dibayar/dibatalkan di perangkat lain) → bersihkan agar
+    // tidak salah dipakai ulang oleh order baru.
+    if (stale) cartStore.setResumeContext(null);
+    if (!tx) return;
+    setCurrentPendingTx(tx);
+    setCheckoutTxId(tx.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // GAP-3 fix: Real-time sync for menus, inventory, and customers (with GAP-2 auto-reconnect)
   // So Kasir sees changes from Manager's device even without navigating away
@@ -860,6 +890,11 @@ export default function POS() {
     setSelectedCustomerId(null);
     setTableNumber('');
     setCheckoutTxId(uuid());
+    // v4.7 TO DO 17.3: identity pending TIDAK boleh bocor ke order berikutnya — tanpa ini,
+    // setelah finalize resume pending, currentPendingTx tetap menunjuk transaksi yang sudah
+    // Selesai → order BARU berikutnya ikut overrideQueueNumber/reservedDeductions lama
+    // (stok terpotong salah) dan Simpan Pending bisa memakai ID transaksi lama.
+    setCurrentPendingTx(null);
 
     setPayMethod('Cash');
     clearPromo();
@@ -1932,9 +1967,10 @@ export default function POS() {
             </div>
           )}
 
-          {/* v4.7 TO DO 15.3: opsi cetak per-transaksi — dua toggle independen (struk & tiket dapur) */}
+          {/* v4.7 TO DO 15.3: opsi cetak per-transaksi — dua toggle independen (struk & tiket dapur)
+              TO DO 17.2: berdampingan (row) di desktop, vertikal di mobile */}
           {(settings.printerEnabled || settings.autoPrintOnCheckout) && (
-            <div className="flex flex-col gap-1 py-1 text-xs text-slate-600 dark:text-slate-300">
+            <div className="flex flex-col gap-1.5 py-1 text-xs text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:gap-6">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -1954,7 +1990,7 @@ export default function POS() {
                 <span>Cetak tiket dapur</span>
               </label>
               {skipReceiptPrint && skipKitchenPrint && (
-                <span className="text-slate-400 dark:text-slate-500">(tidak ada cetakan sama sekali)</span>
+                <span className="text-slate-400 dark:text-slate-500 sm:basis-full">(tidak ada cetakan sama sekali)</span>
               )}
             </div>
           )}
