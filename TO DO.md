@@ -1037,6 +1037,52 @@
   - Bundle: `kitchenTarget` 'ALL' mengalir ke child (bundleService) tanpa perubahan khusus.
 - **Test**: `printTarget.test.ts` +2 — item `kitchenTarget: 'ALL'` + 2 printer (Makanan & Minuman) → **keduanya mencetak** (2 iframe, hasil sukses); item target spesifik `'Makanan'` + 2 printer → hanya printer Makanan yang benar-benar mencetak (1 iframe). Total test: **449/449** (43 file).
 
+## 🔴 PRIORITAS 17 — TEMUAN UX EDIT MENU, CHECKBOX CETAK & DUPLIKAT TRANSAKSI PENDING (Analisa, v4.7)
+
+> **Sumber temuan**: laporan user (3 case) — (1) tampilan Edit Menu bagian Best Seller / Level Gula / Pilihan Suhu menumpuk; (2) checkbox Cetak Struk Kasir & Cetak Tiket Dapur atas-bawah (ingin berdampingan di desktop); (3) pending payment yang diedit (tambah/kurangi menu) lalu dibayar → riwayat transaksi jadi **2**: 1 pending lama (masih status Pending) + 1 transaksi Selesai (hasil edit).
+> **Status**: ✅ **17.1 + 17.2 SELESAI (v4.7)** — 17.3 masih 🔎 ANALISA (belum dieksekusi).
+
+### 17.1 (🟢 UI/UX) — Edit Menu: Best Seller / Level Gula / Pilihan Suhu menumpuk
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: di modal Edit/Tambah Menu (`Catalog.tsx`), tiga checkbox `Best Seller ⭐` / `Level Gula 🍬` / `Pilihan Suhu 🌡️` berada dalam satu baris `flex items-center gap-4 h-full pt-6` yang merupakan **anak langsung grid** `grid grid-cols-1 sm:grid-cols-2 gap-4` → di desktop baris checkbox hanya mengisi **satu kolom grid (½ lebar modal)** sehingga label panjang saling mendesak & wrap tidak rapi ("menumpuk"); di mobile (1 kolom) lebar penuh tapi tetap rawan wrap tidak konsisten.
+- **Yang dikerjakan (v4.7)**: baris checkbox → `flex flex-wrap items-center gap-x-5 gap-y-2 h-full pt-6 sm:col-span-2` — **`sm:col-span-2`** membentang penuh di grid 2 kolom (desktop) sehingga tiga checkbox sejajar horizontal tanpa saling mendesak; **`flex-wrap` + `gap-y-2`** membuat wrap rapi ke baris berikutnya di layar sempit/mobile. Tanpa perubahan logika form.
+- **File**: `src/pages/Catalog.tsx`.
+- **Validasi**: tsc 0 error, **449/449 test** (43 file).
+
+### 17.2 (🟢 UI/UX) — Checkbox Cetak Struk Kasir & Cetak Tiket Dapur berdampingan di desktop
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: di modal pembayaran POS (`POS.tsx` ±1939–1958) dua checkbox tersusun **vertikal** (`flex flex-col gap-1`) → memakan tinggi modal; di desktop lebih optimal **berdampingan**.
+- **Yang dikerjakan (v4.7)**: container dua checkbox → `flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-6` — **vertikal di mobile, horizontal (berdampingan) di desktop**; catatan "(tidak ada cetakan sama sekali)" diberi `sm:basis-full` agar tetap di baris tersendiri (wrap ke bawah) saat mode row. **Diterapkan konsisten di dua tempat**: modal pembayaran POS (`POS.tsx`) dan Payment Box Split Bill (`SplitBillModal.tsx`, termasuk label tiket dapur yang hanya tampil saat split fresh `!parentTx`).
+- **File**: `src/pages/POS.tsx`, `src/components/SplitBillModal.tsx`.
+- **Validasi**: tsc 0 error, **449/449 test** (43 file).
+
+### 17.3 (🔴 KRITIS) — Duplikat transaksi: pending diedit & dibayar → muncul 2 transaksi (pending lama + selesai baru)
+
+> ✅ **SELESAI (v4.7)** — lihat catatan di bawah.
+
+- **Gejala**: buat pending payment → resume (Lanjutkan Pembayaran) → edit cart (tambah/kurangi menu) → bayar (Selesaikan) → riwayat transaksi berisi **2 baris**: (a) pending lama **masih berstatus Pending dengan item sebelum edit**, (b) transaksi **Selesai dengan item hasil edit**. Pending lama tidak pernah di-update/dihapus.
+- **Akar masalah**: identitas pending hidup di **component state POS.tsx** — `currentPendingTx` (line 162) & `checkoutTxId` (line 425). Keduanya **hilang saat POS di-unmount**: POS adalah route (`App.tsx` line 267) → pindah halaman (mis. buka Riwayat Transaksi) atau refresh akan me-reset keduanya (`checkoutTxId` = UUID baru, `currentPendingTx` = null). Sementara **cartStore PERSIST** (`name: 'rempah-cart'`, IndexedDB) → item hasil resume tetap ada di keranjang. Saat bayar, `finalizeTransaction` memakai `transactionId: checkoutTxId` (line 788) yang sudah UUID **baru** → engine membuat **transaksi baru** (upsert by ID tidak kena, karena ID berbeda) → pending lama (item lama) tidak pernah disentuh → **2 transaksi**.
+- **Bukti di kode**: engine & store sudah benar (re-commit ID sama → upsert by ID → 1 transaksi; dibuktikan test `pendingUpdateHistory` 3/3); `loadFromCloud` sudah ada freshness compare (Prioritas 16). Satu-satunya celah: **ID yang dipakai finalize tidak sama dengan ID pending** setelah remount karena state hilang.
+- **Solusi yang direncanakan (persist resume context)**:
+  1. `cartStore` (persisted): tambah `resumeContext?: { id: string; queueNumber?: number; kitchenStatus?: string } | null` + setter `setResumeContext` / clear di `clearCart`.
+  2. `handleResumePendingOrder` → simpan `resumeContext` (setelah `clearCart`).
+  3. `finalizeTransaction` & `handleSavePending` → `transactionId = currentPendingTx?.id ?? resumeContext?.id ?? checkoutTxId`; `overrideQueueNumber` & `overrideKitchenStatus` fallback dari `resumeContext`.
+  4. **Restore saat mount POS**: bila `resumeContext` ada & cart berisi item → cari tx di store → `setCurrentPendingTx(tx)` + `setCheckoutTxId(tx.id)` agar logika turunan (`pendingItemsChanged`, `parentTx` split, kitchen status, skip tiket dapur default) konsisten seperti tanpa remount.
+  5. Bersihkan context saat: `clearCart` manual (abandon), sukses `handleSavePending`, sukses `finalize`, `onCompleteSplit`, `handleDropOrder`.
+  6. Kasus tepi: pending di-void device lain → tx tidak ditemukan saat restore → dilewati (transaksi baru = perilaku benar).
+- **Test yang direncanakan**: (a) `cartStore` — `setResumeContext` persist & `clearCart` membersihkan; (b) alur remount — simulasikan save pending → resume → state hilang → finalize: **tanpa fix = 2 transaksi (reproduksi bug)**, **dengan fix = 1 transaksi** (pending di-update ke Selesai).
+- **File**: `src/store/cartStore.ts`, `src/pages/POS.tsx`, `src/utils/pendingResume.ts` (baru), test `src/test/pendingResumeContext.test.ts` (baru).
+- **Yang dikerjakan (v4.7)**:
+  1. **`cartStore`** — field baru **`resumeContext?: { id, queueNumber?, kitchenStatus? } | null`** + `setResumeContext(ctx)`; PERSIST (IndexedDB, ikut `rempah-cart`). **Bersih otomatis**: `clearCart()` (menutup abandon, sukses save/finalize, onCompleteSplit) & `removeItem` saat keranjang jadi **kosong** (semua item dihapus = resume dibatalkan → order baru tidak salah me-restore pending lama).
+  2. **`src/utils/pendingResume.ts`** (baru) — helper murni **`resolveResumeRestore(ctx, cartItems, transactions)`**: tanpa konteks → jangan restore; tx tidak ditemukan / sudah **Selesai** (dibayar/dibatalkan di device lain) → **STALE** (bersihkan konteks); keranjang kosong → jangan restore (bukan stale); tx masih **Pending** + keranjang berisi → restore.
+  3. **`POS.tsx`** — `handleResumePendingOrder` menyimpan `resumeContext` (id + queueNumber + kitchenStatus); **efek mount** memanggil `resolveResumeRestore` → bila sah, `setCurrentPendingTx(tx)` + `setCheckoutTxId(tx.id)` sehingga semua logika turunan (`pendingItemsChanged`, `parentTx` split, status dapur, default skip tiket dapur) konsisten seperti tanpa remount; konteks basi dibersihkan.
+  4. **Bonus (bug laten se-area)**: blok sukses `finalizeTransaction` kini memanggil **`setCurrentPendingTx(null)`** — sebelumnya identity pending bocor ke order berikutnya (order BARU ikut `overrideQueueNumber`/`reservedDeductions` lama → stok terpotong salah; `handleSavePending` bisa memakai ID transaksi yang sudah Selesai).
+- **Test** (`pendingResumeContext.test.ts`, 11 kasus): (1) **reproduksi bug** — save pending → resume → state hilang (UUID baru) → finalize → **2 transaksi** (pending lama + selesai baru) ❌; (2) **dengan fix** — restore ID → finalize → **1 transaksi** (pending di-update ke Selesai) ✅; (3) dengan fix + item ditambah → 1 transaksi berisi item hasil edit; (4) `resolveResumeRestore` 5 aturan (tanpa konteks / Pending+cart / Selesai→stale / tidak ditemukan→stale / cart kosong); (5) siklus hidup `resumeContext` di cartStore (set & clearCart / hapus item terakhir → bersih / hapus sebagian → dipertahankan). Total test: **460/460** (44 file; +11).
+
 ---
 
 ## ✅ YANG SUDAH BENAR (jangan diubah)
@@ -1066,6 +1112,7 @@
 12. **Prioritas 14 (Audit Printer Thermal & Split Printer)**: **14.1 ✅ + 14.2 ✅ + 14.3 ✅ + 14.4 ✅ + 14.5 ✅ + 14.6 ✅ (v4.7) — TUNTAS (6/6)** — P-1 ✅ (silent re-pair via `getDevices()` + `establishConnection` bersama), P-2 ✅ (state sesi `sessionStorage`), P-3 ✅ (tidak buka picker otomatis saat checkout), P-4 ✅ (banner "Refresh memutus koneksi" non-dismissable) + **14.2 ✅** (fallback seragam: re-pair senyap → browser print + toast `notifyPrinterFallback`) + **14.3 ✅** (print queue FIFO per printer + retry 1× + drop tanpa hang) + **14.4 ✅** (BroadcastChannel `rempah-printer-events` + `printerStatusStore` + `usePrinterCrossTab` + indikator KDS dengan tombol Hubungkan senyap) + **14.5 ✅** (fallback EKSPLISIT per printer: `cashierFallbackBrowser` / `kp.fallbackBrowser`, return boolean, status error bila nonaktif, toggle di Settings) + **14.6 ✅** (alert→toast semua alur printer, satu sumber kebenaran device identity via `getPrinterDeviceId/Name`, banner pakai `getPrinterSessionState` + label Indonesia konsisten) — test **416/416** (39 file; +7 `printerFallback`). **Prioritas 14 TUNTAS.**
 13. **Prioritas 15 (Temuan UX & Validasi)**: **SELURUHNYA TUNTAS ✅ (v4.7)** — **15.1 ✅** validasi harga add-on > 0 (form blok simpan + toast; import CSV drop invalid + laporan; helper `menuValidation.ts`, 11 test) + **15.2 ✅** daftar pending payment jadi **carousel horizontal** (scroll-snap + geser mobile, panah ◀ ▶ + dot + counter "N dari M", clamp index saat list berubah; semua fitur lama dipertahankan) + **15.3 ✅** opsi cetak per-transaksi **dua toggle independen** — "Cetak struk kasir" (`skipReceiptPrint`) & "Cetak tiket dapur" (`skipKitchenPrint`): skip struk saja → tiket dapur **tetap keluar di awal** (kebutuhan kasir hemat struk tapi dapur tetap dapat tiket); skip keduanya → tidak ada cetakan; **anti tiket DOBEL otomatis** saat resume pending item tidak berubah (tiket dapur default OFF, sudah tercetak saat Simpan Pending); **diperluas ke Split Bill** via `printSplitReceipt(skipCashierPrint, skipKitchenPrint)` + dua checkbox di Payment Box `SplitBillModal`; **resume pending otomatis tercakup** via modal checkout yang sama; 7 test `printTarget`) + **15.4 ✅** header aksi bahan baku (Tambah Bahan/Min. Stok/Export/Template CSV/Import) hanya di tab Bahan Baku (UI-only). **Prioritas 15 TUNTAS** — test **434/434** (41 file), tsc 0 error.
 14. **Prioritas 16 (Bug Item Pending Tidak Ter-update di Riwayat + Fitur Semua Dapur)**: **SELESAI ✅ (v4.7)** — **16.1 ✅** freshness compare di `loadFromCloud` (pilih versi lebih baru per transaksi; **anti-duplikat** — versi cloud yang kalah tidak ikut merge) + **`updatedAt` minimal** (stamp engine tiap commit & `updateKitchenStatus`/`updateTxStatus`/`updateTxMeta`; fallback `date` untuk legacy; tanpa migrasi DB) — menutup race item pending (tambah/kurangi menu) DAN jalur void/cancel/status/meta. Test permanen `pendingUpdateHistory` (3) + `pendingCloudOverwrite` (8) + **16.2 ✅** opsi "Semua Dapur" di Edit Menu (`kitchenTarget: 'ALL'` → tiket ke semua printer dapur aktif; `printTarget` +2) — test **449/449** (43 file), tsc 0 error.
+15. **Prioritas 17 (UX Edit Menu, Checkbox Cetak & Duplikat Transaksi Pending)**: **SELURUHNYA SELESAI ✅ (v4.7)** — **17.1 ✅** baris checkbox Best Seller/Level Gula/Pilihan Suhu `sm:col-span-2` + wrap rapi; **17.2 ✅** checkbox cetak berdampingan di desktop (POS + SplitBillModal, catatan "tidak ada cetakan" wrap ke baris sendiri); **17.3 ✅ (KRITIS)** duplikat transaksi saat pending diedit & dibayar setelah remount — persist `resumeContext` di cartStore + restore via `resolveResumeRestore` saat mount POS + bersihkan identity saat finalize sukses (bonus bug laten: `setCurrentPendingTx(null)`). Test **460/460** (44 file; +11 `pendingResumeContext`).
 
 ---
 

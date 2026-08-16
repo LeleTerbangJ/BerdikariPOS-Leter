@@ -494,7 +494,9 @@ export default function Catalog() {
                 ))}
               </select>
             </div>
-            <div className="flex items-center gap-4 h-full pt-6">
+            {/* v4.7 TO DO 17.1: baris checkbox membentang penuh (sm:col-span-2) di grid 2 kolom
+                + flex-wrap agar rapi saat label panjang / layar sempit (tidak menumpuk) */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 h-full pt-6 sm:col-span-2">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={formBestSeller} onChange={(e) => setFormBestSeller(e.target.checked)} className="w-4 h-4 rounded" />
                 <span className="text-sm font-medium">Best Seller ⭐</span>

@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **449/449 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **460/460 tes otomatis lolos**.
 
 ---
 
@@ -58,6 +58,10 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Opsi cetak per-transaksi (dua toggle)** — **"Cetak struk kasir"** & **"Cetak tiket dapur"**: skip struk saja (tiket dapur **tetap keluar di awal**) atau skip keduanya (tanpa cetakan); **anti tiket dobel otomatis** saat resume pending; berlaku di checkout normal, **Split Bill**, dan **resume pending**.
 - **Header Inventaris lebih rapi** — tombol bahan baku (Tambah Bahan/Min. Stok/Export/Import) hanya di tab Bahan Baku; tab Stock Opname bersih.
 
+### 11. Edit Menu & Opsi Cetak Lebih Rapi (Prioritas 17)
+- **Edit Menu tidak menumpuk** — toggle **Best Seller ⭐ / Level Gula 🍬 / Pilihan Suhu 🌡️** membentang penuh di desktop dan wrap rapi di mobile.
+- **Checkbox cetak berdampingan di desktop** — **"Cetak struk kasir" & "Cetak tiket dapur"** kini sejajar (desktop) / tetap vertikal (mobile), konsisten di modal POS & Split Bill.
+
 ---
 
 ## 🐛 Perbaikan Utama
@@ -68,6 +72,7 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - Import CSV & Stock Opname lebih cepat (1 request batch), rename bahan tercatat dengan nama baru.
 - Perbaikan stabilitas penyimpanan: transaksi & audit log di **IndexedDB** (kuota lokal tidak terbatas).
 - **Perubahan menu pada pesanan gantung (tambah/kurangi) kini selalu muncul di riwayat transaksi** — sinkronisasi antar perangkat tidak lagi menimpa item yang baru diubah dengan versi lama (perbandingan kesegaran per transaksi, termasuk void/batal & perubahan metode bayar).
+- **Tidak ada lagi transaksi ganda saat pesanan gantung diedit lalu dibayar setelah pindah halaman/refresh** — identitas pending tersimpan bersama keranjang & dipulihkan otomatis → pembayaran meng-update pending yang sama (1 transaksi), bukan membuat transaksi baru; identitas dibersihkan pasca-bayar.
 
 ---
 
@@ -123,7 +128,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **449/449 test lolos** (43 file)
+- `npx vitest run` → **460/460 test lolos** (44 file)
 - `npm run build` → **sukses** (tsc + vite build + PWA)
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
