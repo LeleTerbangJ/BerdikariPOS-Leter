@@ -5,10 +5,19 @@ import { v4 as uuid } from 'uuid';
 import type { CashierShift } from '../types';
 import { syncShift, fetchShiftsFromCloud } from '../lib/cloudSync';
 
+export type OpenShiftResult =
+  | { ok: true; shift: CashierShift }
+  | { ok: false; reason: 'shift-exists'; existing: CashierShift };
+
 interface ShiftState {
   shifts: CashierShift[];
   activeShift: CashierShift | null;
-  openShift: (userId: string, userName: string, openingCash: number) => void;
+  // v4.7 TO DO 18.3: openShift kini async + guard "1 shift aktif per outlet".
+  // Return { ok: false, existing } bila sudah ada shift terbuka (lokal / device lain).
+  openShift: (userId: string, userName: string, openingCash: number) => Promise<OpenShiftResult>;
+  // v4.7 TO DO 18.3: lanjutkan shift yang sudah dibuka (mis. oleh kasir lain di device
+  // berbeda) tanpa menginput modal kas ulang — dipakai OpenShiftModal saat deteksi konflik.
+  resumeExistingShift: (shift: CashierShift) => void;
   closeShift: (closingCash: number, totalSales: number, totalTransactions: number, expectedCash: number) => void;
   getActiveShift: () => CashierShift | null;
   getShiftsByUser: (userId: string) => CashierShift[];
@@ -21,7 +30,26 @@ export const useShiftStore = create<ShiftState>()(
       shifts: [],
       activeShift: null,
 
-      openShift: (userId, userName, openingCash) => {
+      openShift: async (userId, userName, openingCash) => {
+        // 18.3 guard: 1 shift aktif per outlet — cek shift terbuka di data lokal
+        // (sudah termasuk hasil loadFromCloud) sebelum membuat shift baru.
+        const localOpen = get().shifts.find((s) => s.status === 'open');
+        if (localOpen) {
+          return { ok: false, reason: 'shift-exists', existing: localOpen };
+        }
+        // Guard cloud (best-effort): device lain bisa membuka shift lebih dulu —
+        // dicegah agar tidak muncul 2 shift "aktif" di laporan Shift Manager.
+        // Offline / fetch gagal → diizinkan (tidak bisa memverifikasi; 1 shift per device).
+        try {
+          const cloud = await fetchShiftsFromCloud();
+          const cloudOpen = cloud?.find((s) => s.status === 'open');
+          if (cloudOpen) {
+            return { ok: false, reason: 'shift-exists', existing: cloudOpen };
+          }
+        } catch (e) {
+          console.warn('[Shift] Gagal verifikasi shift cloud saat buka (dilewati):', e);
+        }
+
         const shift: CashierShift = {
           id: uuid(),
           userId,
@@ -39,6 +67,17 @@ export const useShiftStore = create<ShiftState>()(
           shifts: [shift, ...s.shifts],
         }));
         syncShift(shift);
+        return { ok: true, shift };
+      },
+
+      resumeExistingShift: (shift) => {
+        set((s) => {
+          const exists = s.shifts.some((x) => x.id === shift.id);
+          return {
+            activeShift: shift,
+            shifts: exists ? s.shifts : [shift, ...s.shifts],
+          };
+        });
       },
 
       closeShift: (closingCash, totalSales, totalTransactions, expectedCash) => {
@@ -70,17 +109,12 @@ export const useShiftStore = create<ShiftState>()(
         get().shifts.filter((s) => s.userId === userId),
 
       // BUG-C3 fix: Load shifts from cloud for multi-device visibility
+      // v4.7 TO DO 18.3: restore shift terbuka PALING AWAL (siapa pun kasirnya) —
+      // konsisten dengan model "1 shift aktif per outlet" sehingga semua device
+      // menyatu ke shift yang sama (tidak ada lagi 2 shift "aktif" di laporan).
       loadFromCloud: async () => {
         const cloudShifts = await fetchShiftsFromCloud();
         if (cloudShifts && cloudShifts.length > 0) {
-          let currentUser = null;
-          try {
-            const authModule = await import('./authStore');
-            currentUser = authModule.useAuthStore.getState().currentUser;
-          } catch (e) {
-            console.warn('Failed to load currentUser in shiftStore:', e);
-          }
-
           set((s) => {
             const cloudIds = new Set(cloudShifts.map((sh) => sh.id));
             // Keep local shifts not yet in cloud
@@ -93,13 +127,19 @@ export const useShiftStore = create<ShiftState>()(
               if (cloudVersion && cloudVersion.status === 'closed') {
                 updatedActiveShift = null;
               }
-            } else if (currentUser) {
-              // Local activeShift is null, restore from cloud if there is a matching open shift for current user
-              const openCloudShift = cloudShifts.find(
-                (sh) => sh.userId === currentUser.id && sh.status === 'open'
-              );
-              if (openCloudShift) {
-                updatedActiveShift = openCloudShift;
+            }
+            if (!updatedActiveShift) {
+              // 18.3: 1 shift aktif per outlet — pulihkan shift terbuka PALING AWAL.
+              const openShifts = cloudShifts
+                .filter((sh) => sh.status === 'open')
+                .sort((a, b) => new Date(a.openedAt).getTime() - new Date(b.openedAt).getTime());
+              if (openShifts.length > 0) {
+                updatedActiveShift = openShifts[0];
+                if (openShifts.length > 1) {
+                  console.warn(
+                    `[Shift] Ditemukan ${openShifts.length} shift terbuka di cloud — hanya shift paling awal yang diaktifkan. Tutup shift duplikat secara manual agar laporan akurat.`
+                  );
+                }
               }
             }
 

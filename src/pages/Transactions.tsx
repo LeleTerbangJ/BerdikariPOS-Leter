@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
 import { useAuthStore } from '../store/authStore';
 import { useAuditLogStore } from '../store/auditLogStore';
@@ -15,9 +15,11 @@ import { calculateItemDeductions } from '../utils/hpp';
 import { applyStatusStockEffects, type StockEffectStatus } from '../utils/transactionStockActions';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 // v4.7 TO DO 11.2 (P0.2): refund/retur penuh
-import { isRefundableTransaction, refundAmount, refundMovementNotes, REFUND_CASH_CATEGORY } from '../utils/refund';
+import { isRefundableTransaction, canExecuteRefund, refundAmount, refundMovementNotes, REFUND_CASH_CATEGORY } from '../utils/refund';
 // v4.7 TO DO 11.2 (P0.4): struk digital (WA/email)
 import { buildReceiptText, buildWhatsAppUrl, buildMailtoUrl, findCustomerContact } from '../utils/digitalReceipt';
+// v4.7 TO DO 18.2 (Prioritas 18): badge "#N duplikat" — deteksi nomor antrean kembar lintas device
+import { findDuplicateQueueNumbers } from '../utils/queueNumber';
 import type { TxStatus, Transaction } from '../types';
 import PinModal from '../components/PinModal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -49,6 +51,8 @@ type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 export default function Transactions() {
   // v4.7 TO DO 13.7 (O-5): confirmedSyncIds — badge "Belum Sync" per transaksi
   const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta, confirmedSyncIds } = useTransactionStore();
+  // v4.7 TO DO 18.2 (Prioritas 18): nomor antrean yang muncul > 1× di hari yang sama (2 kasir offline)
+  const dupQueueNumbers = useMemo(() => findDuplicateQueueNumbers(transactions), [transactions]);
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const { menus } = useMenuStore();
@@ -67,6 +71,10 @@ export default function Transactions() {
   const [refundNote, setRefundNote] = useState('');
   const [showRefundPin, setShowRefundPin] = useState(false);
   const [refundPending, setRefundPending] = useState<{ tx: Transaction; note: string } | null>(null);
+  // v4.7 TO DO 18.8 (A4): guard anti double-refund — cek ulang dari STORE (salinan render
+  // bisa basi: refunded belum ter-update) + ref in-flight + state processing tombol.
+  const refundingRef = useRef(false);
+  const [refundProcessing, setRefundProcessing] = useState(false);
 
   // v4.7 TO DO 11.2 (P0.4): struk digital — kirim ke WA/email pelanggan
   const { customers } = useCustomerStore();
@@ -156,7 +164,8 @@ export default function Transactions() {
       // 3. Search Filter (Queue number, Customer, Cashier, OrderType, TableNumber, PaymentMethod)
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const queueStr = `#${t.queueNumber}`;
+        // v4.7 TO DO 18.8 (A13): demo fresh (queueNumber 0) bisa dicari sebagai "demo"
+        const queueStr = t.txStatus === 'Demo' && !t.queueNumber ? 'demo' : `#${t.queueNumber}`;
         const matchQueue = queueStr.toLowerCase().includes(q) || String(t.queueNumber) === q;
         const matchCashier = t.cashierName?.toLowerCase().includes(q);
         const matchCustomer = t.customerName?.toLowerCase().includes(q);
@@ -227,10 +236,21 @@ export default function Transactions() {
   // (sebelumnya dua rantai if-else identik di onConfirmAction & onPinSuccess — Demo→Selesai
   // dan hapus Pending tidak pernah deduct/revert → stok bocor).
   const applyStockEffects = (tx: Transaction, toStatus: StockEffectStatus) => {
+    const isSplit = hasSplitChildren(tx);
+    // v4.7 TO DO 18.8 (A9): SOP void split — cancel parent pending beranak split (atau sub-bill
+    // itu sendiri) TIDAK otomatis mengembalikan stok bagian yang belum lunas (guard stok split);
+    // stok hanya kembali bila setiap sub-bill Selesai di-void satu per satu. Kasir diingatkan.
+    if (toStatus === 'Cancel' && isSplit) {
+      addToast(
+        'Transaksi ini bagian dari split bill — stok bagian belum lunas hanya kembali bila setiap sub-bill Selesai di-void satu per satu.',
+        'warning',
+        7000
+      );
+    }
     applyStatusStockEffects(
       tx,
       toStatus,
-      hasSplitChildren(tx),
+      isSplit,
       () => calculateDeductions(tx),
       { revertStock, deductStock, revertVisit, recordVisit }
     );
@@ -302,12 +322,18 @@ export default function Transactions() {
   };
 
   // Otorisasi: Manager langsung eksekusi; role lain lewat PIN (seperti void/delete).
+  // v4.7 TO DO 18.8 (A4): tombol Konfirmasi ber-state processing — mencegah klik ganda.
   const confirmRefund = () => {
     if (!refundTx) return;
     const note = refundNote.trim();
     if (currentUser?.role === 'Manager') {
-      executeRefund(refundTx, note);
-      setRefundTx(null);
+      setRefundProcessing(true);
+      try {
+        executeRefund(refundTx, note);
+      } finally {
+        setRefundProcessing(false);
+        setRefundTx(null);
+      }
     } else {
       setRefundPending({ tx: refundTx, note });
       setRefundTx(null);
@@ -317,39 +343,57 @@ export default function Transactions() {
 
   // Eksekusi refund penuh: revert stok + kunjungan, Kas Keluar 'Refund' di Rekap Kas,
   // tandai refunded (sync cloud lintas device), audit log.
+  // v4.7 TO DO 18.8 (A4): anti double-refund — guard isRefundableTransaction memakai salinan
+  // RENDER (refunded belum ter-update) sehingga dua klik cepat bisa lolos keduanya → revert
+  // stok ganda + 2× Kas Keluar Refund. Solusi: (1) cek ulang `refunded` dari STORE di awal,
+  // (2) ref in-flight (proteksi reentrancy masa depan bila fungsi jadi async), (3) tombol
+  // Konfirmasi ber-state processing + disable tombol Refund saat PIN pending.
   const executeRefund = (tx: Transaction, note: string) => {
     if (!currentUser) return;
-    if (!isRefundableTransaction(tx, hasSplitChildren(tx))) return;
-    const amount = refundAmount(tx);
+    // v4.7 TO DO 18.8 (A4): guard anti double-refund — cek ulang `refunded` dari STORE
+    // (salinan render bisa basi) + in-flight guard + split guard; pakai TARGET terbaru.
+    const target = canExecuteRefund(
+      tx,
+      useTransactionStore.getState().transactions,
+      hasSplitChildren,
+      refundingRef.current
+    );
+    if (!target) return;
+    refundingRef.current = true;
+    try {
+      const amount = refundAmount(target);
 
-    // 1) Stok dikembalikan (full) — pakai recipeSnapshot tersimpan via calculateItemDeductions
-    const deductions = calculateDeductions(tx);
-    if (Object.keys(deductions).length > 0) {
-      revertStock(deductions, `Refund transaksi #${tx.queueNumber}`);
+      // 1) Stok dikembalikan (full) — pakai recipeSnapshot tersimpan via calculateItemDeductions
+      const deductions = calculateDeductions(target);
+      if (Object.keys(deductions).length > 0) {
+        revertStock(deductions, `Refund transaksi #${target.queueNumber}`);
+      }
+
+      // 2) Kunjungan pelanggan dikembalikan
+      if (target.customerId) revertVisit(target.customerId, target.totalAmount);
+
+      // 3) Kas Keluar 'Refund' — akuntabel di Rekap Kas (online langsung / offline antre + retry)
+      addMovement('out', amount, REFUND_CASH_CATEGORY, refundMovementNotes(target, note), currentUser.id, currentUser.name);
+
+      // 4) Tandai refunded + sync ke cloud (device lain melihat status refund & eksklusi omset)
+      updateTxMeta(target.id, {
+        refunded: true,
+        refundedAt: new Date().toISOString(),
+        refundedAmount: amount,
+        refundNote: note || undefined,
+        refundedById: currentUser.id,
+        refundedByName: currentUser.name,
+      });
+
+      // 5) Audit log
+      addLog(currentUser.id, currentUser.name, currentUser.role, 'refund_transaction',
+        `Refund transaksi #${target.queueNumber} sebesar ${formatRupiah(amount)}${note ? ` — ${note}` : ''}`,
+        { transactionId: target.id, refundedAmount: amount, note: note || undefined });
+
+      addToast(`Refund transaksi #${target.queueNumber} berhasil (${formatRupiah(amount)})`, 'success');
+    } finally {
+      refundingRef.current = false;
     }
-
-    // 2) Kunjungan pelanggan dikembalikan
-    if (tx.customerId) revertVisit(tx.customerId, tx.totalAmount);
-
-    // 3) Kas Keluar 'Refund' — akuntabel di Rekap Kas (online langsung / offline antre + retry)
-    addMovement('out', amount, REFUND_CASH_CATEGORY, refundMovementNotes(tx, note), currentUser.id, currentUser.name);
-
-    // 4) Tandai refunded + sync ke cloud (device lain melihat status refund & eksklusi omset)
-    updateTxMeta(tx.id, {
-      refunded: true,
-      refundedAt: new Date().toISOString(),
-      refundedAmount: amount,
-      refundNote: note || undefined,
-      refundedById: currentUser.id,
-      refundedByName: currentUser.name,
-    });
-
-    // 5) Audit log
-    addLog(currentUser.id, currentUser.name, currentUser.role, 'refund_transaction',
-      `Refund transaksi #${tx.queueNumber} sebesar ${formatRupiah(amount)}${note ? ` — ${note}` : ''}`,
-      { transactionId: tx.id, refundedAmount: amount, note: note || undefined });
-
-    addToast(`Refund transaksi #${tx.queueNumber} berhasil (${formatRupiah(amount)})`, 'success');
   };
 
   const handleReprintConfirm = async (target: 'cashier' | 'all') => {
@@ -601,8 +645,11 @@ export default function Transactions() {
                 onClick={() => setExpanded(expanded === tx.id ? null : tx.id)}
                 className="w-full p-4 flex items-center gap-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/30 transition"
               >
-                <div className="w-10 h-10 rounded-xl bg-brand-100 dark:bg-brand-900/50 flex items-center justify-center font-bold text-brand-700 dark:text-brand-300">
-                  #{tx.queueNumber}
+                <div className="w-10 h-10 rounded-xl bg-brand-100 dark:bg-brand-900/50 flex items-center justify-center font-bold text-brand-700 dark:text-brand-300 text-[10px]">
+                  {/* v4.7 TO DO 18.8 (A13): transaksi demo FRESH tidak memakai nomor antrean
+                      (queueNumber 0) — tampilkan label DEMO. Demo hasil konversi dari Selesai
+                      tetap memakai nomor aslinya. */}
+                  {tx.txStatus === 'Demo' && !tx.queueNumber ? 'DEMO' : `#${tx.queueNumber}`}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm dark:text-slate-200">{formatDate(tx.date)}</p>
@@ -635,6 +682,15 @@ export default function Transactions() {
                         title="Transaksi ini belum tersinkron ke cloud — akan dikirim otomatis saat online"
                       >
                         <Clock size={12} /> Belum Sync
+                      </span>
+                    )}
+                    {/* v4.7 TO DO 18.2 (Prioritas 18): badge nomor antrean duplikat (2 kasir) */}
+                    {dupQueueNumbers.has(tx.queueNumber) && (
+                      <span
+                        className="badge bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300"
+                        title="Nomor antrean ini muncul lebih dari satu kali hari ini (kemungkinan dua kasir memproses bersamaan saat offline). Periksa & void salah satu bila perlu."
+                      >
+                        <Ban size={12} /> #{tx.queueNumber} duplikat
                       </span>
                     )}
                   </div>
@@ -760,7 +816,9 @@ export default function Transactions() {
                     {tx.txStatus === 'Selesai' && isRefundableTransaction(tx, hasSplitChildren(tx)) && (
                       <button
                         onClick={() => handleRefund(tx)}
-                        className="btn-secondary text-xs text-amber-600 dark:text-amber-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto"
+                        // v4.7 TO DO 18.8 (A4): disable saat otorisasi PIN pending / sedang processing
+                        disabled={!!refundPending || refundProcessing}
+                        className="btn-secondary text-xs text-amber-600 dark:text-amber-400 flex items-center justify-center gap-1.5 py-2 px-3 w-full sm:w-auto disabled:opacity-40"
                         title="Refund / Retur penuh — stok dikembalikan & Kas Keluar 'Refund' dicatat"
                       >
                         <RotateCcw size={14} /> Refund
@@ -863,8 +921,11 @@ export default function Transactions() {
               <textarea value={refundNote} onChange={(e) => setRefundNote(e.target.value)} className="input" rows={2} placeholder="Mis. pelanggan mengembalikan pesanan..." />
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setRefundTx(null)} className="btn-secondary flex-1">Batal</button>
-              <button onClick={confirmRefund} className="btn-primary flex-1">Konfirmasi Refund</button>
+              <button onClick={() => setRefundTx(null)} disabled={refundProcessing} className="btn-secondary flex-1 disabled:opacity-40">Batal</button>
+              {/* v4.7 TO DO 18.8 (A4): state processing anti klik ganda */}
+              <button onClick={confirmRefund} disabled={refundProcessing} className="btn-primary flex-1 disabled:opacity-60">
+                {refundProcessing ? 'Memproses…' : 'Konfirmasi Refund'}
+              </button>
             </div>
           </div>
         </Modal>

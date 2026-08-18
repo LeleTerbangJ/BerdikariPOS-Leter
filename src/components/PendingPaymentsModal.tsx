@@ -5,8 +5,10 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { formatRupiah, formatTime } from '../utils/format';
 import { printProvisionalBill } from '../utils/printer';
+// v4.7 TO DO 18.2 (Prioritas 18): badge "#N duplikat" — deteksi nomor antrean kembar lintas device
+import { findDuplicateQueueNumbers } from '../utils/queueNumber';
 import type { Transaction } from '../types';
-import { Search, Clock, Printer, Trash2, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Clock, Printer, Trash2, ArrowRight, ChevronLeft, ChevronRight, Ban } from 'lucide-react';
 
 interface PendingPaymentsModalProps {
   open: boolean;
@@ -28,6 +30,11 @@ export default function PendingPaymentsModal({
   const [search, setSearch] = useState('');
 
   const pendingList = useMemo(() => allTransactions.filter(isPendingTransaction), [allTransactions]);
+  // v4.7 TO DO 18.2: nomor antrean yang muncul > 1× di hari yang sama (kemungkinan 2 kasir offline)
+  const dupQueueNumbers = useMemo(
+    () => findDuplicateQueueNumbers(allTransactions),
+    [allTransactions]
+  );
 
   const filteredList = pendingList.filter((t) => {
     const qStr = `#${t.queueNumber}`;
@@ -128,8 +135,16 @@ export default function PendingPaymentsModal({
                     >
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
-                          <span className="font-bold text-brand-600 dark:text-brand-400 text-sm">
+                          <span className="font-bold text-brand-600 dark:text-brand-400 text-sm flex items-center gap-1.5">
                             #{tx.queueNumber}
+                            {dupQueueNumbers.has(tx.queueNumber) && (
+                              <span
+                                className="text-[9px] bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 font-bold px-1.5 py-0.5 rounded-full"
+                                title="Nomor antrean ini muncul lebih dari satu kali hari ini (kemungkinan dua kasir memproses bersamaan saat offline)"
+                              >
+                                <Ban size={9} className="inline" /> duplikat
+                              </span>
+                            )}
                           </span>
                           <span className="text-[10px] bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-semibold px-2 py-0.5 rounded-full">
                             Pending

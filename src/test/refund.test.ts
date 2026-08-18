@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   REFUND_CASH_CATEGORY,
   isRefundableTransaction,
+  canExecuteRefund,
   refundAmount,
   refundMovementNotes,
   buildRefundCashMovement,
@@ -54,6 +55,52 @@ describe('isRefundableTransaction (P0.2 — guard refund)', () => {
 
   it('totalAmount 0 → tidak bisa', () => {
     expect(isRefundableTransaction(makeTx({ totalAmount: 0 }), false)).toBe(false);
+  });
+});
+
+// ============================================================
+// canExecuteRefund (v4.7 TO DO 18.8 / A4 — anti double-refund)
+// ============================================================
+
+describe('canExecuteRefund (A4 — cek ulang dari STORE, bukan salinan render)', () => {
+  it('klik pertama: render & store sama-sama bersih → target terbaru dikembalikan (boleh eksekusi)', () => {
+    const tx = makeTx({});
+    const target = canExecuteRefund(tx, [tx], () => false, false);
+    expect(target).not.toBeNull();
+    expect(target!.id).toBe('tx-1');
+  });
+
+  it('klik kedua cepat: salinan RENDER masih bersih tapi STORE sudah refunded → null (ditolak)', () => {
+    // Simulasi double-click: render copy (closure lama) belum tahu refunded,
+    // tapi store (sumber kebenaran) sudah ter-update oleh klik pertama.
+    const staleRenderCopy = makeTx({}); // refunded masih undefined
+    const storeAfterFirstRefund = [makeTx({ refunded: true, refundedAt: '2026-08-10T11:00:00.000Z' })];
+    expect(canExecuteRefund(staleRenderCopy, storeAfterFirstRefund, () => false, false)).toBeNull();
+  });
+
+  it('render copy refunded tapi store bersih (stale store) → target fresh dari store dipakai', () => {
+    const staleRenderCopy = makeTx({ refunded: true });
+    const storeClean = [makeTx({})];
+    const target = canExecuteRefund(staleRenderCopy, storeClean, () => false, false);
+    expect(target).not.toBeNull();
+    expect(target!.refunded).toBeUndefined();
+  });
+
+  it('in-flight guard (refund sedang berjalan) → null', () => {
+    const tx = makeTx({});
+    expect(canExecuteRefund(tx, [tx], () => false, true)).toBeNull();
+  });
+
+  it('sub-bill split / induk ber-anak split → null (stok dikelola sesi split)', () => {
+    const sub = makeTx({ splitParentId: 'parent-1' });
+    expect(canExecuteRefund(sub, [sub], () => false, false)).toBeNull();
+    const parent = makeTx({});
+    expect(canExecuteRefund(parent, [parent], () => true, false)).toBeNull();
+  });
+
+  it('transaksi tidak ditemukan di store → fallback salinan render (tetap divalidasi)', () => {
+    const tx = makeTx({});
+    expect(canExecuteRefund(tx, [], () => false, false)).not.toBeNull();
   });
 });
 

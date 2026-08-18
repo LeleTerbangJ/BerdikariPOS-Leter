@@ -9,6 +9,10 @@ import {
   getActiveSplitStockSession,
   recordPaidBill,
   loadSplitStockSession,
+  isFreshSplitReserveActive,
+  cartSignatureMatches,
+  resolveSplitQueueNumber,
+  computePendingSplitReconcile,
 } from '../utils/splitStockSession';
 import { allocateProportional } from '../utils/splitAllocation';
 import type { CartItem } from '../types';
@@ -72,6 +76,38 @@ describe('computeCartSignature (TO DO 5.1)', () => {
 
   it('array kosong → signature kosong yang konsisten', () => {
     expect(computeCartSignature([])).toBe(computeCartSignature([]));
+  });
+
+  it('v4.7 TO DO 18.8 (A6): HARGA add-on berbeda → signature BEDA (sesi split harus dilepas)', () => {
+    const murah = makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }] });
+    const mahal = makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 8000 }] });
+    expect(computeCartSignature([murah])).not.toBe(computeCartSignature([mahal]));
+  });
+
+  it('v4.7 TO DO 18.8 (A6): harga add-on sama → signature SAMA (urutan add-on sama)', () => {
+    const a = makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }, { name: 'Jelly', price: 3000 }] });
+    const b = makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }, { name: 'Jelly', price: 3000 }] });
+    expect(computeCartSignature([a])).toBe(computeCartSignature([b]));
+  });
+});
+
+describe('cartSignatureMatches (v4.7 TO DO 18.8 / A6 — kompatibilitas sesi pra-upgrade)', () => {
+  it('format baru (dengan harga add-on) cocok', () => {
+    const items = [makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }] })];
+    expect(cartSignatureMatches(computeCartSignature(items), items)).toBe(true);
+  });
+
+  it('format LEGACY (sesi tersimpan sebelum 18.8, tanpa harga) tetap cocok — reserve tidak bocor', () => {
+    // Sesi lama dibuat dengan format lama: menuId:qty:namaAddons:temp:sugar
+    const legacyStored = JSON.stringify(['Es Teh:1:Boba::Normal']);
+    const items = [makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }], sugar: 'Normal' })];
+    expect(cartSignatureMatches(legacyStored, items)).toBe(true);
+  });
+
+  it('cart berbeda → tidak cocok (format baru maupun legacy)', () => {
+    const items = [makeItem('Es Teh', 1, { addons: [{ name: 'Boba', price: 5000 }] })];
+    expect(cartSignatureMatches(computeCartSignature([makeItem('Kopi')]), items)).toBe(false);
+    expect(cartSignatureMatches('', items)).toBe(false);
   });
 });
 
@@ -188,6 +224,85 @@ describe('recordPaidBill & resume session (TO DO 5.7/5.9)', () => {
     expect(loaded?.mode).toBe('equal');
     expect(loaded?.count).toBe(2);
     expect(loaded?.queueNumber).toBe(42);
+  });
+});
+
+describe('isFreshSplitReserveActive (v4.7 TO DO 18.4 — warning reserve per-device)', () => {
+  it('split FRESH dengan stok ter-reserve → true (warning tampil)', () => {
+    const session = createSplitStockSession('sig', { 'inv-1': 2, 'inv-2': 1 });
+    expect(isFreshSplitReserveActive(null, session)).toBe(true);
+    expect(isFreshSplitReserveActive(undefined, session)).toBe(true);
+  });
+
+  it('split PENDING (parentTx ada) → false — stok sudah dipotong saat pending dibuat & terlihat cloud', () => {
+    const session = createSplitStockSession('sig', { 'inv-1': 2 });
+    expect(isFreshSplitReserveActive({ id: 'parent-1' }, session)).toBe(false);
+  });
+
+  it('tanpa sesi / sesi tanpa reserve → false', () => {
+    expect(isFreshSplitReserveActive(null, null)).toBe(false);
+    const empty = createSplitStockSession('sig', {});
+    expect(isFreshSplitReserveActive(null, empty)).toBe(false);
+  });
+});
+
+describe('resolveSplitQueueNumber (v4.7 TO DO 18.8 / A7 — 1 pesanan = 1 nomor)', () => {
+  it('split PENDING → nomor antrean PARENT (seragam dengan split fresh, counter tidak melompat)', () => {
+    expect(resolveSplitQueueNumber({ queueNumber: 7 }, null)).toBe(7);
+    expect(resolveSplitQueueNumber({ queueNumber: 7 }, createSplitStockSession('sig', {}))).toBe(7);
+  });
+
+  it('split FRESH → nomor sesi (dikunci dari sub-bill pertama)', () => {
+    const session = createSplitStockSession('sig', {});
+    session.queueNumber = 42;
+    expect(resolveSplitQueueNumber(null, session)).toBe(42);
+  });
+
+  it('tanpa parent & tanpa sesi → undefined (engine alokasi nomor baru)', () => {
+    expect(resolveSplitQueueNumber(null, null)).toBeUndefined();
+    expect(resolveSplitQueueNumber(undefined, createSplitStockSession('sig', {}))).toBeUndefined();
+  });
+});
+
+describe('computePendingSplitReconcile (v4.7 TO DO 18.8 / A8 — reserve parent → cart saat ini)', () => {
+  it('item dihapus → deltaRevert (stok dikembalikan)', () => {
+    const { deltaRevert, deltaDeduct } = computePendingSplitReconcile(
+      { 'inv-1': 3, 'inv-2': 2 },
+      { 'inv-1': 3 } // inv-2 dihapus
+    );
+    expect(deltaRevert).toEqual({ 'inv-2': 2 });
+    expect(deltaDeduct).toEqual({});
+  });
+
+  it('item ditambah → deltaDeduct (stok dipotong)', () => {
+    const { deltaRevert, deltaDeduct } = computePendingSplitReconcile(
+      { 'inv-1': 2 },
+      { 'inv-1': 2, 'inv-2': 5 } // inv-2 baru
+    );
+    expect(deltaDeduct).toEqual({ 'inv-2': 5 });
+    expect(deltaRevert).toEqual({});
+  });
+
+  it('qty item bertambah / berkurang → selisih dikoreksi', () => {
+    const { deltaRevert, deltaDeduct } = computePendingSplitReconcile(
+      { 'inv-1': 4, 'inv-2': 3 },
+      { 'inv-1': 2, 'inv-2': 5 }
+    );
+    expect(deltaRevert).toEqual({ 'inv-1': 2 });
+    expect(deltaDeduct).toEqual({ 'inv-2': 2 });
+  });
+
+  it('item sama persis → tidak ada delta (delta-0 aman)', () => {
+    const { deltaRevert, deltaDeduct } = computePendingSplitReconcile(
+      { 'inv-1': 3, 'inv-2': 2 },
+      { 'inv-1': 3, 'inv-2': 2 }
+    );
+    expect(deltaRevert).toEqual({});
+    expect(deltaDeduct).toEqual({});
+  });
+
+  it('kosong → tidak ada delta', () => {
+    expect(computePendingSplitReconcile({}, {})).toEqual({ deltaRevert: {}, deltaDeduct: {} });
   });
 });
 

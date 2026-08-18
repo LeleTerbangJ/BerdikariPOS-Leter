@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useTransactionStore } from '../store/transactionStore';
+// v4.7 TO DO 18.6: indikator "laporan belum final" saat ada data belum tersinkron (reuse badge O-5)
+import SyncFreshnessBanner from '../components/SyncFreshnessBanner';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useMenuStore } from '../store/menuStore';
 import { useCustomerStore } from '../store/customerStore';
@@ -352,6 +354,8 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* v4.7 TO DO 18.6: peringatan laporan belum final saat ada transaksi/operasi belum sync */}
+      <SyncFreshnessBanner />
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📊 Dashboard & Analitik</h1>
         

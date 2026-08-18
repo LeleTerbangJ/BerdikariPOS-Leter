@@ -11,6 +11,8 @@ import { formatRupiah, formatDate } from '../utils/format';
 import { splitContributionDivisor } from '../utils/splitAllocation';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
+// v4.7 TO DO 18.6: indikator "laporan belum final" saat ada data belum tersinkron (reuse badge O-5)
+import SyncFreshnessBanner from '../components/SyncFreshnessBanner';
 import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF, exportPpnPDF } from '../utils/pdfExport';
 // v4.7 TO DO 11.2 (P0.1): Laporan PPN bulanan — logika murni
 import { isTaxableTransaction, toPpnRow, summarizePpn, aggregatePpnByDay } from '../utils/ppnReport';
@@ -694,6 +696,9 @@ export default function Reports() {
           )}
         </div>
       </div>
+
+      {/* v4.7 TO DO 18.6: peringatan laporan belum final saat ada transaksi/operasi belum sync */}
+      <SyncFreshnessBanner />
 
       {/* Date Filter */}
       <div className="card p-4">

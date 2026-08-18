@@ -48,4 +48,50 @@ describe('checkStockAvailability alias (TO DO 2.5 — unifikasi validasi stok)',
   it('stok cukup → tanpa warning', () => {
     expect(checkStockAvailability(makeCart(3), [menu], inventory)).toEqual([]);
   });
+
+  // v4.7 TO DO 18.8 (A11) — bahan yang direferensikan resep sudah dihapus dari inventory
+  it('resep memakai bahan yang sudah DIHAPUS → warning missing (bukan dilewati diam-diam)', () => {
+    // menu2 merujuk 'gula' yang tidak ada di inventory
+    const menu2: Menu = {
+      id: 'es-teh',
+      name: 'Es Teh',
+      price: 5000,
+      category: 'Minuman',
+      ingredients: { gula: 0.5 },
+    } as Menu;
+    const cart: CartItem[] = [
+      { lineId: 'l2', menuId: 'es-teh', name: 'Es Teh', quantity: 2, basePrice: 5000, price: 5000, subtotal: 10000, addons: [] } as CartItem,
+    ];
+
+    const warnings = checkStockAvailability(cart, [menu2], inventory);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      ingredientId: 'gula',
+      ingredientName: 'gula',
+      required: 1,
+      available: 0,
+      missing: true,
+    });
+    // valid=false → checkout terblokir dengan peringatan (bisa "Lanjutkan Tetap")
+    expect(InventoryEngine.validateStockAvailability(cart, [menu2], inventory).valid).toBe(false);
+  });
+
+  it('campuran: bahan cukup + bahan hilang → warning missing ikut dilaporkan bersama stok kurang', () => {
+    const menu3: Menu = {
+      id: 'combo',
+      name: 'Combo',
+      price: 20000,
+      category: 'Makanan',
+      ingredients: { beras: 1, telur: 2, saus_hilang: 1 },
+    } as Menu;
+    const cart: CartItem[] = [
+      { lineId: 'l3', menuId: 'combo', name: 'Combo', quantity: 1, basePrice: 20000, price: 20000, subtotal: 20000, addons: [] } as CartItem,
+    ];
+
+    const warnings = checkStockAvailability(cart, [menu3], inventory);
+    // beras 1kg ≤ 2 ✓ ; telur 2 ≤ 10 ✓ ; saus_hilang → missing
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].missing).toBe(true);
+    expect(warnings[0].ingredientId).toBe('saus_hilang');
+  });
 });

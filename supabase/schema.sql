@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS menus (
 
 -- Safe migration for existing databases
 ALTER TABLE menus ADD COLUMN IF NOT EXISTS is_bundle BOOLEAN DEFAULT false;
+-- v4.7 TO DO 18.8 (A5): last-write-wins lintas device — kolom updated_at inventory
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 -- 3b. Menu Components table (Bundle & Add-on Engine)
 CREATE TABLE IF NOT EXISTS menu_components (
@@ -97,6 +99,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- v4.7 TO DO 12.2.4 (P-A3): snapshot performa promo — nama & nominal diskon promo saat checkout
   promo_name TEXT,
   promo_amount FLOAT,
+  -- v4.7 TO DO 18.8 (A10): waktu tiket dapur tercetak saat Simpan Pending — resume skip tiket dapur
+  -- hanya bila sudah pernah tercetak (anti tiket dobel; printer gagal → tiket tidak hilang diam-diam)
+  kitchen_ticket_printed_at TIMESTAMPTZ,
   -- v4.7 TO DO 11.2 (P0.2): refund/retur penuh — stok & kunjungan di-revert, kas keluar 'Refund' di Rekap Kas
   refunded BOOLEAN DEFAULT false,
   refunded_at TIMESTAMPTZ,
@@ -121,6 +126,8 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS voucher_code TEXT;
 -- v4.7 TO DO 12.2.4 (P-A3): kolom performa promo (snapshot nama & nominal diskon saat checkout)
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_name TEXT;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS promo_amount FLOAT;
+-- v4.7 TO DO 18.8 (A10): kolom tiket dapur tercetak (self-heal DB lama)
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;
 
 -- Safe migration: izinkan status 'Pending' pada tx_status (di-drop lalu di-add ulang dengan nilai yang sama, aman dijalankan berulang)
 DO $$
@@ -430,6 +437,75 @@ CREATE POLICY "Allow all for anon" ON stock_logs FOR ALL USING (true) WITH CHECK
 CREATE POLICY "Allow all for anon" ON settings FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON stock_opnames FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for anon" ON cash_movements FOR ALL USING (true) WITH CHECK (true);
+
+-- ============================================================
+-- v4.7 TO DO 18.1 (Prioritas 18): RPC atomik penyesuaian stok (optimistic concurrency 2 kasir)
+-- ============================================================
+-- Masalah: validasi stok & pemotongan terpisah → dua kasir yang membaca stok sama bisa
+-- memotong melebihi fisik (lost-update). Solusi: penyesuaian stok cloud berbasis DELTA yang
+-- atomik & terjaga (guard) di level database.
+--   - p_delta < 0 (deduksi)  : DITOLAK bila stok cloud < -p_delta → cegah oversell lintas device.
+--   - p_delta > 0 (revert)   : selalu diizinkan (menambah stok tidak pernah konflik).
+-- Mengembalikan JSONB { ok, stock, reason }:
+--   - ok=true,  stock=<stok baru>            → penyesuaian berhasil
+--   - ok=false, stock=<stok aktual>, reason='insufficient' → deduksi ditolak (stok cloud kurang)
+--   - ok=false, reason='not_found' (stock tidak disertakan — NULL) → id tidak ada di tabel inventory
+CREATE OR REPLACE FUNCTION adjust_inventory_stock(p_id TEXT, p_delta FLOAT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_stock FLOAT;
+BEGIN
+  SELECT stock INTO v_stock FROM inventory WHERE id = p_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'stock', NULL::FLOAT, 'reason', 'not_found');
+  END IF;
+  IF p_delta < 0 AND v_stock < -p_delta THEN
+    RETURN jsonb_build_object('ok', false, 'stock', v_stock, 'reason', 'insufficient');
+  END IF;
+  UPDATE inventory SET stock = v_stock + p_delta, updated_at = now() WHERE id = p_id;
+  RETURN jsonb_build_object('ok', true, 'stock', v_stock + p_delta, 'reason', 'ok');
+END;
+$$;
+
+-- ============================================================
+-- v4.7 TO DO 18.2 (Prioritas 18): counter nomor antrean atomik per outlet+date
+-- ============================================================
+-- Masalah: getNextQueueNumber memakai check-then-act (baca max → +1) → dua kasir yang
+-- memproses bersamaan bisa mendapat nomor antrean SAMA (#N kembar). Solusi: counter
+-- persisten di cloud yang dinaikkan secara ATOMIK (row lock upsert) — dua device tidak
+-- mungkin mendapat nomor sama saat online.
+CREATE TABLE IF NOT EXISTS queue_counters (
+  outlet_id TEXT NOT NULL DEFAULT 'default',
+  date TEXT NOT NULL,              -- 'YYYY-MM-DD' lokal device (konsisten dengan getTodayDateStr)
+  last_number INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (outlet_id, date)
+);
+ALTER TABLE queue_counters ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all for anon" ON queue_counters FOR ALL USING (true) WITH CHECK (true);
+
+-- Alokasi nomor berikutnya secara atomik:
+--   - p_min = nomor tertinggi yang SUDAH terpakai (floor) — mencegah nomor menabrak
+--     transaksi yang sudah ada (data lama / device lain yang belum pakai RPC).
+--   - INSERT (counter baru) → last_number = max(0, p_min) + 1 → nomor pertama = p_min + 1.
+--   - ON CONFLICT DO UPDATE → last_number = GREATEST(last_number + 1, p_min + 1); row lock
+--     mengserialkan dua permintaan bersamaan → nomor selalu unik.
+CREATE OR REPLACE FUNCTION allocate_queue_number(p_date TEXT, p_outlet TEXT DEFAULT 'default', p_min INT DEFAULT 0)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_next INT;
+BEGIN
+  INSERT INTO queue_counters (outlet_id, date, last_number)
+  VALUES (p_outlet, p_date, GREATEST(0, p_min) + 1)
+  ON CONFLICT (outlet_id, date)
+  DO UPDATE SET last_number = GREATEST(queue_counters.last_number + 1, p_min + 1)
+  RETURNING last_number INTO v_next;
+  RETURN v_next;
+END;
+$$;
 
 -- ============================================================
 -- Seed Data

@@ -63,6 +63,9 @@ vi.mock('../lib/cloudSync', () => ({
   fetchInventoryFromCloud: vi.fn(),
   syncInventoryItem: vi.fn(),
   syncInventoryStock: vi.fn(),
+  adjustInventoryStockCloud: vi.fn().mockResolvedValue({ ok: [], conflicts: [], degraded: false }),
+  fetchMaxQueueNumberCloud: vi.fn().mockResolvedValue(0),
+  allocateQueueNumberCloud: vi.fn().mockResolvedValue(null),
   deleteInventoryCloud: vi.fn(),
 }));
 

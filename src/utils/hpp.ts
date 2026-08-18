@@ -170,31 +170,29 @@ export const calculateTransactionHPP = (
 /**
  * Menghitung total kebutuhan bahan baku (deduksi stok) dari transaksi.
  * Jika item memiliki recipeSnapshot, gunakan snapshot. Jika tidak (transaksi lama), fallback.
+ *
+ * v4.7 TO DO 18.8 (A2): keputusan snapshot/fallback dihitung PER ITEM — sebelumnya flag
+ * `hasSnapshot` GLOBAL: bila SATU item punya snapshot, SEMUA item tanpa snapshot TIDAK
+ * dihitung (deduksi item legacy hilang dalam campuran snapshot/legacy di satu transaksi).
  */
 export const calculateItemDeductions = (
   items: CartItem[],
   menus: Menu[]
 ): Record<string, number> => {
   const deductions: Record<string, number> = {};
-  let hasSnapshot = false;
 
   for (const item of items) {
+    // Item dengan recipeSnapshot → pakai snapshot (bahan persis saat checkout).
     if (item.recipeSnapshot && item.recipeSnapshot.length > 0) {
-      hasSnapshot = true;
       for (const ing of item.recipeSnapshot) {
         if (ing.inventoryId && !ing.inventoryId.startsWith('manual_')) {
           deductions[ing.inventoryId] = (deductions[ing.inventoryId] || 0) + ing.totalQty;
         }
       }
+      continue;
     }
-  }
 
-  if (hasSnapshot) {
-    return deductions;
-  }
-
-  // Fallback untuk transaksi lama sebelum fitur snapshot recipe
-  for (const item of items) {
+    // Item legacy (tanpa snapshot) → fallback menu ingredients + addons.
     const menu = menus.find((m) => m.id === item.menuId);
     if (menu && menu.ingredients) {
       for (const [invId, amount] of Object.entries(menu.ingredients)) {

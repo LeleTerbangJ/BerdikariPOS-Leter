@@ -386,6 +386,125 @@ export async function runMigrations() {
       migrationNeeded.loyaltyPoints = true;
     }
 
+    // Migration 27 (v4.7 TO DO 18.1 / Prioritas 18): RPC atomik penyesuaian stok
+    // `adjust_inventory_stock` (optimistic concurrency — cegah lost-update 2 kasir).
+    // Probe panggil RPC dengan id tak dikenal + delta 0 (tanpa efek samping):
+    //   - fungsi ADA  → { ok:false, stock:null, reason:'not_found' } (sehat)
+    //   - fungsi TIDAK ADA → error PGRST202 / "Could not find the function" → warn + flag.
+    // Saat flag aktif, sync stok tetap jalan dengan fallback absolut (perilaku lama) sampai
+    // admin menjalankan SQL sekali di Supabase SQL Editor (fungsi tidak bisa dibuat via anon key).
+    try {
+      const probe = await supabase.rpc('adjust_inventory_stock', {
+        p_id: '__migration_probe__',
+        p_delta: 0,
+      });
+      if (probe.error) {
+        const msg = probe.error.message || '';
+        if (msg.includes('Could not find the function') || msg.includes('PGRST202') || msg.includes('adjust_inventory_stock')) {
+          console.warn('[Migration] Fungsi RPC adjust_inventory_stock belum ada di DB (TO DO 18.1 — optimistic concurrency stok 2 kasir).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  CREATE OR REPLACE FUNCTION adjust_inventory_stock(p_id TEXT, p_delta FLOAT)');
+          console.warn('  RETURNS JSONB');
+          console.warn('  LANGUAGE plpgsql');
+          console.warn('  AS $$');
+          console.warn('  DECLARE');
+          console.warn('    v_stock FLOAT;');
+          console.warn('  BEGIN');
+          console.warn("    SELECT stock INTO v_stock FROM inventory WHERE id = p_id;");
+          console.warn('    IF NOT FOUND THEN');
+          console.warn("      RETURN jsonb_build_object('ok', false, 'stock', NULL::FLOAT, 'reason', 'not_found');");
+          console.warn('    END IF;');
+          console.warn('    IF p_delta < 0 AND v_stock < -p_delta THEN');
+          console.warn("      RETURN jsonb_build_object('ok', false, 'stock', v_stock, 'reason', 'insufficient');");
+          console.warn('    END IF;');
+          console.warn('    UPDATE inventory SET stock = v_stock + p_delta, updated_at = now() WHERE id = p_id;');
+          console.warn("    RETURN jsonb_build_object('ok', true, 'stock', v_stock + p_delta, 'reason', 'ok');");
+          console.warn('  END;');
+          console.warn('  $$;');
+          migrationNeeded.inventoryStockRpc = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa; fallback absolut tetap aman.
+    }
+
+    // Migration 28 (v4.7 TO DO 18.2 / Prioritas 18): RPC atomik alokasi nomor antrean
+    // `allocate_queue_number` (counter queue_counters) — cegah #N kembar antar kasir.
+    // Probe memanggil RPC dengan date/outlet khusus (baris sampah '__probe__' tidak pernah
+    // cocok dengan tanggal asli): fungsi ADA → sukses; TIDAK ADA → PGRST202 → warn + flag.
+    // Saat flag aktif, getNextQueueNumber tetap jalan dengan fallback max+1 (perilaku lama).
+    try {
+      const queueProbe = await supabase.rpc('allocate_queue_number', {
+        p_date: '__migration_probe__',
+        p_outlet: '__probe__',
+        p_min: 0,
+      });
+      if (queueProbe.error) {
+        const msg = queueProbe.error.message || '';
+        if (msg.includes('Could not find the function') || msg.includes('PGRST202') || msg.includes('allocate_queue_number')) {
+          console.warn('[Migration] Fungsi RPC allocate_queue_number belum ada di DB (TO DO 18.2 — cegah nomor antrean duplikat antar kasir).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  CREATE TABLE IF NOT EXISTS queue_counters (outlet_id TEXT NOT NULL DEFAULT \'default\', date TEXT NOT NULL, last_number INT NOT NULL DEFAULT 0, PRIMARY KEY (outlet_id, date));');
+          console.warn('  ALTER TABLE queue_counters ENABLE ROW LEVEL SECURITY;');
+          console.warn('  CREATE POLICY "Allow all for anon" ON queue_counters FOR ALL USING (true) WITH CHECK (true);');
+          console.warn('  CREATE OR REPLACE FUNCTION allocate_queue_number(p_date TEXT, p_outlet TEXT DEFAULT \'default\', p_min INT DEFAULT 0)');
+          console.warn('  RETURNS INT LANGUAGE plpgsql AS $$');
+          console.warn('  DECLARE');
+          console.warn('    v_next INT;');
+          console.warn('  BEGIN');
+          console.warn('    INSERT INTO queue_counters (outlet_id, date, last_number)');
+          console.warn('    VALUES (p_outlet, p_date, GREATEST(0, p_min) + 1)');
+          console.warn('    ON CONFLICT (outlet_id, date)');
+          console.warn('    DO UPDATE SET last_number = GREATEST(queue_counters.last_number + 1, p_min + 1)');
+          console.warn('    RETURNING last_number INTO v_next;');
+          console.warn('    RETURN v_next;');
+          console.warn('  END;');
+          console.warn('  $$;');
+          migrationNeeded.queueCounterRpc = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
+
+    // Migration 29 (v4.7 TO DO 18.8 / A5): kolom `updated_at` di tabel inventory — dipakai
+    // last-write-wins lintas device (sync stok burst multi-device tidak boleh menimpa mutasi
+    // yang lebih baru dengan nilai cloud stale). Kolom sudah ada di schema.sql CREATE TABLE;
+    // ALTER idempoten ini self-heal DB lama yang dibuat sebelum kolom ada.
+    try {
+      const invProbe = await supabase.from('inventory').select('updated_at').limit(1);
+      if (invProbe.error) {
+        const invMsg = invProbe.error.message || '';
+        if (invMsg.includes('updated_at')) {
+          console.warn('[Migration] Kolom "updated_at" belum ada di tabel inventory (TO DO 18.8/A5 — last-write-wins lintas device).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();');
+          migrationNeeded.inventoryUpdatedAt = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
+
+    // Migration 30 (v4.7 TO DO 18.8 / A10): kolom `kitchen_ticket_printed_at` di tabel transactions —
+    // resume pending skip cetak tiket dapur hanya bila tiket SUDAH pernah tercetak (anti tiket dobel
+    // & anti tiket hilang saat printer gagal). Kolom sudah ada di schema.sql CREATE TABLE; ALTER
+    // idempoten ini self-heal DB lama.
+    try {
+      const ktpProbe = await supabase.from('transactions').select('kitchen_ticket_printed_at').limit(1);
+      if (ktpProbe.error) {
+        const ktpMsg = ktpProbe.error.message || '';
+        if (ktpMsg.includes('kitchen_ticket_printed_at')) {
+          console.warn('[Migration] Kolom "kitchen_ticket_printed_at" belum ada di tabel transactions (TO DO 18.8/A10 — status cetak tiket dapur pending).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;');
+          migrationNeeded.kitchenTicketPrintedAt = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -437,7 +556,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -517,6 +636,10 @@ export async function syncTransaction(tx: Transaction): Promise<boolean> {
   if (!migrationNeeded.promoAmount) {
     data.promo_amount = tx.promoAmount ?? null;
   }
+  // v4.7 TO DO 18.8 (A10): waktu tiket dapur tercetak (resume skip tiket lintas device)
+  if (!migrationNeeded.kitchenTicketPrintedAt) {
+    data.kitchen_ticket_printed_at = tx.kitchenTicketPrintedAt || null;
+  }
   return smartUpsert('transactions', data);
 }
 
@@ -554,6 +677,10 @@ export async function syncTransactionMeta(id: string, partial: Partial<Transacti
     if (partial.refundedById !== undefined) data.refunded_by_id = partial.refundedById;
     if (partial.refundedByName !== undefined) data.refunded_by_name = partial.refundedByName;
   }
+  // v4.7 TO DO 18.8 (A10): waktu tiket dapur tercetak — resume skip tiket di device lain
+  if (!migrationNeeded.kitchenTicketPrintedAt) {
+    if (partial.kitchenTicketPrintedAt !== undefined) data.kitchen_ticket_printed_at = partial.kitchenTicketPrintedAt;
+  }
   if (Object.keys(data).length > 0) {
     await smartUpdate('transactions', data, 'id', id);
   }
@@ -562,6 +689,59 @@ export async function syncTransactionMeta(id: string, partial: Partial<Transacti
 export async function deleteTransactionCloud(id: string) {
   if (!isSupabaseConfigured) return;
   await smartDelete('transactions', 'id', id);
+}
+
+// v4.7 TO DO 18.2 (Prioritas 18): baca max(queue_number) hari ini dari cloud (tanpa Demo/Cancel).
+// Dipakai getNextQueueNumber sebagai FLOOR — nomor yang sudah terpakai tidak boleh di-alokasi ulang.
+// Mengembalikan 0 bila offline / tidak dikonfigurasi / query gagal (fallback lokal).
+export async function fetchMaxQueueNumberCloud(dateStr: string): Promise<number> {
+  if (!isSupabaseConfigured) return 0;
+  if (navigator.onLine === false) return 0;
+  try {
+    // v4.7 TO DO 18.3 (fix): `dateStr` = tanggal LOKAL. Range harus dibangun dari
+    // tengah malam LOKAL lalu dikonversi ke ISO UTC — memakai `T00:00:00.000Z`
+    // langsung (UTC) membuat transaksi jam 00:00–07:00 WIB (UTC = tanggal sebelumnya)
+    // terlewat → cloudMax terlalu rendah → nomor antrean bisa menabrak #N yang ada.
+    const localMidnight = new Date(`${dateStr}T00:00:00`);
+    const todayStart = localMidnight.toISOString();
+    const localEnd = new Date(`${dateStr}T23:59:59.999`);
+    const todayEnd = localEnd.toISOString();
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('queue_number')
+      .gte('date', todayStart)
+      .lte('date', todayEnd)
+      .neq('tx_status', 'Demo')
+      .neq('tx_status', 'Cancel')
+      .order('queue_number', { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return 0;
+    return data[0].queue_number || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// v4.7 TO DO 18.2 (Prioritas 18): alokasi nomor antrean ATOMIK dari counter cloud
+// `allocate_queue_number` (tabel queue_counters + row-lock upsert). Dua kasir yang
+// memproses bersamaan TIDAK bisa mendapat nomor sama saat online.
+//   - `floor` = max(cloudMax, localMax) hari ini → nomor tidak menabrak transaksi yang sudah ada.
+//   - Mengembalikan nomor teralokasi, atau NULL bila: offline / RPC belum dibuat di DB
+//     (flag queueCounterRpc) / error / respons tak terduga → pemanggil fallback max+1 lokal.
+export async function allocateQueueNumberCloud(dateStr: string, floor: number): Promise<number | null> {
+  if (!isSupabaseConfigured) return null;
+  if (navigator.onLine === false || migrationNeeded.queueCounterRpc) return null;
+  try {
+    const { data, error } = await supabase.rpc('allocate_queue_number', {
+      p_date: dateStr,
+      p_outlet: 'default',
+      p_min: floor,
+    });
+    if (error) return null;
+    return typeof data === 'number' && data > 0 ? data : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null> {
@@ -769,6 +949,8 @@ export async function syncInventoryItem(item: InventoryItem) {
     unit: item.unit,
     cost_per_unit: item.costPerUnit,
     min_stock: item.minStock,
+    // v4.7 TO DO 18.8 (A5): stamp waktu mutasi → last-write-wins lintas device
+    updated_at: item.updatedAt || new Date().toISOString(),
   });
 }
 
@@ -782,9 +964,99 @@ export async function syncInventoryStock(deductions: Record<string, number>, ite
   for (const [id] of Object.entries(deductions)) {
     const item = items.find((i) => i.id === id);
     if (item) {
-      await smartUpdate('inventory', { stock: item.stock }, 'id', id);
+      // v4.7 TO DO 18.8 (A5): sertakan updated_at (last-write-wins) — fetch cloud stale
+      // tidak akan menimpa mutasi lokal yang lebih baru saat merge berikutnya.
+      await smartUpdate('inventory', { stock: item.stock, updated_at: item.updatedAt || new Date().toISOString() }, 'id', id);
     }
   }
+}
+
+export interface InventoryAdjustment {
+  id: string;
+  delta: number; // negatif = deduksi, positif = revert/adjust naik
+}
+
+export interface InventoryAdjustmentResult {
+  ok: { id: string; delta: number }[];
+  // Deduksi yang DITOLAK cloud (stok cloud kurang — kemungkinan sudah terjual device lain)
+  conflicts: { id: string; delta: number; cloudStock: number }[];
+  // true bila fallback absolut dipakai (offline / RPC belum dibuat di DB) — bukan jalur atomik
+  degraded: boolean;
+}
+
+// v4.7 TO DO 18.1 (Prioritas 18): sync stok cloud berbasis DELTA ATOMIK via RPC
+// `adjust_inventory_stock` — guard `stock >= -delta` di level database mencegah dua kasir
+// memotong bahan yang sama melebihi fisik (lost-update validate-then-deduct).
+//   - Online + RPC ada    → panggil RPC per id; deduksi ditolak → masuk `conflicts` (oversell).
+//   - Offline / RPC belum ada → fallback ABSOLUT (perilaku lama: tulis stok pasca-mutasi,
+//     di-queue bila offline) — atomicity tidak mungkin tanpa RPC; ditandai `degraded`.
+// Pemakaian: inventoryStore.deductStock (delta negatif) & revertStock (delta positif).
+export async function adjustInventoryStockCloud(
+  adjustments: InventoryAdjustment[],
+  items: InventoryItem[]
+): Promise<InventoryAdjustmentResult> {
+  const result: InventoryAdjustmentResult = { ok: [], conflicts: [], degraded: false };
+  if (!isSupabaseConfigured) {
+    // Tanpa cloud — tidak ada yang bisa dikoreksi; semua dianggap berhasil (local-first).
+    for (const a of adjustments) result.ok.push({ id: a.id, delta: a.delta });
+    return result;
+  }
+
+  const fallbackAbsolute = async (pending: InventoryAdjustment[]) => {
+    result.degraded = true;
+    for (const a of pending) {
+      const item = items.find((i) => i.id === a.id);
+      if (item) {
+        // v4.7 TO DO 18.8 (A5): sertakan updated_at (last-write-wins) pada jalur fallback absolut
+        await smartUpdate('inventory', { stock: item.stock, updated_at: item.updatedAt || new Date().toISOString() }, 'id', a.id);
+      }
+      result.ok.push({ id: a.id, delta: a.delta });
+    }
+  };
+
+  if (navigator.onLine === false || migrationNeeded.inventoryStockRpc) {
+    await fallbackAbsolute(adjustments);
+    return result;
+  }
+
+  const failed: InventoryAdjustment[] = [];
+  for (const a of adjustments) {
+    try {
+      const { data, error } = await supabase.rpc('adjust_inventory_stock', {
+        p_id: a.id,
+        p_delta: a.delta,
+      });
+      if (error) {
+        // RPC gagal (fungsi belum dibuat / jaringan) → fallback absolut untuk id ini
+        failed.push(a);
+        continue;
+      }
+      if (data && typeof data === 'object' && typeof (data as any).ok === 'boolean') {
+        if ((data as any).ok) {
+          result.ok.push({ id: a.id, delta: a.delta });
+        } else if ((data as any).reason === 'insufficient') {
+          result.conflicts.push({
+            id: a.id,
+            delta: a.delta,
+            cloudStock: typeof (data as any).stock === 'number' ? (data as any).stock : 0,
+          });
+        } else {
+          // not_found: id tidak ada di cloud (bahan baru lokal belum di-upsert) — treat as ok
+          result.ok.push({ id: a.id, delta: a.delta });
+        }
+      } else {
+        // Respons tak terduga — jangan gagalkan transaksi; fallback absolut untuk id ini
+        failed.push(a);
+      }
+    } catch (e) {
+      // Exception (offline mendadak dsb.) → fallback absolut (masuk queue bila offline)
+      failed.push(a);
+    }
+  }
+  if (failed.length > 0) {
+    await fallbackAbsolute(failed);
+  }
+  return result;
 }
 
 export async function deleteInventoryCloud(id: string) {
@@ -1137,6 +1409,8 @@ export async function fetchInventoryFromCloud(): Promise<InventoryItem[] | null>
       unit: row.unit,
       costPerUnit: row.cost_per_unit,
       minStock: row.min_stock,
+      // v4.7 TO DO 18.8 (A5): baca timestamp cloud → last-write-wins saat merge lokal
+      updatedAt: row.updated_at || undefined,
     })) || null;
   } catch {
     return null;

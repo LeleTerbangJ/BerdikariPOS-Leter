@@ -7,12 +7,62 @@ import { seedInventory } from '../utils/seed';
 import { useStockLogStore } from './stockLogStore';
 import type { StockLogEntry } from './stockLogStore';
 import { useToastStore } from './toastStore';
-import { syncInventoryItem, syncInventoryStock, deleteInventoryCloud, fetchInventoryFromCloud } from '../lib/cloudSync';
+import { syncInventoryItem, syncInventoryStock, deleteInventoryCloud, fetchInventoryFromCloud, adjustInventoryStockCloud, type InventoryAdjustment } from '../lib/cloudSync';
+// v4.7 TO DO 18.8 (A5): last-write-wins lintas device — fetch cloud stale tidak boleh
+// menimpa mutasi lokal yang lebih baru (race sync stok burst multi-device).
+import { isLocalNewer } from '../utils/inventoryFreshness';
 import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
 import { findNegativeStocksAfterDeduction, type NegativeStockAlert } from '../utils/stockCheck';
 import { planCsvImportRow, type ParsedImportRow } from '../utils/stockImport';
 // v4.7 TO DO 13.5 (O-7): deteksi potensi konflik stok lintas device saat sync
 import { detectStockConflicts, type StockConflict } from '../utils/stockConflict';
+
+// v4.7 TO DO 18.1 (Prioritas 18): tangani deduksi yang DITOLAK cloud (oversell lintas device).
+// RPC atomik menolak deduksi bila stok cloud < jumlah — berarti bahan kemungkinan sudah
+// terjual perangkat lain. Tindakan: koreksi stok lokal ke nilai cloud (sumber kebenaran
+// lintas device) + jejak stock log 'adjust' + toast warning (cek stok fisik).
+function handleStockAdjustmentConflicts(
+  conflicts: { id: string; delta: number; cloudStock: number }[]
+) {
+  if (conflicts.length === 0) return;
+  const items = useInventoryStore.getState().items;
+  const corrections: { id: string; name: string; unit: string; from: number; to: number }[] = [];
+  for (const c of conflicts) {
+    const item = items.find((i) => i.id === c.id);
+    if (!item) continue;
+    const corrected = Math.max(0, c.cloudStock);
+    corrections.push({ id: c.id, name: item.name, unit: item.unit, from: item.stock, to: corrected });
+    useStockLogStore.getState().addLog({
+      id: uuid(),
+      inventoryId: c.id,
+      inventoryName: item.name,
+      type: 'adjust',
+      amount: corrected - item.stock,
+      stockBefore: item.stock,
+      stockAfter: corrected,
+      unit: item.unit,
+      reason: 'Konflik lintas device: deduksi ditolak cloud (stok sudah terjual perangkat lain)',
+      date: new Date().toISOString(),
+    });
+  }
+  if (corrections.length === 0) return;
+  useInventoryStore.setState((s) => ({
+    items: s.items.map((i) => {
+      const corr = corrections.find((x) => x.id === i.id);
+      return corr ? { ...i, stock: corr.to } : i;
+    }),
+  }));
+  const list = corrections
+    .slice(0, 2)
+    .map((x) => `${x.name} → ${x.to} ${x.unit}`)
+    .join(', ');
+  const more = corrections.length > 2 ? ` +${corrections.length - 2} bahan lain` : '';
+  useToastStore.getState().addToast(
+    `⚠️ Stok ${list}${more} dikoreksi: kemungkinan sudah terjual perangkat lain. Periksa stok fisik.`,
+    'warning',
+    8000
+  );
+}
 
 interface InventoryState {
   items: InventoryItem[];
@@ -45,8 +95,10 @@ export const useInventoryStore = create<InventoryState>()(
       clearStockConflicts: () => set({ stockConflicts: [] }),
 
       addItem: (item, options) => {
-        if (!options?.skipSync) syncInventoryItem(item); // Cloud sync
-        set((s) => ({ items: [...s.items, item] }));
+        // v4.7 TO DO 18.8 (A5): stamp updatedAt saat pembuatan (last-write-wins lintas device)
+        const stamped = { ...item, updatedAt: item.updatedAt || new Date().toISOString() };
+        if (!options?.skipSync) syncInventoryItem(stamped); // Cloud sync
+        set((s) => ({ items: [...s.items, stamped] }));
       },
 
       updateItem: (id, data, options) => {
@@ -67,8 +119,9 @@ export const useInventoryStore = create<InventoryState>()(
             date: new Date().toISOString(),
           });
         }
+        // v4.7 TO DO 18.8 (A5): stamp updatedAt pada setiap mutasi (last-write-wins)
         set((s) => ({
-          items: s.items.map((i) => (i.id === id ? { ...i, ...data } : i)),
+          items: s.items.map((i) => (i.id === id ? { ...i, ...data, updatedAt: new Date().toISOString() } : i)),
         }));
         // Cloud sync the updated item (skipSync: pemanggil batch menyiapkan sync sendiri — TO DO 9.4)
         const updated = get().items.find((i) => i.id === id);
@@ -103,14 +156,23 @@ export const useInventoryStore = create<InventoryState>()(
         set((s) => ({
           items: s.items.map((i) => {
             const amount = deductions[i.id];
-            if (amount) return { ...i, stock: i.stock - amount }; // LOGIC-5 fix: Allow negative stock values
+            // v4.7 TO DO 18.8 (A5): stamp updatedAt pada item yang stoknya berubah
+            if (amount) return { ...i, stock: i.stock - amount, updatedAt: new Date().toISOString() }; // LOGIC-5 fix: Allow negative stock values
             return i;
           }),
         }));
-        // BUG-03 fix: Sync AFTER state update so cloud gets correct post-deduction stock
-        // v4.7 TO DO 8.3: jalur sync BULK yang sama dengan revertStock (unifikasi)
+        // v4.7 TO DO 18.1 (Prioritas 18): ganti tulis nilai ABSOLUT (rapuh lost-update 2 kasir)
+        // dengan penyesuaian DELTA ATOMIK via RPC `adjust_inventory_stock` — guard stok di level
+        // database mencegah dua kasir memotong bahan sama melebihi fisik. Deduksi yang ditolak
+        // cloud (oversell) → koreksi stok lokal + log + toast (lihat handleStockAdjustmentConflicts).
         const updatedItems = get().items;
-        syncInventoryStock(deductions, updatedItems);
+        const adjustments: InventoryAdjustment[] = Object.keys(deductions).map((id) => ({
+          id,
+          delta: -(deductions[id] || 0),
+        }));
+        adjustInventoryStockCloud(adjustments, updatedItems).then((res) => {
+          handleStockAdjustmentConflicts(res.conflicts);
+        });
 
         // v4.7 TO DO 8.4: pantau stok negatif PASCA-deduksi (bukan blokir — LOGIC-5 izinkan negatif).
         // Race 2 device checkout bahan terakhir bersamaan bisa membuat stok negatif tanpa disadari.
@@ -151,25 +213,49 @@ export const useInventoryStore = create<InventoryState>()(
         set((s) => ({
           items: s.items.map((i) => {
             const amount = deductions[i.id];
-            if (amount) return { ...i, stock: i.stock + amount };
+            // v4.7 TO DO 18.8 (A5): stamp updatedAt pada item yang stoknya berubah
+            if (amount) return { ...i, stock: i.stock + amount, updatedAt: new Date().toISOString() };
             return i;
           }),
         }));
-        // v4.7 TO DO 8.3: sync BULK (satu helper dengan deductStock) — sebelumnya loop syncInventoryItem
+        // v4.7 TO DO 18.1 (Prioritas 18): revert pakai jalur DELTA ATOMIK yang sama (delta positif
+        // selalu diizinkan RPC — menambah stok tidak pernah konflik). Fallback absolut bila offline.
         const updatedItems = get().items;
-        syncInventoryStock(deductions, updatedItems);
-        // Revert bisa memperbaiki stok negatif → bersihkan alert terakhir
-        set({ lastNegativeStockAlerts: [] });
+        const adjustments: InventoryAdjustment[] = Object.keys(deductions).map((id) => ({
+          id,
+          delta: deductions[id] || 0,
+        }));
+        adjustInventoryStockCloud(adjustments, updatedItems).then((res) => {
+          handleStockAdjustmentConflicts(res.conflicts);
+        });
+        // v4.7 TO DO 18.8 (A12): bersihkan alert stok negatif HANYA bila revert benar-benar
+        // memperbaiki item yang negatif. Sebelumnya revert APA PUN (mis. koreksi delta pending
+        // kecil yang tidak menyentuh item negatif) menghapus peringatan yang masih relevan →
+        // banner hilang lebih cepat dari seharusnya. Item yang MASIH negatif dipertahankan
+        // dengan stok terbarunya.
+        const currentNegatives = get().lastNegativeStockAlerts;
+        if (currentNegatives.length > 0) {
+          const afterItems = get().items;
+          const stillNegative = currentNegatives
+            .map((n) => {
+              const item = afterItems.find((i) => i.id === n.inventoryId);
+              return item && item.stock < 0 ? { ...n, stock: item.stock } : null;
+            })
+            .filter((x): x is NegativeStockAlert => x !== null);
+          set({ lastNegativeStockAlerts: stillNegative });
+        }
       },
 
       // v4.7 TO DO 9.4: ubah stok banyak item dalam SATU setState + SATU syncInventoryStock bulk.
       // Pemanggil menyiapkan stock log sendiri (reason khusus opname/import) — ini jalur sync saja.
       applyBulkStock: (entries) => {
         if (entries.length === 0) return;
+        // v4.7 TO DO 18.8 (A5): stamp updatedAt pada item yang diubah
+        const now = new Date().toISOString();
         set((s) => ({
           items: s.items.map((i) => {
             const e = entries.find((x) => x.id === i.id);
-            return e ? { ...i, stock: e.stock } : i;
+            return e ? { ...i, stock: e.stock, updatedAt: now } : i;
           }),
         }));
         const updatedItems = get().items;
@@ -189,6 +275,7 @@ export const useInventoryStore = create<InventoryState>()(
         const stockIds: Record<string, number> = {};
         const fullSync: InventoryItem[] = [];
 
+        const now = new Date().toISOString();
         for (const row of rows) {
           const existing = items.find((i) => i.id === row.id);
           const plan = planCsvImportRow(existing, row);
@@ -202,6 +289,8 @@ export const useInventoryStore = create<InventoryState>()(
                 unit: row.unit,
                 costPerUnit: row.costPerUnit,
                 minStock: row.minStock,
+                // v4.7 TO DO 18.8 (A5): stamp updatedAt
+                updatedAt: now,
               };
             }
             stockIds[row.id] = 1; // stok → jalur bulk
@@ -219,6 +308,8 @@ export const useInventoryStore = create<InventoryState>()(
               unit: row.unit,
               costPerUnit: row.costPerUnit,
               minStock: row.minStock,
+              // v4.7 TO DO 18.8 (A5): stamp updatedAt
+              updatedAt: now,
             });
             stockIds[row.id] = 1;
             fullSync.push(nextItems[nextItems.length - 1]); // baru → perlu upsert penuh
@@ -246,12 +337,24 @@ export const useInventoryStore = create<InventoryState>()(
               // v4.7 TO DO 13.5 (O-7): snapshot stok lokal SEBELUM merge untuk deteksi konflik
               const localBefore = new Map(s.items.map((i) => [i.id, i]));
               const cloudIds = new Set(cloudItems.map((i) => i.id));
+              // v4.7 TO DO 18.8 (A5): last-write-wins PER ITEM.
+              //  - fullSync: item lokal yang LEBIH BARU (updatedAt) dipertahankan (mutasi belum
+              //    tersinkron ke cloud) & versi cloud yang dikalahkan TIDAK di-merge (anti duplikat);
+              //    item legacy tanpa updatedAt → cloud otoritatif (perilaku lama).
+              //  - non-fullSync (realtime): perilaku lama — cloud menggantikan item bersama,
+              //    item lokal-only tetap dipertahankan.
               let localOnly: InventoryItem[];
+              let cloudForMerge: InventoryItem[];
               if (fullSync) {
-                // Real-time: cloud is authoritative
-                localOnly = []; // Trust cloud completely for inventory
+                localOnly = s.items.filter(
+                  (i) => cloudIds.has(i.id) && isLocalNewer(i, cloudItems.find((c) => c.id === i.id))
+                );
+                cloudForMerge = cloudItems.filter(
+                  (c) => !isLocalNewer(s.items.find((i) => i.id === c.id), c)
+                );
               } else {
                 localOnly = s.items.filter((i) => !cloudIds.has(i.id));
+                cloudForMerge = cloudItems;
               }
               const detected = detectStockConflicts(localBefore, cloudItems);
               // Gabungkan dengan konflik lama (by id) — "Pahami" mengosongkan; konflik baru
@@ -259,7 +362,7 @@ export const useInventoryStore = create<InventoryState>()(
               const conflictsById = new Map(s.stockConflicts.map((c) => [c.ingredientId, c]));
               for (const c of detected) conflictsById.set(c.ingredientId, c);
               return {
-                items: [...cloudItems, ...localOnly],
+                items: [...cloudForMerge, ...localOnly],
                 stockConflicts: Array.from(conflictsById.values()).sort((a, b) => b.diff - a.diff),
               };
             });

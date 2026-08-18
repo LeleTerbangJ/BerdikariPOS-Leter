@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/cloudSync', () => ({
   syncInventoryItem: vi.fn(),
   syncInventoryStock: vi.fn(),
+  adjustInventoryStockCloud: vi.fn().mockResolvedValue({ ok: [], conflicts: [], degraded: false }),
+  fetchMaxQueueNumberCloud: vi.fn().mockResolvedValue(0),
+  allocateQueueNumberCloud: vi.fn().mockResolvedValue(null),
   deleteInventoryCloud: vi.fn(),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn(),

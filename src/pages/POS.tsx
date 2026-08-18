@@ -18,6 +18,8 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
+// v4.7 TO DO 18.8 (A10): keputusan skip tiket dapur saat resume berbasis fakta (kitchenTicketPrintedAt)
+import { shouldSkipKitchenPrintAtResume } from '../utils/kitchenTicket';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (Settings)
@@ -53,6 +55,7 @@ import {
   Scissors,
   FileText,
   UserPlus,
+  FlaskConical,
 } from 'lucide-react';
 
 // v4.7 UX: pemilih pelanggan yang bisa dicari (nama / HP / email) — hemat waktu kasir
@@ -151,7 +154,7 @@ export default function POS() {
   const { customers, addCustomer, recordVisit, deductLoyaltyPoints } = useCustomerStore();
   const { settings } = useSettingsStore();
   const { addToast } = useToastStore();
-  const { promos, getActivePromos, getPromoByCode, incrementUsage, getCustomerDiscount, loyaltySettings } = usePromoStore();
+  const { promos, getActivePromos, getPromoByCode, reservePromoUsage, getCustomerDiscount, loyaltySettings } = usePromoStore();
   const { addLog } = useAuditLogStore();
 
   // Order type & Table features state
@@ -412,10 +415,12 @@ export default function POS() {
       return;
     }
     // v4.7 TO DO 15.3: reset opsi cetak ke default tiap modal dibuka — struk selalu ON;
-    // tiket dapur default OFF hanya saat finalize resume pending dengan item TIDAK berubah
-    // (tiket sudah tercetak saat Simpan Pending → anti tiket DOBEL), selain itu ON.
+    // tiket dapur default OFF hanya saat finalize resume pending dengan item TIDAK berubah DAN
+    // tiket dapur sudah benar-benar tercetak saat Simpan Pending (kitchenTicketPrintedAt) →
+    // anti tiket DOBEL. v4.7 TO DO 18.8 (A10): bila tiket belum pernah tercetak (printer gagal
+    // saat Simpan Pending), resume TIDAK skip → tiket tidak hilang diam-diam.
     setSkipReceiptPrint(false);
-    setSkipKitchenPrint(!!currentPendingTx && !pendingItemsChanged);
+    setSkipKitchenPrint(shouldSkipKitchenPrintAtResume(currentPendingTx, pendingItemsChanged));
     setShowCheckout(true);
   }, [cart.items, menus, inventory, orderType, tableNumber, settings.tableFeaturesEnabled, addToast, currentPendingTx, pendingItemsChanged]);
 
@@ -744,9 +749,9 @@ export default function POS() {
     setShowStockWarning(false);
     setStockWarnings([]);
     // v4.7 TO DO 15.3: reset opsi cetak ke default tiap modal dibuka (struk ON; tiket dapur
-    // default OFF saat resume pending item tidak berubah — anti tiket dobel)
+    // default OFF saat resume pending item tidak berubah & tiket sudah tercetak — anti tiket dobel)
     setSkipReceiptPrint(false);
-    setSkipKitchenPrint(!!currentPendingTx && !pendingItemsChanged);
+    setSkipKitchenPrint(shouldSkipKitchenPrintAtResume(currentPendingTx, pendingItemsChanged));
     setShowCheckout(true);
   };
 
@@ -861,20 +866,31 @@ export default function POS() {
 
     const tx = result.transaction!;
 
-    // Record customer visit
-    if (selectedCustomerId) {
-      recordVisit(selectedCustomerId, total);
-    }
+    // v4.7 TO DO 18.8 (E7): efek samping (kunjungan/promo/poin) TIDAK boleh dijalankan ulang
+    // saat replay idempoten (double-click / finalize ulang transaksi yang sama) — sebelumnya
+    // recordVisit/incrementUsage/deductLoyaltyPoints jalan lagi → kunjungan ganda, pemakaian
+    // promo ganda, dan poin loyalty terpotong 2×.
+    if (!result.idempotentReplay) {
+      // Record customer visit
+      if (selectedCustomerId) {
+        recordVisit(selectedCustomerId, total);
+      }
 
-    // Increment promo usage (v4.7 TO DO 12.2.6 / P-A6: ikut catat per pelanggan bila ada)
-    if (appliedPromoId) {
-      incrementUsage(appliedPromoId, selectedCustomerId || undefined);
-    }
+      // v4.7 TO DO 18.8 (E7): reservePromoUsage — cek batas dari STORE saat commit (bukan salinan
+      // render yang bisa stale lintas device) + ledger usageKey tx.id (anti double-increment saat
+      // replay transaksi yang sama). Transaksi tetap diproses bila promo habis — hanya peringatan.
+      if (appliedPromoId) {
+        const usageRes = reservePromoUsage(appliedPromoId, selectedCustomerId || undefined, tx.id);
+        if (!usageRes.ok && usageRes.reason === 'limit-reached') {
+          addToast('Promo sudah mencapai batas pemakaian — transaksi tetap diproses tanpa menambah pemakaian promo.', 'warning', 6000);
+        }
+      }
 
-    // v4.7 TO DO 12.2.2 (P-A8): potong poin loyalty yang ditukar (hanya bila benar-benar terpakai —
-    // redeemApplied ≥ redeemDiscount karena maxRedeemPoints sudah membatasi headroom)
-    if (selectedCustomerId && redeemApplied > 0) {
-      deductLoyaltyPoints(selectedCustomerId, Math.floor(redeemApplied / Math.max(1, loyaltySettings.redeemPointsValue || 0)) || 0);
+      // v4.7 TO DO 12.2.2 (P-A8): potong poin loyalty yang ditukar (hanya bila benar-benar terpakai —
+      // redeemApplied ≥ redeemDiscount karena maxRedeemPoints sudah membatasi headroom)
+      if (selectedCustomerId && redeemApplied > 0) {
+        deductLoyaltyPoints(selectedCustomerId, Math.floor(redeemApplied / Math.max(1, loyaltySettings.redeemPointsValue || 0)) || 0);
+      }
     }
 
     // Clear cart & reset state with fresh transaction ID for next checkout
@@ -919,6 +935,65 @@ export default function POS() {
         : `Transaksi #${tx.queueNumber} berhasil! 🎉`,
       'success'
     );
+  };
+
+  // v4.7 TO DO 18.8 (A13): catat transaksi DEMO langsung dari POS (pelatihan/demo kasir).
+  // Demo TIDAK memotong stok, TIDAK mengonsumsi nomor antrean (#DEMO), tidak mencetak
+  // struk/tiket dapur, tidak merekam kunjungan/promo/loyalty — murni catatan latihan yang
+  // dikecualikan dari laporan. Melengkapi jalur lama (transisi Selesai→Demo di Transactions
+  // yang me-revert stok). Bila demo diubah ke Selesai nanti, applyStatusStockEffects
+  // men-deduct stok + merekam kunjungan (perilaku 8.1 yang sudah ada).
+  const finalizeAsDemo = async () => {
+    if (cart.items.length === 0) return;
+    if (orderType === 'Dine In' && settings.tableFeaturesEnabled && !tableNumber) {
+      addToast('Silakan pilih nomor meja terlebih dahulu!', 'warning');
+      return;
+    }
+    const subtotal = Math.round(cart.getSubtotal());
+    const totalDiscount = discountCalc.totalDiscount;
+    const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
+    const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
+    const taxPercent = isTaxActive ? (settings.taxPercent || 0) : 0;
+    const taxAmount = Math.round((netSubtotal * taxPercent) / 100);
+    const total = Math.round(netSubtotal + taxAmount);
+
+    const result = await AtomicTransactionEngine.executeCheckout({
+      transactionId: checkoutTxId,
+      cartItems: cart.items,
+      subtotal,
+      discount: totalDiscount,
+      taxAmount,
+      totalAmount: total,
+      payMethod,
+      orderType,
+      tableNumber: orderType === 'Dine In' && settings.tableFeaturesEnabled ? tableNumber : undefined,
+      selectedCustomerId: selectedCustomerId || undefined,
+      selectedCustomerName: selectedCustomer?.name || undefined,
+      currentUser,
+      settings,
+      overrideTxStatus: 'Demo',
+      suppressAutoPrint: true, // demo tidak boleh mencetak apa pun (dapur tidak menerima tiket)
+    });
+
+    if (!result.success) {
+      addToast(result.error || 'Gagal mencatat transaksi demo!', 'error');
+      return;
+    }
+
+    cart.clearCart();
+    setShowCheckout(false);
+    setDiscountInput('');
+    setDiscountType('rp');
+    clearPromo();
+    setCashReceived('');
+    setRedeemPointsInput('');
+    setSelectedCustomerId(null);
+    setTableNumber('');
+    setCheckoutTxId(uuid());
+    setCurrentPendingTx(null);
+    setPayMethod('Cash');
+    setOrderType('Dine In');
+    addToast(`Transaksi demo #${result.transaction?.queueNumber} dicatat — tidak memotong stok & tidak masuk laporan.`, 'info');
   };
 
   const isTaxActive = settings.taxEnabled !== false && (settings.taxPercent || 0) > 0;
@@ -2020,6 +2095,22 @@ export default function POS() {
               Selesaikan Pesanan
             </button>
           </div>
+
+          {/* v4.7 TO DO 18.8 (A13): jalur pembuatan transaksi DEMO — pelatihan/demo kasir
+              tanpa memotong stok, tanpa nomor antrean, tanpa cetak & tanpa masuk laporan.
+              Hanya untuk keranjang BARU: saat resume pending (currentPendingTx) stok sudah
+              dipotong saat Simpan Pending — mengubahnya jadi Demo akan membocorkan deduksi itu. */}
+          {!currentPendingTx && (
+            <button
+              type="button"
+              onClick={finalizeAsDemo}
+              className="w-full text-xs py-1.5 flex items-center justify-center gap-1.5 text-purple-600 dark:text-purple-400 border border-dashed border-purple-300 dark:border-purple-800/60 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-950/30 transition"
+              title="Catat sebagai transaksi DEMO (pelatihan) — tidak memotong stok, tidak mengonsumsi nomor antrean, tidak dicetak, dikecualikan dari laporan"
+            >
+              <FlaskConical size={14} />
+              <span>Catat sebagai Demo (tidak memotong stok)</span>
+            </button>
+          )}
         </div>
       </Modal>
 
@@ -2038,9 +2129,19 @@ export default function POS() {
             {stockWarnings.map((w) => (
               <div key={w.ingredientId} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-xl">
                 <div>
-                  <p className="font-medium text-sm text-red-800 dark:text-red-300">{w.ingredientName}</p>
+                  {/* v4.7 TO DO 18.8 (A11): bahan yang direferensikan resep sudah dihapus dari
+                      inventory — tampilkan peringatan eksplisit (bukan hanya id mentah). */}
+                  {w.missing ? (
+                    <p className="font-medium text-sm text-red-800 dark:text-red-300">
+                      Bahan tidak ditemukan (ID: {w.ingredientId})
+                    </p>
+                  ) : (
+                    <p className="font-medium text-sm text-red-800 dark:text-red-300">{w.ingredientName}</p>
+                  )}
                   <p className="text-xs text-red-500 dark:text-red-400">
-                    Butuh: {w.required.toFixed(2)} {w.unit} • Tersedia: {w.available.toFixed(2)} {w.unit}
+                    {w.missing
+                      ? `Resep memakai bahan ini (${w.required.toFixed(2)}) tapi bahan sudah dihapus dari Inventaris — stok tidak bisa diverifikasi.`
+                      : `Butuh: ${w.required.toFixed(2)} ${w.unit} • Tersedia: ${w.available.toFixed(2)} ${w.unit}`}
                   </p>
                 </div>
                 <AlertTriangle size={16} className="text-red-500 flex-shrink-0" />

@@ -38,6 +38,31 @@ export function refundAmount(tx: Transaction): number {
   return Math.max(0, tx.totalAmount ?? 0);
 }
 
+/**
+ * v4.7 TO DO 18.8 (A4) — Guard EKSEKUSI refund (anti double-refund di level STORE).
+ *
+ * `isRefundableTransaction` memakai salinan RENDER yang bisa basi (`refunded` belum
+ * ter-update di state komponen) — dua klik cepat bisa lolos keduanya → revert stok
+ * ganda + 2× Kas Keluar Refund. Helper ini:
+ *   1. Cek ulang `refunded` dari daftar transaksi STORE (sumber kebenaran mutasi).
+ *   2. Hormati guard in-flight (proteksi reentrancy bila eksekusi jadi async).
+ *   3. Kembalikan transaksi TARGET TERBARU (fresh ?? render) bila boleh dieksekusi,
+ *      null bila ditolak — caller memakai return ini, bukan salinan render.
+ */
+export function canExecuteRefund(
+  tx: Transaction,
+  storeTransactions: Transaction[],
+  hasSplitChildren: (t: Transaction) => boolean,
+  inFlight = false
+): Transaction | null {
+  if (inFlight) return null;
+  const fresh = storeTransactions.find((t) => t.id === tx.id);
+  if (fresh?.refunded) return null;
+  const target = fresh ?? tx;
+  if (!isRefundableTransaction(target, hasSplitChildren(target))) return null;
+  return target;
+}
+
 /** Catatan Kas Keluar refund — link ke nomor antrean + alasan opsional. */
 export function refundMovementNotes(tx: Transaction, note?: string): string {
   return `Refund transaksi #${tx.queueNumber}${note ? ` — ${note}` : ''}`;

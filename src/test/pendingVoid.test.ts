@@ -15,6 +15,9 @@ vi.mock('../lib/cloudSync', () => ({
   fetchCustomCategoriesFromCloud: vi.fn().mockResolvedValue([]),
   syncInventoryItem: vi.fn(),
   syncInventoryStock: vi.fn(), // v4.7 TO DO 8.3: nama baru (unifikasi jalur sync stok)
+  adjustInventoryStockCloud: vi.fn().mockResolvedValue({ ok: [], conflicts: [], degraded: false }),
+  fetchMaxQueueNumberCloud: vi.fn().mockResolvedValue(0),
+  allocateQueueNumberCloud: vi.fn().mockResolvedValue(null),
   deleteInventoryCloud: vi.fn(),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn(),
