@@ -1,6 +1,27 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **588/588 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **598/598 tes otomatis lolos**.
+
+---
+
+## 📢 Ringkasan Rilis v4.7 (untuk dibagikan ke klien/tim)
+
+> Versi singkat — salin & kirim ke klien. Detail lengkap di bagian bawah dokumen ini & `CHANGELOG.md`.
+
+**Versi 4.7 menghadirkan:**
+
+1. **Promo & Loyalty lengkap** 🏷️ — promo per menu/kategori, BOGO (beli N gratis M), syarat minimal qty/belanja, batas pemakaian per pelanggan, promo bisa digabung atau dipilih otomatis yang terbaik, nama promo tampil di struk, dan **poin loyalty** (pelanggan mengumpulkan poin & menukarnya). Laporan performa promo siap membantu evaluasi penjualan.
+2. **Laporan PPN bulanan** 🧾 — ringkasan pajak per bulan (DPP, PPN, total) + ekspor CSV/PDF, memudahkan pelaporan.
+3. **Refund/retur penuh** ↩️ — pengembalian dana tercatat rapi sebagai **Kas Keluar "Refund"** di Rekap Kas (akuntabel), stok & kunjungan pelanggan otomatis dikembalikan.
+4. **Struk digital** 📱 — kirim struk via **WhatsApp/email** langsung dari riwayat transaksi; bisa **auto-kirim ke WhatsApp** pelanggan setelah pembayaran (atur di Pengaturan).
+5. **Backup & Restore + Auto Backup** 💾 — backup lengkap (menu, stok, transaksi, semua data) dengan jadwal otomatis harian/mingguan, bisa disimpan lokal atau **cloud**; restore mudah & aman.
+6. **Stock Opname lebih aman** 📦 — mode *blind* untuk Staf Gudang (tanpa bocor selisih), otorisasi PIN **khusus Manager**, alasan penyesuaian wajib, stok negatif dicegah.
+7. **Mode offline andal** 📴 — tetap berjualan walau internet putus: data tersimpan aman (IndexedDB), otomatis tersinkron saat online (≤ 30 detik), ada penanda "Belum Sync", dan daftar operasi gagal yang bisa dicoba lagi — **tidak ada data hilang**.
+8. **Printer thermal & dapur andal** 🖨️ — koneksi Bluetooth tidak putus saat refresh (auto re-pair), ada opsi cetak per transaksi (struk saja / tiket dapur saja / tanpa cetak), antrean cetak & indikator status di halaman Dapur.
+9. **Skenario 2 kasir & offline** 👥 — dua kasir tidak bisa menjual stok melebihi fisik (proteksi otomatis), nomor antrean tidak dobel, satu shift aktif per toko, expected cash tutup shift akurat dari semua kasir, tombol **"Catat sebagai Demo"** untuk uji coba tanpa memotong stok.
+10. **Perbaikan ketelitian & kenyamanan** ✅ — ringkasan tutup shift **tidak lagi salah hitung saat ada refund** (angka penjualan bersih + keterangan Refund Tunai); semua notifikasi kini tampil rapi (toast) & semua konfirmasi memakai dialog seragam — **tidak ada popup browser lama**.
+
+> ⚠️ **Untuk database lama, wajib menjalankan langkah SQL sekali** (lihat bagian "Langkah yang Wajib Dijalankan" di bawah — tim teknis akan membantu).
 
 ---
 
@@ -87,6 +108,10 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Nomor antrean di pagi buta (00:00–07:00 WIB) tidak lagi salah hitung** — perbandingan tanggal kini memakai tanggal lokal, transaksi pagi tidak terlewat (tidak menabrak #N yang sudah ada).
 - **Replay/double-click transaksi tidak lagi menggandakan kunjungan/promo/poin** — efek samping hanya dijalankan sekali per transaksi.
 - **Alert stok negatif lebih akurat** — revert kecil yang tidak memperbaiki item negatif tidak lagi menghapus peringatan yang masih relevan.
+- **Ringkasan tutup shift tidak lagi overstated saat ada refund (Prioritas 20.1)** — Total Penjualan & Total Transaksi kini mengecualikan transaksi yang sudah di-refund (konsisten dengan Dashboard/Laporan/Riwayat); expected cash tetap akurat karena penjualan tunai yang di-refund dinetralkan dengan Kas Keluar Refund (tanpa double-subtract), dilengkapi baris "Refund Tunai (Dikembalikan)" di modal & struk ringkasan shift.
+- **Semua notifikasi kini memakai toast (Prioritas 20.2)** — 21 `alert()` diganti `addToast` di seluruh aplikasi (App/session, Audit Log, Rekap Kas, Katalog, Settings, Stock Opname).
+- **Semua konfirmasi memakai dialog kustom (Prioritas 20.3)** — 4 `window.confirm` terakhir (tutup shift selisih kas > 10%, void transaksi gantung, resume pending saat keranjang berisi, hapus user) diganti **ConfirmDialog** yang seragam; **tidak ada dialog browser native (`alert`/`confirm`) tersisa** di kode produksi.
+- **Filter tanggal custom tidak lagi melewatkan transaksi pagi buta (Prioritas 20.4)** — tanggal awal range custom kini dip-parse **lokal** (`'T00:00:00'`, bukan UTC tengah malam = 07:00 WIB) di Laporan & Riwayat Transaksi, sehingga transaksi 00:00–07:00 pada hari pertama tetap masuk laporan.
 
 ---
 
@@ -201,7 +226,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **588/588 test lolos** (56 file)
+- `npx vitest run` → **598/598 test lolos** (57 file — Prioritas 20: +10 test — `shiftStats` refund +5, `dateRange` filter tanggal custom lokal +5)
 - `npm run build` → **✅ BERHASIL (diverifikasi 18 Agt 2026, setelah seluruh Prioritas 18 tuntas)**: `✓ built in 16.61s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3622.00 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.7 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 

@@ -9,6 +9,14 @@ export interface ShiftStats {
   cashSales: number;
   qrisSales: number;
   transferSales: number;
+  /**
+   * v4.7 TO DO 20.1: penjualan TUNAI yang di-refund dalam window shift.
+   * Dipakai agar expectedCash tetap netral: uang tunai benar-benar masuk laci dari
+   * penjualan itu (lalu keluar lagi via movement Kas Keluar 'Refund'). Tanpa ini,
+   * meng-exclude refunded dari cashSales akan double-subtract (sale tidak dihitung
+   * tapi movement refund tetap di cashOut → expectedCash = opening − refund).
+   */
+  refundedCashSales: number;
 }
 
 export const EMPTY_SHIFT_STATS: ShiftStats = {
@@ -20,6 +28,7 @@ export const EMPTY_SHIFT_STATS: ShiftStats = {
   cashSales: 0,
   qrisSales: 0,
   transferSales: 0,
+  refundedCashSales: 0,
 };
 
 /**
@@ -34,7 +43,11 @@ export const EMPTY_SHIFT_STATS: ShiftStats = {
  *   per outlet di shiftStore (openShift guard + restore shift terbuka paling awal).
  * - Kas Masuk/Keluar: dipilih via shiftId bila tersedia, fallback window waktu (semua
  *   kasir — laci bersama), sama seperti perilaku lama.
- * - expectedCash = openingCash + cashSales + cashIn - cashOut.
+ * - v4.7 TO DO 20.1: totalSales/totalTx & rincian metode mengecualikan transaksi yang
+ *   SUDAH di-refund (konsisten dengan Dashboard/Reports/Transactions). Expected cash
+ *   tetap netral karena refundedCashSales (uang tunai yang masuk lalu keluar via
+ *   movement 'out' Refund) ditambahkan kembali ke formula.
+ * - expectedCash = openingCash + cashSales + refundedCashSales + cashIn - cashOut.
  */
 export function computeShiftStats(
   activeShift: CashierShift,
@@ -50,16 +63,28 @@ export function computeShiftStats(
       new Date(t.date).getTime() >= openedAtMs
   );
 
-  const totalSales = shiftTx.reduce((a, t) => a + t.totalAmount, 0);
+  // v4.7 TO DO 20.1: basis LAPORAN = transaksi yang belum di-refund (pendapatan yang
+  // sudah dikembalikan tidak lagi dihitung sebagai penjualan).
+  const salesTx = shiftTx.filter((t) => !t.refunded);
 
-  const cashSales = shiftTx
+  const totalSales = salesTx.reduce((a, t) => a + t.totalAmount, 0);
+
+  const cashSales = salesTx
     .filter((t) => t.paymentMethod === 'Cash')
     .reduce((a, t) => a + t.totalAmount, 0);
-  const qrisSales = shiftTx
+  const qrisSales = salesTx
     .filter((t) => t.paymentMethod === 'QRIS')
     .reduce((a, t) => a + t.totalAmount, 0);
-  const transferSales = shiftTx
+  const transferSales = salesTx
     .filter((t) => t.paymentMethod === 'Transfer')
+    .reduce((a, t) => a + t.totalAmount, 0);
+
+  // Penjualan TUNAI yang di-refund dalam window — uangnya masuk laci, lalu keluar lagi
+  // via movement Kas Keluar 'Refund' (dicatat di cashOut di bawah). Keduanya saling
+  // meniadakan di expectedCash — persis seperti perilaku lama, hanya kini angka laporan
+  // (totalSales/cashSales) sudah bersih dari transaksi refunded.
+  const refundedCashSales = shiftTx
+    .filter((t) => t.refunded && t.paymentMethod === 'Cash')
     .reduce((a, t) => a + t.totalAmount, 0);
 
   // Kas Masuk & Kas Keluar selama shift — shiftId match lebih diutamakan;
@@ -75,16 +100,17 @@ export function computeShiftStats(
     .filter((m) => m.type === 'out')
     .reduce((a, m) => a + m.amount, 0);
 
-  const expectedCash = activeShift.openingCash + cashSales + cashIn - cashOut;
+  const expectedCash = activeShift.openingCash + cashSales + refundedCashSales + cashIn - cashOut;
 
   return {
     totalSales,
-    totalTx: shiftTx.length,
+    totalTx: salesTx.length,
     expectedCash,
     cashIn,
     cashOut,
     cashSales,
     qrisSales,
     transferSales,
+    refundedCashSales,
   };
 }

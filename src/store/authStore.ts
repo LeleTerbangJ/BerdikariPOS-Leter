@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import type { User, Role } from '../types';
 import { seedUsers } from '../utils/seed';
 import { useAuditLogStore } from './auditLogStore';
+import { useToastStore } from './toastStore';
 import { syncUser, deleteUserCloud, fetchUsersFromCloud } from '../lib/cloudSync';
 import { useCartStore } from './cartStore';
 import { authenticateManager } from '../utils/pinAuth';
@@ -182,7 +183,8 @@ export const useAuthStore = create<AuthState>()(
                 if (cloudCurrentUser.activeSessionId && s.currentUser.activeSessionId && cloudCurrentUser.activeSessionId !== s.currentUser.activeSessionId) {
                   // Force logout in the next tick to prevent state transaction issues
                   setTimeout(() => {
-                    alert('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.');
+                    // v4.7 TO DO 20.2: alert → toast
+                    useToastStore.getState().addToast('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.', 'warning');
                     get().logout();
                     window.location.href = '/';
                   }, 0);

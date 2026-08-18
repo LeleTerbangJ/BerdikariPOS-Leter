@@ -534,7 +534,8 @@ export default function Catalog() {
                       const imageUrl = await processAndUploadMenuImage(file);
                       setFormImage(imageUrl);
                     } catch (err) {
-                      alert('Gagal memproses foto produk');
+                      // v4.7 TO DO 20.2: alert → toast
+                      addToast('Gagal memproses foto produk', 'error');
                     } finally {
                       setIsUploadingImage(false);
                       e.target.value = '';
@@ -596,7 +597,8 @@ export default function Catalog() {
                         formComponents.filter((_, i) => i !== idx).map((c) => ({ id: '', parentMenuId: '', childType: c.childType, childId: c.childId, quantity: c.quantity, mode: 'Bundle' }))
                       );
                       if (!validation.valid) {
-                        alert(validation.error);
+                        // v4.7 TO DO 20.2: alert → toast
+                        addToast(validation.error || 'Komponen tidak valid', 'warning');
                         return;
                       }
                       const arr = [...formComponents];

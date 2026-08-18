@@ -12,6 +12,7 @@ import { useInventoryStore } from './store/inventoryStore';
 import { usePromoStore } from './store/promoStore';
 import { useStockOpnameStore } from './store/stockOpnameStore';
 import { useCashMovementStore } from './store/cashMovementStore';
+import { useToastStore } from './store/toastStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
@@ -187,7 +188,8 @@ export default function App() {
 
         // If there's a different session ID active in cloud, log out local session
         if (newActiveSessionId && localActiveSessionId && newActiveSessionId !== localActiveSessionId) {
-          alert('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.');
+          // v4.7 TO DO 20.2: alert → toast (konsisten dengan konvensi UI)
+          useToastStore.getState().addToast('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.', 'warning');
           useAuthStore.getState().logout();
           window.location.href = '/';
         }

@@ -114,4 +114,89 @@ describe('computeShiftStats — v4.7 TO DO 18.3 (1 shift per outlet, data tersin
     const stats = computeShiftStats(shift, [], []);
     expect(stats).toEqual({ ...EMPTY_SHIFT_STATS, expectedCash: 200000 });
   });
+
+  // ============================================================
+  // v4.7 TO DO 20.1 — transaksi yang di-refund TIDAK dihitung sebagai penjualan,
+  // tapi expectedCash tetap netral (uang tunai masuk laci lalu keluar via Kas Keluar Refund).
+  // ============================================================
+
+  it('20.1 — refund TUNAI: totalSales/totalTx mengecualikan refunded, expectedCash netral (net 0)', () => {
+    const stats = computeShiftStats(shift, [
+      // Penjualan tunai 50.000 yang sudah di-refund (movement Kas Keluar Refund 50.000 di bawah)
+      tx({ id: 't1', date: '2026-08-18T10:00:00.000Z', totalAmount: 50000, paymentMethod: 'Cash', refunded: true }),
+    ], [
+      mv({ id: 'm1', date: '2026-08-18T10:30:00.000Z', type: 'out', amount: 50000, category: 'Refund' }),
+    ]);
+
+    // Laporan bersih: penjualan refunded TIDAK dihitung
+    expect(stats.totalSales).toBe(0);
+    expect(stats.totalTx).toBe(0);
+    expect(stats.cashSales).toBe(0);
+    expect(stats.refundedCashSales).toBe(50000);
+    // Expected cash: laci menerima 50k (sale) lalu mengeluarkan 50k (refund) → net 0 = modal awal
+    expect(stats.cashOut).toBe(50000);
+    expect(stats.expectedCash).toBe(200000);
+  });
+
+  it('20.1 — campuran: sale tunai aktif + sale tunai di-refund → hanya yang aktif dihitung, expectedCash netral', () => {
+    const stats = computeShiftStats(shift, [
+      tx({ id: 't1', date: '2026-08-18T10:00:00.000Z', totalAmount: 50000, paymentMethod: 'Cash' }),
+      tx({ id: 't2', date: '2026-08-18T10:30:00.000Z', totalAmount: 30000, paymentMethod: 'Cash', refunded: true }),
+    ], [
+      mv({ id: 'm1', date: '2026-08-18T10:45:00.000Z', type: 'out', amount: 30000, category: 'Refund' }),
+    ]);
+
+    expect(stats.totalSales).toBe(50000);
+    expect(stats.totalTx).toBe(1);
+    expect(stats.cashSales).toBe(50000);
+    expect(stats.refundedCashSales).toBe(30000);
+    // laci: +50k (aktif) +30k (refunded) −30k (refund) = +50k
+    expect(stats.expectedCash).toBe(200000 + 50000);
+  });
+
+  it('20.1 — refund sale QRIS dari laci: qrisSales bersih, expectedCash berkurang (uang keluar laci)', () => {
+    const stats = computeShiftStats(shift, [
+      tx({ id: 't1', date: '2026-08-18T10:00:00.000Z', totalAmount: 50000, paymentMethod: 'QRIS', refunded: true }),
+    ], [
+      mv({ id: 'm1', date: '2026-08-18T10:30:00.000Z', type: 'out', amount: 50000, category: 'Refund' }),
+    ]);
+
+    expect(stats.totalSales).toBe(0);
+    expect(stats.qrisSales).toBe(0);
+    expect(stats.refundedCashSales).toBe(0); // bukan sale tunai → tidak di-add-back
+    expect(stats.cashOut).toBe(50000);
+    // laci tidak pernah menerima uang QRIS, tapi mengeluarkan 50k untuk refund → modal − 50k
+    expect(stats.expectedCash).toBe(200000 - 50000);
+  });
+
+  it('20.1 — sale tunai di-refund LINTAS METODE (refund via QRIS, movement tercatat out): tidak regresi dari perilaku lama', () => {
+    // Residual terdokumentasi (fix penuh butuh field refundMethod): movement 'out' tetap
+    // dicatat walau uang tidak keluar laci — hasil sama dengan perilaku lama (net 0),
+    // hanya angka laporan (totalSales/cashSales) yang kini bersih.
+    const stats = computeShiftStats(shift, [
+      tx({ id: 't1', date: '2026-08-18T10:00:00.000Z', totalAmount: 50000, paymentMethod: 'Cash', refunded: true }),
+    ], [
+      mv({ id: 'm1', date: '2026-08-18T10:30:00.000Z', type: 'out', amount: 50000, category: 'Refund' }),
+    ]);
+
+    expect(stats.totalSales).toBe(0);
+    expect(stats.cashSales).toBe(0);
+    expect(stats.refundedCashSales).toBe(50000);
+    // Tanpa fix: cashSales lama menghitung sale refunded (50k) → net 0 juga.
+    // Dengan fix: refundedCashSales di-add-back → net 0 tetap sama (tidak regresi).
+    expect(stats.expectedCash).toBe(200000);
+  });
+
+  it('20.1 — refunded sale TANPA movement refund: tidak ada double-count (sama dengan perilaku lama)', () => {
+    const stats = computeShiftStats(shift, [
+      tx({ id: 't1', date: '2026-08-18T10:00:00.000Z', totalAmount: 50000, paymentMethod: 'Cash', refunded: true }),
+    ], []);
+
+    expect(stats.totalSales).toBe(0);
+    expect(stats.refundedCashSales).toBe(50000);
+    expect(stats.cashOut).toBe(0);
+    // Perilaku lama: cashSales 50k (refunded) + cashOut 0 → expected = modal + 50k.
+    // Perilaku baru: cashSales 0 + refundedCashSales 50k → expected = modal + 50k (sama).
+    expect(stats.expectedCash).toBe(200000 + 50000);
+  });
 });

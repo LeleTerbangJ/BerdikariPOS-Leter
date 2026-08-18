@@ -169,6 +169,387 @@
 4. **A4** (double-refund), **A6** (signature cart), **E4** (reserve split per-device → dokumentasi/UI warning).
 5. **A7/A8/A9/A10** (konsistensi split pending & tiket) → **A1–A3** (pembersihan) → **E7** (promo race) ✅ SELESAI.
 
+## 🏬 F. MULTI OUTLET / CABANG — Analisa Kesiapan (v4.7, belum dieksekusi)
+
+> Analisa statis untuk menjawab: **"apa saja yang harus dipersiapkan agar fitur Multi Outlet / Cabang bisa diterapkan?"** — tanpa perubahan kode. Rincian eksekusi: **Prioritas 19 di `TO DO.md`**.
+
+### F.0 — Kondisi saat ini (single outlet implisit `'default'`)
+
+- **Semua tabel bisnis GLOBAL tanpa `outlet_id`**: `transactions`, `inventory`, `menus`, `menu_components`, `customers`, `promos`, `shifts`, `stock_logs`, `stock_opnames`, `cash_movements`, `audit_logs`. Satu-satunya pengecualian: `queue_counters.outlet_id` (sudah ada, default `'default'`) — fondasi nomor antrean per outlet sudah benar di level DB.
+- **`Transaction.outletId?: string`** sudah ada di tipe (`src/types/index.ts:175`, komentar "Multi-outlet enterprise extension") tapi **belum pernah diisi/dipakai** — hanya placeholder.
+- **Settings single row** (`settings.id = 1`): `store_name`, `address`, `receipt_header/footer`, `tax_enabled/percent`, `categories`, `printer_*`, `kitchen_printers`, `table_features`, dll — **global untuk semua cabang**; struk & pajak tidak bisa berbeda per cabang.
+- **Users tanpa outlet**: role hanya `Manager | Kasir | Acaraki | Staf Gudang` (tidak ada `Owner`); seorang user tidak terikat ke cabang mana pun.
+- **RLS semua tabel "Allow all for anon"** (`supabase/schema.sql` baris 428–439, 486, 612) — tidak ada scoping antar cabang sama sekali.
+- **`allocateQueueNumberCloud` hardcode `p_outlet: 'default'`** (`src/lib/cloudSync.ts:737`) — RPC `allocate_queue_number` sudah menerima `p_outlet`, tinggal dikirim id outlet asli.
+- **Realtime global** (`postgres_changes` tanpa filter) & **semua `fetch*FromCloud` tanpa filter** — setiap device menarik SEMUA data cloud semua cabang.
+- **Shift** sudah ber-model "1 shift aktif per outlet" (18.3) tapi outlet-nya implisit `'default'`.
+- **Backup/Restore** mem-backup seluruh DB (manifest + checksum) — tidak mengenal cabang.
+
+### F.1 — Keputusan produk yang HARUS diambil dulu (menentukan seluruh desain)
+
+1. **Model master data**: (a) **independen per cabang** (tiap cabang punya menu/inventaris/resep/promo/pelanggan sendiri — paling sederhana, cocok untuk waralaba dengan menu berbeda), (b) **pusat→cabang** (katalog didorong dari pusat, cabang hanya punya stok — butuh mekanisme push/sync master + versi), atau (c) **hibrida** (menu sama, stok & harga per cabang). **Rekomendasi awal: (a) independen** untuk MVP multi-outlet — paling sedikit perubahan pada engine/resep/validasi stok yang sudah solid.
+2. **Akses pengguna**: user terikat **1 cabang** (Kasir/Staf Gudang/Dapur) vs **lintas cabang** (Manager/Owner bisa pindah cabang). Perlu menambah role **Owner** (saat ini tidak ada) sebagai super-admin multi-cabang.
+3. **Identitas outlet**: id stabil (UUID/TEXT), nama, alamat, dan **settings per outlet** (nama toko di struk, alamat, footer, pajak, kategori, printer — tiap cabang beda hardware printer & pajak daerah).
+4. **Nomor antrean**: sudah per-outlet di DB — keputusan: nomor restart tiap hari per cabang (perilaku sekarang, tinggal plumb `outlet_id` asli) atau lanjut global.
+5. **Loyalty/promo lintas cabang**: poin & batas pemakaian per pelanggan — shared antar cabang (pelanggan sama di semua cabang) vs per cabang.
+
+### F.2 — Checklist persiapan teknis (berurutan)
+
+**Fase 1 — Fondasi data (migrasi, satu arah):**
+- [ ] Kolom `outlet_id` di SEMUA tabel bisnis + **backfill idempoten** ke `'default'` (outlet pertama) — pola Migration 27–30 (probe + ALTER/UPDATE + console warning).
+- [ ] `settings` jadi per-outlet (row per `outlet_id` atau ganti PK) — migrasi nilai row 1 → outlet `'default'`.
+- [ ] `users.outlet_id` (atau tabel `users_outlets` untuk multi-assignment) + tambah role `Owner` pada CHECK.
+- [ ] **RLS per-outlet** menggantikan "Allow all for anon": helper `current_outlet_id()` (dari JWT claim / header) + policy `USING (outlet_id = current_outlet_id())` per tabel — termasuk `settings`, `queue_counters`, `stock_logs`, `audit_logs`.
+
+**Fase 2 — Aplikasi (sync & alur inti):**
+- [ ] `currentOutlet` di auth store: pilih cabang saat login; **switch outlet** untuk Manager/Owner; guard halaman per cabang.
+- [ ] Semua `fetch*FromCloud` + realtime + offline queue payload + `loadFromCloud` di-scope `outlet_id` (queue ops membawa `outlet_id`; tombstone & freshness compare per outlet).
+- [ ] `allocateQueueNumberCloud` kirim `outlet_id` asli (hapus hardcode `'default'`); guard shift 1-per-outlet memakai id asli; engine stamp `Transaction.outletId`.
+- [ ] Laporan (Penjualan/PPN/Promo/Refund/Shift/Kas) & Dashboard **filter per outlet**; struk termal & digital memakai `store_name`/alamat **per cabang**; label nama cabang di header.
+- [ ] Settings halaman: pilih cabang yang sedang dikonfigurasi (Manager) — pajak, kategori, printer, tabel, struk per cabang.
+- [ ] Backup/Restore: manifest menyimpan `outlet_id`; **restore per cabang** (tidak menimpa cabang lain); auto backup per cabang.
+
+**Fase 3 — Lanjutan (nilai enterprise):**
+- [ ] **Transfer stok antar cabang** (stock transfer + log khusus) — kebutuhan nyata multi-outlet.
+- [ ] **Laporan konsolidasi** multi-cabang untuk Owner (gabungan vs per cabang).
+- [ ] Master data push pusat→cabang (bila memilih model (b)/(c)); pelanggan & loyalty lintas cabang (bila shared).
+- [ ] Permission granular per outlet per role (Kasir cabang A tidak melihat cabang B).
+
+### F.3 — Yang SUDAH siap / memudahkan
+
+- `queue_counters.outlet_id` + RPC `allocate_queue_number(p_outlet)` — fondasi antrean per cabang **sudah ada**.
+- Konsep "1 shift aktif per outlet" & `computeShiftStats` (18.3) — tinggal plumb id outlet.
+- `Transaction.outletId` placeholder — tinggal diisi engine.
+- Offline queue, tombstone, freshness compare (`updatedAt`), RPC atomik, backup manifest — semua **bisa di-scope per outlet** tanpa mengubah mekanisme.
+- Arsitektur local-first + sync cloud (bukan SQL langsung) — penambahan kolom filter relatif aman.
+
+### F.4 — Risiko & catatan
+
+- **RLS per-outlet adalah titik paling sensitif**: salah policy = kebocoran data cabang lain ATAU data hilang dari pandangan (fallback anon harus tetap jalan untuk device lama). Saran: ship RLS per-outlet **setelah** semua store konsisten menyertakan `outlet_id` di tiap payload.
+- **Dua cabang di device yang sama**: tidak didukung (satu device = satu outlet aktif) — perlu keputusan; solusi sederhana: logout/login pindah cabang.
+- **Realtime per cabang**: subscribe dengan filter `outlet_id=eq.<id>` (bukan global) untuk hemat bandwidth & privasi.
+- **KDS/dapur per cabang**: printer & antrean tiket sudah per-device; tinggal pastikan tiket hanya keluar di printer cabang yang sama.
+- **Estimasi dampak**: ~25–35 file tersentuh (types, schema, cloudSync, auth, semua store filter, layout/login, settings, laporan, backup) + ~15–20 test baru. Rekomendasi: kerjakan **bertahap** (Fase 1 → 2 → 3) dengan satu migration besar di awal.
+
+### F.5 — Deep dive 19.13: sinkronisasi katalog PUSAT → CABANG (reuse infra sync yang ada)
+
+> Analisa mendalam untuk model **pusat→cabang** (master data didorong dari pusat). Bertujuan menjawab: *"bagaimana infrastruktur sync yang sudah ada bisa dipakai tanpa konflik?"*
+
+**F.5.1 — Data master yang di-push** (katalog): `menus` (nama, kategori, harga, bestseller, `ingredients`, `available_addons`, `manual_hpp`, `kitchen_target`, flag gula/suhu, `is_bundle`), `menu_components` (struktur bundle/add-on), **definisi bahan** di `inventory` (nama, unit, `cost_per_unit` — TAPI `stock` & `min_stock` tetap lokal per cabang), dan `categories` (settings).
+
+**F.5.2 — Infrastruktur yang SUDAH ADA & bisa dipakai ulang:**
+
+| Kebutuhan push | Infra yang ada | Catatan |
+|---|---|---|
+| Tulis katalog dari pusat | `syncMenu` → `smartUpsert('menus')` + `bundleRepository.syncComponentToCloud` + offline queue + retry | Reuse penuh — pusat adalah satu penulis |
+| Cabang terima realtime | `subscribeToMenuComponents` + subscription global (posgres_changes) | Tinggal tambah filter `outlet_id=eq.<id>` (Fase 2) |
+| Cabang offline saat push | `fetchMenusFromCloud` + `loadFromCloud` saat reconnect | Perlu **watermark** (lihat F.5.3-4) |
+| Merge tanpa konflik stok | LWW `updated_at` inventory (A5/Migration 29) | `stock` TIDAK ikut di-push — kolom per cabang |
+| Penonaktifan menu | `is_available` + tombstone `deletedLocalIds` (O-8) | Soft-delete lebih aman daripada DELETE (CASCADE resep) |
+| Backup katalog | manifest backup (7.x) `MASTER_DATA` | Tambah scope `outlet_id` (19.10) |
+
+**F.5.3 — Masalah inti & solusinya:**
+
+1. **Referensi antar-tabel (masalah TERBESAR)**: `menu_components.child_id`, `menus.ingredients`, `available_addons` mereferensikan id menu/bahan. Bila cabang memakai id lokal sendiri (random/UUID), resep pusat yang mereferensikan **id pusat tidak cocok** → resep rusak, HPP salah, stok tidak terpotong. **Solusi: id master data dibuat DETERMINISTIK oleh pusat** (satu id yang sama di semua cabang; cabang hanya menerima, tidak menciptakan). Ini menghilangkan kebutuhan mapping id per cabang.
+2. **Dua lapis inventory**: `name`/`unit`/`cost_per_unit` = definisi (master pusat); `stock`/`min_stock` = kondisi lokal per cabang. Push katalog **tidak menyentuh `stock`** → konflik stok antar device cabang yang sama tetap ditangani A5 LWW (sudah ada).
+3. **Konflik tulis (satu arah vs dua arah)**:
+   - **Opsi A — catalog READ-ONLY di cabang (rekomendasi MVP)**: cabang tidak bisa edit nama/harga/resep/bahan — hanya `stock`, `min_stock`, dan `is_available` (buka/tutup jual) yang lokal. Hanya 1 penulis (pusat) → LWW aman **by construction**, tidak ada konflik sama sekali. UI Edit Menu di cabang men-disable field master + label "Dikelola pusat".
+   - **Opsi B — override per-field (lanjutan, bila cabang butuh harga/menu beda)**: kolom `source` ('center'/'branch') + `branch_override` + `updated_at`; merge rule: field yang di-override cabang & lebih baru → cabang menang (tandai untuk review pusat); selain itu pusat menang. Butuh UI deteksi konflik + resolusi manual.
+4. **Watermark pull (hemat bandwidth & anti-timpa)**: `menus` & `menu_components` **belum punya `updated_at`** — tambah (pola A5). Cabang yang offline saat push → saat reconnect `fetch` hanya `WHERE updated_at > last_catalog_sync` + merge; stok lokal tidak ikut tertimpa karena kolom terpisah.
+5. **Bulk push / event storm**: push 100 menu = 100 realtime event per cabang. Skala kecil OK; skala besar → **RPC `push_catalog_batch`** atau pull-based watermark (rekomendasi: pull-based lebih aman untuk bulk).
+6. **Penghapusan**: `DELETE` menu pusat → `menu_components` ON DELETE CASCADE → resep hilang permanen. **Rekomendasi: soft-disable** (`is_available=false` + tombstone O-8 untuk cabang offline); DELETE nyata hanya lewat jalur khusus/backup.
+
+**F.5.4 — Alur yang diusulkan (semua memakai infra yang ada):**
+
+1. **Pusat ubah menu** → `smartUpsert('menus', {... source:'center', updated_at})` + komponen via `bundleRepository` (persis jalur `syncMenu` sekarang, + kolom baru).
+2. **Cabang online** → realtime event → `loadFromCloud` merge (pola A5 LWW: `updated_at` pusat lebih baru → adopsi; `stock`/`is_available` lokal dipertahankan karena merge field-wise / kolom terpisah).
+3. **Cabang offline saat push** → tidak terima realtime → saat reconnect: `fetchMenusFromCloud(watermark)` → merge → toast "Katalog diperbarui dari pusat (N menu)".
+4. **Stok cabang** → tidak tersentuh push → antar device cabang yang sama tetap A5 LWW (sudah ada).
+
+**F.5.5 — Perubahan yang dibutuhkan (untuk nanti di TO DO):**
+- `menus` + `outlet_id`, `source`, `updated_at` (+ opsional `branch_override`); `menu_components` + `outlet_id`, `updated_at`; `inventory` + `outlet_id`, `source`.
+- RLS per outlet (19.4) menutup akses antar cabang; settings per outlet (19.2) untuk kategori per cabang.
+- Guard UI read-only di cabang (Opsi A) — field master disabled.
+- Estimasi: +3 kolom per tabel, ~10–15 file (types, schema, cloudSync watermark, menuStore merge, Catalog guard, Layout/backup), ~10 test (merge catalog, watermark pull, read-only guard, push batch).
+
+**F.5.6 — Trade-off & rekomendasi:**
+- **MVP: Opsi A (read-only catalog, id deterministik dari pusat, definisi bahan shared + stok lokal)** — konflik = nol, reuse penuh infra sync yang ada, paling cepat ship.
+- **Upgrade path: Opsi B** (override per-field) bila kebutuhan nyata muncul (cabang beda harga/menu) — butuh kolom `source` + merge rule + UI konflik.
+- Keputusan penting yang belum diambil: apakah **harga bahan** (`cost_per_unit`) di-push (HPP sama semua cabang) atau per cabang (HPP beda per daerah — rekomendasi: per cabang, karena biaya bahan berbeda-beda).
+
+### F.6 — Deep dive 19.13g: skema ID DETERMINISTIK untuk master data pusat→cabang
+
+> Analisa mendalam: *"bagaimana meng-generate id menu/bahan yang stabil & unik global tanpa collision antar cabang yang offline?"*
+
+**F.6.1 — Kondisi saat ini**: `menus` & `inventory` memakai **UUID v4 acak yang dibuat lokal** (`Catalog.tsx:175` `editId || uuid()`, `inventoryStore.ts:36/109/143/200` `id: uuid()`; `menu_components.id` memakai komposit `${parentMenuId}-comp-${idx}-${childId}`). UUID v4 = 122 bit acak → **secara statistik tidak akan bertabrakan antar cabang offline** (masalah "collision" tidak nyata). Masalah sebenarnya ada di **identitas logika lintas cabang**: dua cabang yang membuat item yang sama secara independen menghasilkan **id berbeda** → pusat tidak bisa tahu itu item yang sama → dedupe/merge butuh mapping manual.
+
+**F.6.2 — Opsi skema id yang dipertimbangkan:**
+
+| Opsi | Mekanisme | Kelebihan | Kekurangan |
+|---|---|---|---|
+| **1. UUID v4 + id dibawa push** (status quo) | Pusat buat, id ikut di-push | Sudah dipakai, nol perubahan, nol collision | Item yang sama dibuat independen di 2 cabang = 2 id beda; dedupe butuh mapping nama |
+| **2. UUID v5 (deterministik)** ⭐ | `v5(NAMESPACE_tipe, key_bisnis)` — input sama → id sama di mana pun, offline-capable | Id sama lintas cabang **tanpa koordinasi**; dedupe & deteksi konflik by identity; cabang offline membuat item → id = id yang akan dibuat pusat | Rename mengubah id (butuh `key` stabil, id immutable); butuh migrasi data lama |
+| **3. Komposit ber-awalan asal** (`center:menu:…` / `cabang-b:menu:…`) | Id membawa asal + tipe | Asal jelas, bantu RLS/traceability | Referensi anak jadi tergantung asal — resep pusat yang mereferensikan id center tetap valid, tapi item buatan cabang beda namespace → membingungkan untuk merge |
+| **4. Urutan dari pusat (RPC counter)** | Alokasi id via counter (pola `queue_counters`) | Ringkas, terurut | Cabang offline butuh id → harus reservasi batch; tambah dependensi jaringan saat kreasi — **overkill untuk master data** |
+
+**Rekomendasi: Opsi 2 (UUID v5 berbasis business key), paket `uuid` sudah ada di project (v5 tersedia).**
+
+**F.6.3 — Desain rekomendasi (UUID v5 + `key` stabil):**
+
+1. **Namespace per tipe**: `NAMESPACE_MENU`, `NAMESPACE_INVENTORY`, `NAMESPACE_COMPONENT` — `v5(MENU_NS, key)` tidak akan bertabrakan dengan `v5(INV_NS, key)` meski key sama.
+2. **Business key = `key` (slug/SKU), BUKAN nama tampilan**: nama bisa berubah ("Es Teh Manis" → "Es Teh"); rename akan mengubah id bila key = nama → refs rusak. **`id` bersifat immutable; `key` adalah identitas dedupe** (pola seperti username/email pada akun): rename mengubah `key` + `name`, `id` tetap.
+   - Aturan key: lowercase, tanpa aksen/spasi (slug), panjang dibatasi; bila ada **SKU/kode item** manual di form → SKU prioritas; fallback slug(nama).
+3. **Validasi keunikan key saat kreasi** (pola validasi promo P-A2): cek key belum dipakai di store/cloud sebelum simpan; tabrakan → toast + saran SKU unik (bukan diam-diam menimpa).
+4. **Kreasi offline di cabang**: cabang membuat item → `v5(NS, key)` dihitung lokal → id SAMA dengan yang akan dihasilkan pusat → saat sync naik (model B) pusat melihat id sama → **tidak ada duplikat**; beda isi → konflik = item logika sama → resolusi via `source`/`updated_at` (Opsi B F.5.3-3).
+5. **Referensi tetap stabil**: `menu_components.child_id` & kunci `ingredients` (id bahan) kini deterministik → **dua cabang offline menyusun resep untuk bahan yang sama menghasilkan referensi yang sama** → resep buatan cabang kompatibel saat di-push ke pusat/cabang lain. Ini kemenangan inti opsi 2.
+6. **Skala & tabrakan key**: risiko bergeser dari "collision id" (nol) ke **tabrakan key** (dua item berbeda punya slug sama) — ditangani: SKU prioritas, suffix numerik `-2` bila slug bentrok, validasi kreasi.
+
+**F.6.4 — Migrasi data lama (penting):**
+- Tambah kolom `key TEXT` (nullable) di `menus` & `inventory`; **backfill** `key = slug(name)` untuk yang unik, `slug(name)-2/-3…` untuk duplikat, kosong bila tak bisa disimpulkan.
+- **Id lama TIDAK ditulis ulang** (jangan rewrite UUID v4 → v5): transaksi/stock log/resep snapshot menyimpan referensi id lama; rewrite = refs patah. Id lama tetap dipakai selamanya.
+- Push pusat→cabang melakukan **adopsi by key**: item lama yang key-nya sama tapi id beda (legacy buatan cabang) → hanya di-adopt untuk item BARU; item legacy dibiarkan kecuali ada aksi eksplisit "adopsi katalog pusat" (mapping `key → id` dicatat di tabel lookup bila perlu).
+- Komponen (`menu_components`) memakai id induk deterministik untuk item baru; item legacy memakai id lama — tidak masalah karena referensi mengikuti id induk yang ada.
+
+**F.6.5 — Ringkasan keputusan:**
+- Pakai **UUID v5** (`v5(NAMESPACE_tipe, key)`), id **immutable**, `key` = identitas dedupe (SKU prioritas / slug fallback).
+- Validasi keunikan key saat kreasi + suffix bentrok.
+- Migrasi: tambah `key`, backfill slug, **jangan rewrite id lama**; adopsi by key hanya untuk item baru.
+- Dampak: ~6–8 file (types, `idgen.ts` baru, Catalog/Inventory kreasi, validasi, migrasi) + ~8–10 test (v5 deterministik per tipe, key collision, rename immutability, migrasi legacy).
+
+### F.7 — Deep dive 19.13h: adopsi item LEGACY (key sama, id berbeda) — skenario, risiko refs, tabel lookup
+
+> Analisa mendalam: *"bagaimana menangani item lama yang key-nya sama dengan katalog pusat tapi id-nya berbeda saat adopsi, tanpa mematahkan referensi?"*
+
+**F.7.1 — Peta referensi id di runtime (yang bisa "patah"):**
+
+| Referensi | Lokasi | Jenis |
+|---|---|---|
+| `menus.ingredients` (kunci = id bahan) | JSONB di row `menus` | **Aktif** (hot path deduksi stok) |
+| `AddOn.ingredients` (kunci = id bahan) | JSONB `available_addons` | **Aktif** |
+| `menu_components.child_id` (→ menu/bahan) | tabel relasional | **Aktif** (engine bundle) |
+| Recipe snapshot transaksi (`RecipeIngredientSnapshot.inventoryId`) | JSONB di `transactions` | **Historis** (audit, tidak boleh diubah) |
+| `StockLogEntry.inventoryId` (`stockLogStore.ts:11`) | riwayat stok | **Historis** |
+| `StockOpnameItem.inventoryId` | riwayat opname | **Historis** |
+| Split reserve session (kunci per `inventoryId`, `splitStockSession.ts`) | localStorage | **Aktif sementara** |
+| Keranjang POS (`CartItem.menuId`) | store sesi | **Aktif sementara** |
+
+> Catatan: `manual_` prefixed pseudo-id (`hpp.ts:53/93`) bersifat sintetis — tidak perlu di-adopt.
+
+**F.7.2 — Skenario yang mungkin terjadi:**
+
+- **S1 — Item masih dipakai resep aktif**: menu lokal memakai bahan A (`ingredients: {A: 2}`); adopsi A→B. Bila `ingredients` tidak di-rewrite → `calculateItemDeductions` tidak menemukan bahan → **stok tidak terpotong** (bocor) + warning A11 "bahan tidak ditemukan". **Harus rewrite aktif.**
+- **S2 — Item sudah dipakai transaksi masa lalu**: snapshot lama menyimpan `inventoryId: A` + `inventoryName` (tersimpan). **Jangan rewrite** — itu jejak audit; tampilan laporan tetap benar karena nama ada di snapshot. Risiko hanya pada lookup stok-by-id (join ke inventory gagal → perlakukan sebagai "bahan dihapus", pola A11).
+- **S3 — Dua cabang legacy A1 & A2, key sama, stok terpisah**: adopsi keduanya → B. Stok A1+A2 harus digabung/dipindah EKSPLISIT (keputusan: gabung otomatis vs pindah manual) — salah gabung = selisih stok nyata.
+- **S4 — Item dipakai keranjang / split reserve AKTIF**: reserve session keyed by A → setelah adopsi, cap tidak cocok → **double deduction** (kelas masalah A6). **Guard: tolak adopsi saat ada cart/reserve aktif memakai item** (atau lakukan di luar jam operasional).
+- **S5 — Bundle**: `menu_components.child_id` bisa menunjuk menu lain; adopsi child menu → rewrite berantai (urut: child dulu, parent belakangan) ATAU resolve-at-read membuat urutan tidak penting.
+- **S6 — Item murni lokal cabang (tidak ada di pusat)**: **tidak di-adopt** — tidak disentuh sama sekali.
+
+**F.7.3 — Risiko refs patah (terinci):**
+- **Hot path (checkout)**: `ingredients`/`child_id` salah → deduksi stok bocor/keliru, bundle tidak terurai, HPP salah. **Tidak boleh terjadi** → wajib rewrite terkontrol.
+- **Historis**: snapshot/log/opname dengan id A — tampilan tetap OK (nama tersimpan); hanya lookup by-id yang gagal → perlu fallback (pola A11).
+- **Sesi aktif**: keranjang & reserve split — guard operasional + resolve-at-read saat baca sesi lama.
+- **Kesalahan umum yang harus dihindari**: (1) rewrite snapshot historis (merusak audit), (2) rewrite id di row yang sedang dipakai transaksi berjalan (race), (3) menghapus item A (harus tombstone, bukan DELETE), (4) mengabaikan penggabungan stok A1+A2.
+
+**F.7.4 — Tabel lookup yang aman (`item_identity`):**
+
+```sql
+CREATE TABLE IF NOT EXISTS item_identity (
+  item_id TEXT PRIMARY KEY,      -- id item yang dipakai di referensi (lama atau baru)
+  key TEXT NOT NULL,             -- business key (slug/SKU) — identitas dedupe
+  kind TEXT NOT NULL CHECK (kind IN ('menu','inventory')),
+  canonical_id TEXT,             -- NULL = dirinya kanonik; terisi = di-adopt ke id ini
+  outlet_id TEXT NOT NULL DEFAULT 'default',
+  adopted_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_identity_key ON item_identity(key, kind);
+```
+
+- **Aturan invariant**: (1) `canonical_id` hanya satu arah (legacy → kanonik, TIDAK boleh rantai: canonical menunjuk item yang juga punya canonical — guard saat tulis); (2) item kanonik = `canonical_id NULL`; (3) satu `(key, kind)` hanya satu baris kanonik per outlet (unique index).
+- **Resolve saat baca**: `resolveRef(refId) = COALESCE(canonical_id, item_id)` — dipakai di lookup inventory/child (hot path TETAP memakai id hasil rewrite sehingga cepat; resolve hanya untuk histori/laporan & sesi lama).
+- **Mengapa aman**: refs historis (A) tetap tersimpan apa adanya; rewrite fisik HANYA untuk data aktif yang berubah (menus.ingredients, menu_components) lewat migrasi terkontrol; item_identity menjadi jejak pemetaan + fallback lookup — bukan pengganti rewrite.
+
+**F.7.5 — Strategi adopsi bertahap yang aman (rekomendasi):**
+
+1. **Identifikasi** (Fase 0): scan item aktif vs katalog pusat by key → daftar calon adopsi (key sama, id beda) + item murni lokal (dikecualikan).
+2. **Guard operasional**: tolak bila ada cart aktif / split reserve session memakai item (device sedang transaksi); rekomendasi eksekusi di luar jam operasional.
+3. **Rewrite aktif terkontrol** (Fase 1): ganti kunci `menus.ingredients` & `AddOn.ingredients` (A→B) + `menu_components.child_id` (A→B, urut child→parent untuk bundle); **gabungkan stok** A+B → B (keputusan eksplisit: otomatis vs manual); tulis `item_identity` untuk setiap pasangan.
+4. **Tombstone A** (Fase 2): `is_available=false` + `deletedLocalIds` (O-8) — device lain ikut tahu; **JANGAN DELETE** (histori & refs lama tetap valid).
+5. **Snapshot historis dibiarkan** (Fase 3): transaksi/log/opname lama tetap A + nama tersimpan → laporan normal; lookup by-id via `item_identity.resolveRef` bila perlu.
+6. **Sesi lama** (Fase 4): `splitStockSession`/keranjang lama di-reconcile via resolve-at-read — sesi yang tersimpan sebelum adopsi tetap aman.
+7. **Push model**: pusat menulis `item_identity` saat adopsi → cabang menerima via realtime/watermark → resolve konsisten di semua device.
+
+**F.7.6 — Risiko residual terdokumentasi:**
+- Rewrite aktif tidak bisa 100% dijamin bebas race (guard mengurangi, tidak menghilangkan) — mitigasi: eksekusi di luar jam operasional + backup sebelum adopsi (reuse backupService 7.x).
+- Penggabungan stok A1+A2 lintas cabang harus eksplisit (keputusan bisnis, bukan otomatis diam-diam).
+- Item legacy yang TIDAK di-adopt (murni lokal) — tetap berjalan seperti sekarang (tidak terpengaruh).
+- Dampak implementasi: ~4–5 file (migrasi SQL + `itemIdentity.ts` baru + resolve di lookup + guard adopsi) + ~10 test (invariant rantai, resolve, rewrite menu/bundle, guard sesi aktif, gabung stok).
+
+### F.8 — Deep dive 19.13h2: aturan PENGABUNGAN STOK saat adopsi A1+A2 → B
+
+> Analisa mendalam: *"otomatis vs manual, nasib riwayat stock log yang tetap di A1/A2, dan dampak ke laporan selisih opname."*
+
+**F.8.1 — Klarifikasi model (penting): stok PER CABANG.**
+
+Dalam model multi-outlet, `stock` adalah kolom per outlet (per cabang). Maka skenario "A1 + A2" perlu dipecah menjadi DUA situasi yang berbeda:
+- **Lintas cabang**: cabang 1 punya A1 (stok 5), cabang 2 punya A2 (stok 3) → keduanya di-adopt ke B. **TIDAK ada penggabungan stok lintas cabang** — tiap cabang mempertahankan stoknya sendiri di bawah id terpadu B (B di cabang 1 = 5, B di cabang 2 = 3). Ini aman by design dan tidak menimbulkan pertanyaan.
+- **Dalam satu cabang** (kasus yang benar-benar perlu aturan): cabang memiliki A (legacy) DAN B (hasil push pusat) secara bersamaan dengan stok di keduanya → di sinilah keputusan gabung otomatis vs manual berlaku.
+
+**F.8.2 — Aturan rekomendasi: otomatis bila salah satu nol, manual bila keduanya > 0.**
+
+| Kondisi stok dalam cabang | Aturan | Alasan |
+|---|---|---|
+| `B.stock = 0` (baru di-push, belum pernah dipakai) | **Otomatis**: `B.stock += A.stock`, tombstone A | Tidak ada konflik — B kosong, A satu-satunya sumber stok nyata |
+| `A.stock = 0` (A sudah habis) | **Otomatis**: adopsi id saja, tanpa perpindahan stok | Tidak ada stok yang perlu dipindah |
+| **Keduanya > 0** | **Manual** — dialog per item: (1) gabung (`B += A`), (2) pindah manual dengan nominal, (3) jadikan item terpisah (A tidak di-adopt) | Dua sumber stok nyata = kemungkinan key-collision palsu (dua item beda yang slug-nya sama) ATAU stok ganda yang memang harus digabung — keputusan bisnis, bukan otomatis diam-diam |
+| Stok A negatif/aneh | **Manual + peringatan** (pola clamp 10.4) | Jangan pernah menggabung nilai abnormal tanpa konfirmasi |
+
+- **Ambiguitas yang membuat "keduanya > 0" harus manual**: slug collision palsu (mis. "Gula" vs "Gula Merah" → slug `gula` vs `gula-merah` sebenarnya beda, tapi "Gula Aren" & "Gula" bisa bentrok bila slug dipotong); harga/cost per unit A ≠ B (bahan beda sebenarnya); A & B sudah punya riwayat penjualan masing-masing.
+- **Tulis stok gabungan dengan DELTA, bukan set absolut**: `B.stock += A.stock` lewat `adjust_inventory_stock` (RPC atomik 18.1/Migration 27) — dua device cabang yang sama meng-adopsi bersamaan tidak bisa double-count (RPC delta + row-lock).
+
+**F.8.3 — Riwayat stock log yang tetap di A1/A2 (tidak di-rewrite):**
+
+- `StockLogEntry` menyimpan `inventoryId`, `inventoryName`, `stockBefore`, `stockAfter`, `type`, `reason` (`stockLogStore.ts:9–19`) — riwayat A **dibiarkan utuh** (audit; konsisten F.7.3).
+- **Catatan adopsi**: tambah 1 entry di B (`type: 'add'`, amount = +A.stock, reason "Adopsi katalog pusat: gabung stok dari {nama A}") + 1 entry di A (`type: 'adjust'`, `stockAfter: 0`, reason "Di-adopsi ke {B}") — jejak lengkap di kedua sisi.
+- **Dampak ke UI riwayat**: `getLogsByItem(B)` hanya menampilkan log B → riwayat lama A hilang dari pandangan. **Solusi rekomendasi: resolve-at-read saat menampilkan riwayat** — lookup B → sertakan log A (via `item_identity`) dengan label "sebelum adopsi: {nama A}". Alternatif lebih sederhana: tampilkan log B + entry adopsi saja (riwayat A tetap ada di DB, bisa diakses via filter id lama).
+- **Dampak ke laporan stok** (laporan yang mengagregasi stock log): agregasi per id akan memisah A (historis) & B (baru) — wajar; agregasi per `key` (bila laporan memakai key) otomatis menyatukan.
+
+**F.8.4 — Dampak ke laporan selisih OPNAME (paling sensitif):**
+
+- `StockOpnameItem` menyimpan `inventoryId` + `systemStock` **saat opname dibuka** (`StockOpname.tsx:52`), `difference = actual − systemStock`, `lossValue = abs(diff) × costPerUnit` (baris 84–90); laporan loss mengagregasi `lossValue` per reason (`Reports.tsx:1675–1677`).
+- **Bila adopsi terjadi DI TENGAH opname aktif**: A di-tombstone (`stock` → 0/terpindah) → `systemStock` A (nilai saat buka, mis. 5) jadi selisih −5 (seolah kehilangan) PADAHAL stoknya pindah ke B; B muncul dengan stok gabungan → laporan opname jadi bingung (loss A + gain B palsu).
+- **Mitigasi (wajib)**: **guard adopsi menolak saat ada opname AKTIF** (pola yang sama dengan guard cart/split reserve F.7.2-S4) — opname harus diselesaikan dulu, atau adopsi dilakukan di luar jam operasional.
+- **Opname yang sudah selesai (historis)**: tetap memakai id & cost A (tersimpan di item) → laporan loss historis TIDAK berubah (audit utuh).
+- **Opname baru setelah adopsi**: memakai B (id baru, `costPerUnit` B per cabang — F.5.6) → normal.
+- **Catatan biaya**: `lossValue` memakai `costPerUnit` yang tersimpan per item opname — beda cost A vs B tidak mengubah laporan historis.
+
+**F.8.5 — Alur eksekusi yang disarankan (dalam satu cabang):**
+
+1. Guard: tolak bila ada cart aktif / split reserve / **opname aktif** memakai item (F.7.2-S4 + F.8.4).
+2. Klasifikasi per item: otomatis (salah satu nol) vs manual (keduanya > 0 — dialog per item).
+3. Otomatis: `adjust_inventory_stock(B, +A.stock)` (RPC delta) → rewrite refs aktif (F.7.5-3) → entry log di A & B → tombstone A → tulis `item_identity`.
+4. Manual: dialog per item → gabung / pindah nominal / jadikan terpisah (tidak di-adopt); sisanya sama seperti langkah 3.
+5. Backup dulu (reuse `backupService` 7.x) — adopsi adalah operasi sekali-jalan yang mengubah stok.
+
+**F.8.6 — Risiko residual terdokumentasi:**
+- Gabung otomatis "salah satu nol" tetap punya risiko bila A negatif atau B ternyata bukan item sama (key collision) — diperkecil oleh klasifikasi di F.8.2.
+- Race dua device cabang sama meng-adopsi bersamaan — ditutup RPC delta (18.1); sisanya guard sesi.
+- Riwayat log A tidak muncul di filter id B tanpa resolve — keputusan UX (resolve vs cukup entry adopsi).
+- Estimasi: +2 file (dialog gabung manual + logika klasifikasi), ~6–8 test (klasifikasi 4 kasus, RPC delta, guard opname aktif, entry log A&B, resolve riwayat, opname historis tidak berubah).
+
+### F.9 — Deep dive 19.13h2e/f: SPESIFIKASI dialog gabung manual per item
+
+> Spesifikasi implementable untuk dialog "Adopsi Katalog Pusat — item perlu keputusan" (dipicu saat klasifikasi **manual** di F.8.2: stok A & B keduanya > 0, atau A negatif/aneh). Konvensi UI mengikuti modal yang ada (`SplitBillModal.tsx`: `rounded-xl`, slate/amber banner, `formatRupiah` dari `src/utils/format`).
+
+**F.9.1 — Konteks & akses:**
+- Muncul per item dalam alur adopsi (F.7.5), hanya untuk item klasifikasi **manual**; item otomatis TIDAK lewat dialog ini (langsung dieksekusi + masuk ringkasan).
+- **Role-gate**: hanya **Manager/Owner** (pola PIN 10.2) — dialog menolak Kasir/Staf Gudang.
+- **Guard sebelum muncul**: bila ada opname aktif / cart aktif / split reserve yang memakai A atau B → dialog tidak bisa dikonfirmasi (tombol disabled + teks alasan), bukan hanya peringatan.
+
+**F.9.2 — Layout dialog (list per item, bukan wizard per item):**
+- **Header**: judul + ringkasan "N item memerlukan keputusan" + tombol "Otomatiskan sisanya" (menerapkan aturan F.8.2 ke semua item yang memenuhi syarat otomatis).
+- **Baris per item** (scrollable):
+  - Kolom kiri: nama A (label "Item lama · id {A}") vs nama B (label "Katalog pusat · id {B}"), badge **key sama** (`key = {slug}`), badge bendera bila **nama A ≠ nama B** atau **cost A ≠ cost B**.
+  - Kolom stok: `A: {x} | B: {y}` → pratinjau live `→ A: {x'} | B: {y'}` per opsi terpilih.
+  - **3 opsi radio** (kartu):
+    1. **Gabung stok** (default) — `B.stock += A.stock`, A di-tombstone (rewrite refs aktif + `item_identity` + entry log di A & B, F.8.3).
+    2. **Pindah sebagian** — input nominal `X` (0 ≤ X ≤ A.stock, default A.stock): `B += X`, `A.stock = A.stock − X`; **A tetap hidup** sebagai item mandiri → otomatis diberi `key` baru (`{slug}-lokal`, SKU baru) agar tidak bentrok dengan B; A **tidak di-adopt**.
+    3. **Jadikan terpisah** — A **tidak di-adopt** sama sekali; stok A tetap di A; A diberi `key` baru (`{slug}-lokal`) + tidak disentuh refs-nya.
+- **Footer**: tombol **Batal** (kembali tanpa perubahan) + **Konfirmasi (N item)** — disabled saat ada guard aktif.
+
+**F.9.3 — Pratinjau dampak (live, sebelum konfirmasi):**
+- **Stok**: tabel sebelum → sesudah per opsi (A/B/unit), total gabungan. Warning bila hasil negatif/NaN (clamp, pola 10.4).
+- **Menu terdampak (rewrite refs)**: hitung jumlah menu yang `ingredients`/`AddOn.ingredients`/`menu_components.child_id` mereferensikan A (dari store) → "N menu akan diarahkan ke B".
+- **Dampak HPP (kunci, karena cost A ≠ B)**: untuk setiap menu terdampak hitung HPP sebelum (pakai cost A) vs sesudah (pakai cost B) via `hpp.ts:17` (`costPerUnit * amount`) / `calculateBundleHPP` (`bundleService.ts:96`) — tampilkan daftar menu yang **berubah** dengan delta Rp (naik/turun) + total dampak margin; menu dengan `manualHpp > 0` dicatat "HPP manual — tidak terpengaruh".
+- **Dampak lain**: jumlah bundle (child A), riwayat stock log A yang akan di-label ulang (count), item_identity yang akan ditulis.
+- **Pratinjau dihitung ulang** saat opsi/nominal berubah — murni dari data store (helper murni `previewAdoption(item, option, x)` untuk unit test).
+
+**F.9.4 — Peringatan risiko key-collision (banner amber, pola `SplitBillModal` baris 576):**
+- Tampil bila salah satu: `costPerUnit` A vs B selisih > **10%**; nama A ≠ nama B (hanya key sama); stok A > 2× stok B; atau A pernah punya riwayat penjualan signifikan (jumlah transaksi memakai A).
+- Teks: *"Kemungkinan dua item berbeda yang kebetulan memiliki key sama. Periksa sebelum menggabung."* + tombol **"Periksa manual"** → buka form edit item (detail A & B berdampingan) — tanpa menutup dialog.
+- Setiap item yang memicu warning tetap bisa dikonfirmasi (keputusan tetap di Manager), tapi tercatat di audit log adopsi sebagai `flagged`.
+
+**F.9.5 — Konfirmasi & eksekusi:**
+- Sebelum eksekusi: **backup otomatis** (reuse `backupService` 7.x, manifest + `outlet_id`) — sekali untuk batch.
+- Eksekusi per item sesuai opsi: RPC delta `adjust_inventory_stock(B, +X)` (F.8.2), rewrite refs aktif (F.7.5-3), entry log A & B (F.8.3), tombstone atau `key` baru, tulis `item_identity`, tulis audit log (role, jumlah item, `flagged`).
+- **Idempoten**: item yang sudah punya baris `item_identity` tidak muncul lagi; double-click konfirmasi di-guard (pola A4 in-flight).
+- **Toast ringkasan**: "Adopsi selesai — 3 digabung, 1 dipindah sebagian, 2 terpisah, 5 otomatis".
+- **Tidak ada undo otomatis** (operasi sekali-jalan) — pemulihan via restore backup; catatan ini tampil di footer dialog.
+
+**F.9.6 — Estimasi implementasi:**
+- 1 komponen baru `AdoptionMergeDialog.tsx` + helper murni `adoptionPreview.ts` (klasifikasi, pratinjau, key baru, warning flags).
+- ~10–12 test: klasifikasi + pratinjau (gabung/pindah/terpisah, HPP naik/turun, manualHpp), warning flags (cost >10%, nama beda, stok 2×), guard (opname/cart/split aktif), idempotensi (item_identity sudah ada), RPC delta dipanggil benar, audit log `flagged`.
+
+### F.10 — Deep dive 19.13h2g/h: alur adopsi OTOMATIS (tanpa item manual) — batch, toast, audit log
+
+> Analisa mendalam: *"bagaimana eksekusi batch, ringkasan toast, dan laporan ke audit log harus terlihat oleh Manager agar seluruh adopsi dapat diaudit."*
+
+**F.10.1 — Alur batch eksekusi (semua item klasifikasi otomatis, F.8.2):**
+
+1. **Pre-flight**: guard (opname/cart/split reserve aktif → batal dengan alasan); **backup otomatis** (reuse `backupService` 7.x, sekali per batch) → simpan `backupId`; bangun **rencana batch** (daftar item + opsi + delta stok + jumlah menu rewrite) dan simpan sebelum eksekusi (bahan rekonsiliasi & audit).
+2. **Eksekusi berurutan per item** (anti race & idempoten): RPC delta `adjust_inventory_stock` → rewrite refs aktif → entry stock log A & B → tombstone/key baru → tulis `item_identity` → audit log. **Idempoten**: item yang sudah punya `item_identity` di-skip (retry aman).
+3. **Kegagalan per item TIDAK membatalkan batch** (pola best-effort): item gagal dicatat + dilaporkan, bisa di-retry (idempoten). Gagal di level batch hanya bila backup/pre-flight gagal → batal total sebelum eksekusi apa pun.
+4. **Verifikasi pasca-batch**: jumlah `item_identity` baru == jumlah dieksekusi; stok B == `B.awal + Σ delta`; **scan sisa refs aktif yang masih menunjuk A** (menus.ingredients / menu_components / addons) → bila ada sisa, warning + daftar.
+
+**F.10.2 — Toast ringkasan (via `toastStore`, pola 14.6 alert→toast):**
+- **Sukses** (hijau): *"Adopsi selesai — 12 item: 8 digabung, 2 dipindah, 2 terpisah (10 otomatis)"* + aksi sekunder "Lihat Audit" → halaman Audit Log.
+- **Sebagian gagal** (amber): *"Adopsi selesai sebagian — 10 berhasil, 2 gagal (lihat detail)"* — item gagal tampil di daftar failed-ops / audit log untuk retry.
+- **Gagal total** (merah): alasan (guard/backup) + tombol coba ulang (idempoten).
+- Ringkasan selalu menyebut jumlah per aksi — Manager tahu persis apa yang terjadi tanpa membuka detail.
+
+**F.10.3 — Audit log yang harus terlihat Manager (paling penting):**
+
+- **Action baru `'catalog_adopt'`** di `AuditAction` (`types/index.ts:477`) + muncul di **filter dropdown** halaman Audit Log (`AuditLog.tsx:53`) — Manager bisa filter "Adopsi Katalog" dan melihat riwayat semua adopsi (per outlet).
+- **Granularity (rekomendasi: 1 entry batch + per-item hanya untuk flagged)**:
+  - **1 entry BATCH** (hemat cap audit log 1000, pola 6.1): `action: 'catalog_adopt'`, `detail: "Adopsi katalog pusat — 12 item: 8 digabung, 2 dipindah, 2 terpisah"`, `metadata: { outletId, mode: 'otomatis'|'campuran', backupId, total, merged, partial, separate, failed, flagged, verified, remainingRefs, startedAt, finishedAt, durationMs, items: [{itemA, itemB, key, option, stockDelta, costDelta}] }` — detail per item tersimpan dalam satu row (auditable tapi hemat kuota).
+  - **1 entry PER ITEM hanya untuk item flagged/abnormal/gagal**: `metadata: { itemA, itemB, key, reason, flagged }` — item bermasalah mudah dicari tanpa membuka metadata batch.
+- **Keterhubungan backup**: `backupId` di metadata batch menghubungkan adopsi ke backup otomatis pra-eksekusi → Manager bisa restore ke kondisi sebelum adopsi (karena tidak ada undo otomatis, F.9.5).
+- **Audit lintas device**: `addLog` sudah `syncAuditLog` ke cloud (`auditLogStore.ts:38`) → riwayat adopsi terlihat di device mana pun (Manager/Owner), konsisten dengan model sync yang ada.
+
+**F.10.4 — Dukungan UI untuk audit:**
+- Halaman Audit Log: aksi "Adopsi Katalog" bisa di-filter & di-search; entry batch bisa dibuka (expand) menampilkan `items` metadata (daftar A→B, opsi, delta stok, delta cost, flagged).
+- Tambahan opsional: blok ringkas di halaman Settings/Inventaris "Riwayat Adopsi Terakhir" (N terakhir, per outlet) dengan tombol "Lihat Audit Log" — memudahkan Manager tanpa harus filter manual.
+
+**F.10.5 — Keputusan & estimasi:**
+- 1 action baru + filter Audit Log otomatis (perlu cek daftar filter statis vs dinamis di `AuditLog.tsx` — bila statis, tambahkan); helper murni `buildAdoptionSummary(items)` + `buildAdoptionAuditMeta(...)` untuk unit test; toast ringkasan via `toastStore`.
+- ~6–8 test: ringkasan counts benar, metadata batch (items array + backupId), flagged → entry per-item, batch sebagian gagal (retry idempoten via item_identity), verifikasi sisa refs, pesan toast.
+
+## 🔍 G. AUDIT FITUR EKSISTING PASCA-PRIORITAS 18 (v4.7, belum dieksekusi)
+
+> Audit menyeluruh fitur yang sudah ada: baseline 588/588 test hijau + scan pola bug + penelusuran logika area berisiko. Rincian eksekusi: **Prioritas 20 di `TO DO.md`**.
+
+### G.1 — Temuan bug
+
+**G-1 (🟠 SEDANG) — `computeShiftStats` tidak mengecualikan transaksi refunded** (`src/utils/shiftStats.ts:46-51`):
+- `shiftTx` = `Selesai && !splitParentId && date >= openedAt` — **tanpa `!t.refunded`** → Total Penjualan & Total Transaksi di ringkasan tutup shift **overstated** saat ada refund. Dashboard (`Dashboard.tsx:65-66`), Reports (`filteredTx` baris 72-78), Transactions (`:195`) semuanya sudah exclude `!refunded` — **inkonsisten**.
+- **Analisa netting expected cash** (penting, jangan asal fix): `expectedCash = opening + cashSales + cashIn − cashOut` di mana movement Refund ('out') ikut dihitung. Untuk **refund tunai**: sale refunded tetap di cashSales (+50k) dan movement (−50k) → net 0 → expectedCash benar. Bila refunded di-exclude dari cashSales TANPA menyesuaikan movement → double-subtract (expectedCash `opening − 50k` — salah).
+- **Fix yang benar**: `totalSales`/`totalTx` dari subset non-refunded; `cashSales`/expectedCash pertahankan netting; residual kasus silang metode (sale tunai di-refund via QRIS: movement 'out' dicatat padahal uang tidak keluar laci → understated) — fix penuh butuh field `refundMethod` (enhancement).
+- ✅ **SELESAI (v4.7 TO DO 20.1)**: `salesTx` (non-refunded) = basis laporan; **`refundedCashSales`** di-add-back ke expected cash (netting netral — secara matematis setara formula lama: `opening + cashSales_incl_refunded + cashIn − cashOut`); UI menampilkan baris "Refund Tunai (Dikembalikan)" bila > 0. +5 test, **593/593**.
+
+**G-2 (🟢 MINOR/UX) — `alert()` tersisa di halaman non-printer** (~15 titik di AuditLog, CashMovements, Catalog, SettingsPage, App) — inkonsisten dengan konvensi toast (14.6).
+- ✅ **SELESAI (v4.7 TO DO 20.2)**: 21 `alert()` → toast termasuk 4 temuan tambahan (StockOpname ×3, authStore ×1); kode produksi 0 `alert()` tersisa; `window.confirm` dipertahankan.
+
+**G-3 (🟠 SEDANG) — Filter tanggal CUSTOM pakai UTC untuk tanggal awal (Laporan & Riwayat Transaksi)** (audit agregasi Laporan/Dashboard):
+- `new Date(customDateFrom)` format `"YYYY-MM-DD"` tanpa `T` = **UTC tengah malam = 07:00 WIB**; `new Date(customDateTo + 'T23:59:59')` = lokal → transaksi **00:00–07:00 pada hari awal tidak masuk** range custom. Titik: `Reports.tsx:101`, `Reports.tsx:139`, `Transactions.tsx:153`. Kelas bug sama dengan fix 18.3 (pagi buta) yang sudah diterapkan di `queueNumber`/`transactionStore`/`cloudSync` — filter custom Laporan/Riwayat terlewat.
+- ✅ **SELESAI (v4.7 TO DO 20.4)**: helper murni **`buildCustomDateRange(fromStr, toStr)`** di `src/utils/format.ts` — `from` parse **lokal** (`'T00:00:00'`), `to` lokal `'T23:59:59.999'`, fallback epoch/now; dipakai di 3 titik (Reports `filteredTx` + `dateFrom` opname/movement, Transactions custom). Test +5 (`dateRange.test.ts`): lokal midnight di zona mana pun, transaksi **03:00 lokal tanggal awal masuk**, 23:59:59.500 hari akhir masuk, batas ter-exclude, fallback. Validasi **598/598** (57 file), `tsc` 0 error.
+
+**G-4 — Hasil audit agregasi Laporan & Dashboard yang AMAN (diverifikasi):**
+- `filteredTx` mengecualikan `refunded` + `splitParentId` (sub-bill pending); sub-bill split FRESH (splitIndex tanpa parent) tetap masuk dengan kontribusi dibagi `splitContributionDivisor` (5.11) — benar untuk qty/revenue per kategori & menu (`categorySales`, Dashboard `menuSales`).
+- **Per-kasir report** mengagregasi **uang riil per transaksi** (`t.totalAmount` per sub-bill fresh = 1/N, Σ = penuh) — **tidak perlu divisor** (benar).
+- **P&L**: `netRevenue = Σsubtotal − Σdiskon`, HPP sub-bill equal proporsional (5.2: Σ hpp = hpp induk) → gross profit tidak ter-inflasi; `netProfit` termasuk opname loss (BUG-02).
+- **PPN & promo report** memakai `filteredTx` (exclude refunded); tax per sub-bill fresh = 1/N → Σ = penuh.
+- **Chart Dashboard** (revenue/laba harian, busy hours, bulanan) filter `Selesai && !splitParentId && !refunded` + agregasi uang riil — tanpa divisor (benar). Dashboard tidak punya input tanggal custom (hanya today/trend period) → tidak terkena G-3.
+
+### G.2 — Yang diperiksa & dinyatakan AMAN (hasil verifikasi)
+
+- **Mesin diskon promo** (`discountEngine.ts` + `promoDiscount.ts`): stacking (jumlah) vs eksklusif (auto best-deal: promo saja vs manual+loyalty saja), cap subtotal di semua mode; BOGO (beli N gratis M dari unit termurah, `bogoPercent` diskon sebagian); min-qty gate; usage limit global & per pelanggan (cek dari store saat commit — E7) — terpusat, teruji.
+- **`promoAmount` = `discountCalc.promoApplied`** (nilai TER-APLIKASI/terkapit, `POS.tsx:245/847`) — laporan performa promo tidak overstate (fixed promo > subtotal aman).
+- **Refund flow** (`refund.ts` + `Transactions.tsx:351-395`): `canExecuteRefund` cek ulang dari store + in-flight guard (A4); revert stok via `calculateItemDeductions` (recipeSnapshot); `revertVisit` kunjungan; `addMovement('out', Refund)` akuntabel; `updateTxMeta(refunded)` sync cloud; audit log — solid.
+- **Auto-kirim struk WA** (`POS.tsx:803/915-931`): pre-open window hanya saat fitur aktif + pelanggan punya HP valid; **guard `!result.idempotentReplay`** — replay/double-click tidak kirim struk ganda; hanya transaksi baru.
+- **Dashboard & Reports**: filter konsisten `Selesai && !splitParentId && !refunded`; PPN (`summarizePpn`) & promo report memakai `filteredTx` (exclude refunded) — akurat.
+- **`catch {}`** di `cloudSync`/`usePrinterMonitor`/`OpenShiftModal` semuanya intentional fallback offline — bukan error swallow.
+- **console.log** hanya diagnostik sync/engine (bukan debug leftover).
+- Baseline: **588/588 test hijau** (56 file), tsc 0 error.
+
 ---
 
-*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `develop`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas).*
+*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `develop`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**).*

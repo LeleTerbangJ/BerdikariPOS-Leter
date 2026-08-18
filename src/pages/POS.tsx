@@ -28,6 +28,7 @@ import { checkStockAvailability, type StockWarning } from '../utils/stockCheck';
 import { buildCategoryTabs, reorderTabs } from '../utils/categoryOrder';
 // v4.7 TO DO 12.2.3 (P-A4): satu sumber kebenaran total diskon (stacking vs best-deal promo eksklusif)
 import { calculateDiscountBreakdown } from '../utils/discountEngine';
+import ConfirmDialog from '../components/ConfirmDialog';
 // v4.7 TO DO 12.2.5 (P-A5): satu sumber kebenaran diskon PROMO (percentage/fixed/BOGO + min-qty)
 import { calculatePromoDiscount as calcPromoDiscount } from '../utils/promoDiscount';
 // v4.7 TO DO 12.2.2 (P-A8): poin loyalty — earn (di customerStore.recordVisit) & redeem di POS
@@ -274,12 +275,16 @@ export default function POS() {
   };
 
   // Resume Pending Transaction to Cart
+  // v4.7 TO DO 20.3: window.confirm → ConfirmDialog (konfirmasi saat keranjang tidak kosong)
+  const [resumeConfirmTx, setResumeConfirmTx] = useState<Transaction | null>(null);
   const handleResumePendingOrder = (tx: Transaction) => {
     if (cart.items.length > 0) {
-      if (!window.confirm(`⚠️ Keranjang saat ini berisi ${cart.items.length} item. Kosongkan keranjang & muat pesanan gantung #${tx.queueNumber}?`)) {
-        return;
-      }
+      setResumeConfirmTx(tx);
+      return;
     }
+    applyResumePendingOrder(tx);
+  };
+  const applyResumePendingOrder = (tx: Transaction) => {
     cart.clearCart();
     tx.items.forEach((item) => cart.addItem(item));
     setOrderType(tx.orderType || 'Dine In'); // Restore tipe pesanan (Take Away tidak boleh jadi Dine In)
@@ -2250,6 +2255,19 @@ export default function POS() {
           setCheckoutTxId(uuid());
           setCurrentPendingTx(null);
         }}
+      />
+
+      {/* v4.7 TO DO 20.3: konfirmasi resume pending saat keranjang berisi (bukan window.confirm) */}
+      <ConfirmDialog
+        open={!!resumeConfirmTx}
+        onClose={() => setResumeConfirmTx(null)}
+        onConfirm={() => {
+          if (resumeConfirmTx) applyResumePendingOrder(resumeConfirmTx);
+        }}
+        title="Muat Pesanan Gantung"
+        message={`Keranjang saat ini berisi ${cart.items.length} item. Kosongkan keranjang & muat pesanan gantung #${resumeConfirmTx?.queueNumber ?? ''}?`}
+        confirmText="Ya, Muat"
+        variant="warning"
       />
     </div>
   );

@@ -79,7 +79,8 @@ export default function SettingsPage() {
   const saveTaxSettings = () => {
     const val = parseFloat(taxPercentInput) || 0;
     if (val < 0 || val > 100) {
-      alert('Persentase pajak harus di antara 0% dan 100%');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Persentase pajak harus di antara 0% dan 100%', 'warning');
       return;
     }
     updateSettings({
@@ -95,7 +96,7 @@ export default function SettingsPage() {
         `Update pengaturan pajak: Status=${taxEnabled ? 'Aktif' : 'Nonaktif'}, Persentase=${val}%`
       );
     }
-    alert('Pengaturan pajak berhasil disimpan! 🎉');
+    addToast('Pengaturan pajak berhasil disimpan! 🎉', 'success');
   };
 
   // ============================================================
@@ -172,7 +173,8 @@ export default function SettingsPage() {
       themeColor,
       themeShades: themeShades as any,
     });
-    alert('Tema warna UI berhasil disimpan!');
+    // v4.7 TO DO 20.2: alert → toast
+    addToast('Tema warna UI berhasil disimpan!', 'success');
   };
 
   // Apply local state themeShades instantly to the root for live preview
@@ -233,6 +235,8 @@ export default function SettingsPage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showFactoryConfirm, setShowFactoryConfirm] = useState(false);
+  // v4.7 TO DO 20.3: konfirmasi hapus user via ConfirmDialog (bukan window.confirm)
+  const [deleteUserTarget, setDeleteUserTarget] = useState<User | null>(null);
   // Super Admin access
   const [superAdminUnlocked, setSuperAdminUnlocked] = useState(false);
   const [superPinInput, setSuperPinInput] = useState('');
@@ -249,7 +253,8 @@ export default function SettingsPage() {
     if (!newTableInput.trim()) return;
     const currentTables = settings.availableTableNumbers || [];
     if (currentTables.includes(newTableInput.trim())) {
-      alert('Nomor meja tersebut sudah terdaftar.');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Nomor meja tersebut sudah terdaftar.', 'warning');
       return;
     }
     const updated = [...currentTables, newTableInput.trim()];
@@ -273,7 +278,8 @@ export default function SettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 500 * 1024) {
-      alert('Ukuran file maksimal 500KB');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Ukuran file maksimal 500KB', 'warning');
       return;
     }
     const reader = new FileReader();
@@ -300,7 +306,7 @@ export default function SettingsPage() {
         `Update Pengaturan Toko: Nama=${storeName}, Alamat=${storeAddress}`
       );
     }
-    alert('Pengaturan Toko berhasil disimpan! 🎉');
+    addToast('Pengaturan Toko berhasil disimpan! 🎉', 'success');
   };
 
   const openAddUser = () => {
@@ -325,7 +331,8 @@ export default function SettingsPage() {
     // Check username uniqueness
     const existingUser = users.find(u => u.username === userUsername && u.id !== editUserId);
     if (existingUser) {
-      alert('Username sudah digunakan. Pilih username lain.');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Username sudah digunakan. Pilih username lain.', 'warning');
       return;
     }
 
@@ -790,7 +797,8 @@ export default function SettingsPage() {
               if (pin.length >= 4) {
                 updateSettings({ managerPin: pin });
                 setPin('');
-                alert('PIN Manager berhasil diubah!');
+                // v4.7 TO DO 20.2: alert → toast
+                addToast('PIN Manager berhasil diubah!', 'success');
               }
             }}
             className="btn-primary"
@@ -1549,14 +1557,12 @@ tersalin ke struk digital.
                           // BUG-M7 fix: Check if user has active shift before deleting
                           const hasActiveShift = shifts.some((s) => s.userId === u.id && s.status === 'open');
                           if (hasActiveShift) {
-                            alert(`⚠️ User "${u.name}" masih memiliki shift aktif. Tutup shift terlebih dahulu.`);
+                            // v4.7 TO DO 20.2: alert → toast
+                            addToast(`⚠️ User "${u.name}" masih memiliki shift aktif. Tutup shift terlebih dahulu.`, 'warning');
                             return;
                           }
-                          if (!window.confirm(`Hapus user "${u.name}"? Tindakan ini tidak bisa dibatalkan.`)) return;
-                          deleteUser(u.id);
-                          if (currentUser) {
-                            addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_user', `Hapus user: ${u.name}`, { userId: u.id });
-                          }
+                          // v4.7 TO DO 20.3: window.confirm → ConfirmDialog
+                          setDeleteUserTarget(u);
                         }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
                           <Trash2 size={14} />
                         </button>
@@ -1709,7 +1715,8 @@ tersalin ke struk digital.
                     if (newSuperPin.length >= 4) {
                       updateSettings({ superAdminPin: newSuperPin });
                       setNewSuperPin('');
-                      alert('Super Admin PIN berhasil diubah!');
+                      // v4.7 TO DO 20.2: alert → toast
+                      addToast('Super Admin PIN berhasil diubah!', 'success');
                     }
                   }}
                   disabled={newSuperPin.length < 4}
@@ -1791,6 +1798,23 @@ tersalin ke struk digital.
         confirmText="HAPUS SEMUA"
         variant="danger"
         requireKeyword="HAPUS SEMUA"
+      />
+
+      {/* v4.7 TO DO 20.3: konfirmasi hapus user (bukan window.confirm) */}
+      <ConfirmDialog
+        open={!!deleteUserTarget}
+        onClose={() => setDeleteUserTarget(null)}
+        onConfirm={() => {
+          if (deleteUserTarget) {
+            deleteUser(deleteUserTarget.id);
+            if (currentUser) {
+              addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_user', `Hapus user: ${deleteUserTarget.name}`, { userId: deleteUserTarget.id });
+            }
+          }
+        }}
+        title="Hapus User"
+        message={`Hapus user "${deleteUserTarget?.name ?? ''}"? Tindakan ini tidak bisa dibatalkan.`}
+        confirmText="Ya, Hapus"
       />
       </div>
       )}

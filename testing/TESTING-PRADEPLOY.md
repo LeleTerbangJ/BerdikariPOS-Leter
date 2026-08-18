@@ -1,6 +1,6 @@
 # 🧪 Panduan Tes Manual — Verifikasi Pra-Deploy v4.7
 
-Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DEPLOYMENT.md`): migrasi SQL butir 8–11, bucket Auto Backup, sinkronisasi 2 device, dan alur offline. Ikuti urutan A → B → C → D → E (≈ 30–45 menit).
+Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DEPLOYMENT.md`): migrasi SQL butir 8–11, bucket Auto Backup, sinkronisasi 2 device, alur offline, dan fitur audit eksisting (Prioritas 20 — ringkasan shift akurat pasca-refund + tanpa dialog browser native). Ikuti urutan A → B → C → D → E → F (≈ 35–50 menit).
 
 ## 0. Persiapan
 
@@ -103,6 +103,36 @@ Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DE
 
 ---
 
+## F. Uji Fitur Prioritas 20 — Ringkasan Shift Akurat & Dialog Seragam
+
+> Memverifikasi perbaikan audit fitur eksisting (v4.7, Prioritas 20.1–20.3): ringkasan tutup shift tidak overstated saat refund, dan **tidak ada dialog browser native** (`alert`/`confirm`) — semua notifikasi toast & semua konfirmasi dialog kustom.
+
+**F-1. Ringkasan shift akurat pasca-refund (20.1)** — kasir + manager:
+
+1. Buka shift (kas awal 100.000) → buat **1 penjualan tunai 50.000** (Selesai) → buat **1 penjualan QRIS 30.000** (Selesai).
+2. Dari halaman Transaksi, **refund** transaksi tunai 50.000 (Kas Keluar 'Refund' tercatat di Rekap Kas).
+3. Buka modal **Tutup Shift**.
+   - **Hasil yang diharapkan**: ✅ **Total Penjualan = 30.000** & **Jumlah Transaksi = 1** (transaksi yang di-refund TIDAK dihitung — konsisten dengan Dashboard/Laporan); **Expected Cash = 100.000** (laci terima 50k lalu keluar 50k refund → net 0); baris **"↩️ Refund Tunai (Dikembalikan): -50.000"** tampil (oranye).
+4. **Uji refund sale QRIS dari laci**: buat penjualan QRIS 20.000 → refund → buka modal Tutup Shift.
+   - **Hasil yang diharapkan**: ✅ Expected Cash berkurang 20.000 (uang benar-benar keluar laci untuk refund) — tidak ada penambahan ganda.
+5. **Hasil akhir F-1**: ✅ Angka Total Penjualan/Jumlah Transaksi bersih dari refund; expected cash konsisten dengan pergerakan laci.
+
+**F-2. Tidak ada dialog browser native (20.2 + 20.3)** — cek kilat di beberapa halaman:
+
+1. **Validasi → toast**: Settings → Pajak isi persentase **150** → Simpan.
+   - **Hasil yang diharapkan**: ✅ Muncul **toast** (bukan popup `alert`) "Persentase pajak harus di antara 0% dan 100%".
+2. **Rekap Kas**: coba simpan Kas Masuk dengan nominal **0**.
+   - **Hasil yang diharapkan**: ✅ **Toast** "Nominal harus lebih dari 0" (bukan `alert`).
+3. **Void pending**: POS → Simpan Gantung → buka Pending Payments → klik void salah satu.
+   - **Hasil yang diharapkan**: ✅ Muncul **dialog kustom** "Batalkan Transaksi Gantung" (modal + tombol Batal/Ya, bukan `window.confirm`).
+4. **Hapus user**: Settings → Pengguna → klik ikon hapus user.
+   - **Hasil yang diharapkan**: ✅ Muncul **dialog kustom** "Hapus User" (bukan `window.confirm`).
+5. **Tutup shift selisih > 10%**: isi Kas Aktual jauh berbeda dari expected → Tutup Shift.
+   - **Hasil yang diharapkan**: ✅ Muncul **dialog kustom** "Selisih Kas Besar" dengan tombol "Ya, Tutup Shift" (bukan `window.confirm`).
+6. **Hasil akhir F-2**: ✅ Selama uji, **tidak ada popup browser native** — semua notifikasi toast & semua konfirmasi dialog kustom.
+
+---
+
 ## Ringkasan Hasil
 
 | Tahap | Area | Status |
@@ -112,5 +142,6 @@ Checklist ini memverifikasi kesiapan **sebelum serah terima ke klien** (dari `DE
 | C | Sync 2 device (pesanan, stok, promo, Rekap Kas) | ☐ |
 | D | Uji offline (badge Belum Sync → sync otomatis) | ☐ |
 | E | Final checks (password, env, backup DB) | ☐ |
+| F | Uji Prioritas 20 (ringkasan shift akurat + tanpa dialog browser native) | ☐ |
 
 > Jika semua tahap ☐ ✅, aplikasi **siap serah terima**. Jika ada yang gagal, catat langkah yang gagal + pesan error, lalu laporkan ke tim pengembangan (detail teknis di `DEPLOYMENT.md` & `AI-HANDOFF.md`).

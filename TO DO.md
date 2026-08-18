@@ -1193,6 +1193,112 @@
 - **E7 (🟢/🟠)** Promo usage & loyalty race lintas kasir.
   - ✅ **SELESAI (v4.7 TO DO 18.8/E7)**: **`reservePromoUsage(id, customerId, usageKey)`** — cek batas (global & per pelanggan) dari **STORE saat commit** + increment **atomik** (functional set) + **ledger `usageKeys` id unik transaksi** (replay idempoten tidak double-increment); **replay guard efek samping** di POS finalize (`recordVisit`/`deductLoyaltyPoints`/usage hanya jalan bila `!idempotentReplay` — fix kunjungan ganda & poin terpotong 2× saat double-click); **merge ledger UNION lintas device** di `loadFromCloud`; POS & SplitBillModal pakai `reservePromoUsage(subTx.id)` + toast bila batas tercapai. Residual: 2 device offline hampir bersamaan tetap bisa lolos (LWW) — RPC counter opsional (pola 18.2). +8 test (`promoStoreUsage.test.ts`).
 
+## 🔵 PRIORITAS 19 — MULTI OUTLET / CABANG (Analisa kesiapan, v4.7 — BELUM DI-EKSEKUSI)
+
+> **Sumber analisa**: `ANALYSE.md` Bagian F. Fitur ini **belum ada di project** — seluruh aplikasi berjalan single outlet implisit `'default'` (tabel global tanpa `outlet_id`, RLS "Allow all for anon", settings satu baris, user tanpa cabang). Dikerjakan **bertahap**: Fase 1 (fondasi data) → Fase 2 (aplikasi/sync) → Fase 3 (nilai enterprise). Sebelum mulai, ambil **keputusan produk F.1** (model master data: independen vs pusat→cabang vs hibrida — rekomendasi: **independen** untuk MVP).
+
+### 🎯 Keputusan produk yang harus diambil dulu (F.1)
+
+- [ ] **F.1a** Model master data: independen per cabang / pusat→cabang / hibrida.
+- [ ] **F.1b** Akses user: 1 cabang (Kasir/Staf Gudang) vs lintas cabang (Manager/Owner); tambah role **Owner** (saat ini hanya Manager/Kasir/Acaraki/Staf Gudang).
+- [ ] **F.1c** Identitas outlet: id + nama + alamat + **settings per outlet** (nama toko struk, alamat, footer, pajak, kategori, printer — tiap cabang beda hardware & pajak).
+- [ ] **F.1d** Nomor antrean: restart harian per cabang (perilaku sekarang, tinggal plumb `outlet_id` asli).
+- [ ] **F.1e** Loyalty/promo lintas cabang: shared (pelanggan sama) vs per cabang.
+
+### 🔴 Fase 1 — Fondasi Data (migrasi, satu arah)
+
+- [ ] **19.1 (KRITIS)** Kolom `outlet_id` di SEMUA tabel bisnis (`transactions`, `inventory`, `menus`, `menu_components`, `customers`, `promos`, `shifts`, `stock_logs`, `stock_opnames`, `cash_movements`, `audit_logs`) + **backfill idempoten** ke `'default'` (outlet pertama) — pola Migration 27–30 (probe + ALTER/UPDATE + console warning).
+- [ ] **19.2 (TINGGI)** `settings` jadi per-outlet (row per `outlet_id` / ganti PK `id=1`) + migrasi nilai row 1 → outlet `'default'`.
+- [ ] **19.3 (TINGGI)** `users.outlet_id` (atau `users_outlets` untuk multi-assignment) + tambah role `Owner` pada CHECK constraint.
+- [ ] **19.4 (KRITIS)** **RLS per-outlet** menggantikan "Allow all for anon": helper `current_outlet_id()` (JWT claim / header) + policy `USING (outlet_id = current_outlet_id())` per tabel (termasuk `settings`, `queue_counters`, `stock_logs`, `audit_logs`). ⚠️ Titik paling sensitif: salah policy = bocor data cabang lain ATAU data hilang dari pandangan (device lama harus tetap jalan — ship setelah semua store konsisten mengirim `outlet_id`).
+
+### 🟠 Fase 2 — Aplikasi & Sync
+
+- [ ] **19.5 (TINGGI)** `currentOutlet` di auth store: pilih cabang saat login + **switch outlet** untuk Manager/Owner + guard halaman per cabang.
+- [ ] **19.6 (KRITIS)** Scope sync per outlet: semua `fetch*FromCloud` + realtime (`outlet_id=eq.<id>`) + offline queue payload membawa `outlet_id` + `loadFromCloud` filter; tombstone & freshness compare (`updatedAt`) per outlet.
+- [ ] **19.7 (TINGGI)** `allocateQueueNumberCloud` kirim `outlet_id` asli (hapus hardcode `'default'` di `src/lib/cloudSync.ts:737`); guard shift 1-per-outlet pakai id asli; engine stamp `Transaction.outletId` (placeholder sudah ada di tipe).
+- [ ] **19.8 (TINGGI)** Laporan (Penjualan/PPN/Promo/Refund/Shift/Kas) & Dashboard **filter per outlet**; struk termal & digital pakai `store_name`/alamat per cabang; label nama cabang di header.
+- [ ] **19.9 (SEDANG)** Halaman Settings: pilih cabang yang dikonfigurasi (Manager) — pajak, kategori, printer, tabel, struk per cabang.
+- [ ] **19.10 (SEDANG)** Backup/Restore: manifest menyimpan `outlet_id`; **restore per cabang** (tidak menimpa cabang lain); auto backup per cabang.
+
+### 🟡 Fase 3 — Nilai Enterprise (setelah Fase 1–2 stabil)
+
+- [ ] **19.11** Transfer stok antar cabang (stock transfer + log khusus).
+- [ ] **19.12** Laporan konsolidasi multi-cabang untuk Owner (gabungan vs per cabang).
+- [ ] **19.13** Master data push pusat→cabang — **desain rekomendasi di `ANALYSE.md` F.5** (id master data **deterministik dari pusat**, definisi bahan shared + `stock` lokal, **Opsi A read-only catalog** di cabang → konflik nol by construction):
+  - [ ] **19.13a** Kolom `source` + `updated_at` di `menus`/`menu_components` (+ `source` di `inventory`); `menus.updated_at` & `menu_components.updated_at` belum ada (pola A5/Migration 29).
+  - [ ] **19.13b** **Watermark pull** saat reconnect cabang: `fetch ... WHERE updated_at > last_catalog_sync` + merge LWW; toast "Katalog diperbarui dari pusat (N menu)"; realtime + filter `outlet_id`.
+  - [ ] **19.13c** Guard UI read-only di cabang (Opsi A): field master (nama/harga/resep/bahan) disabled + label "Dikelola pusat"; hanya `stock`/`min_stock`/`is_available` yang lokal.
+  - [ ] **19.13d** Soft-disable menu (is_available=false + tombstone O-8) — JANGAN `DELETE` (CASCADE `menu_components` merusak resep); bulk push via RPC `push_catalog_batch` / pull-based untuk skala besar.
+  - [ ] **19.13e** (Lanjutan, bila cabang butuh harga/menu beda) **Opsi B override per-field**: `source`/`branch_override` + merge rule (cabang menang bila lebih baru & di-flag, pusat menang selain itu) + UI deteksi/resolusi konflik.
+  - [ ] **19.13f** Keputusan `cost_per_unit`: di-push (HPP sama) vs per cabang (rekomendasi: **per cabang** — biaya bahan beda per daerah).
+  - [ ] **19.13g** Skema id deterministik — **desain di `ANALYSE.md` F.6**: UUID v5 (`v5(NAMESPACE_tipe, key)`, paket `uuid` sudah ada) — id **immutable**, `key` = identitas dedupe (SKU prioritas / slug fallback); kreasi offline di cabang menghasilkan id SAMA dengan pusat → tanpa duplikat; referensi `menu_components.child_id`/`ingredients` stabil lintas cabang offline.
+  - [ ] **19.13h** Adopsi item legacy (key sama, id beda) — **desain lengkap di `ANALYSE.md` F.7**:
+  - [ ] **19.13h1** Tabel **`item_identity`** (item_id PK, key, kind menu/inventory, canonical_id NULL=kanonik, outlet_id, adopted_at; unique (key,kind); invariant: canonical satu arah TANPA rantai) + `resolveRef(refId)=COALESCE(canonical_id,item_id)` untuk lookup histori/sesi lama.
+  - [ ] **19.13h2** **Rewrite aktif terkontrol** (BUKAN rewrite historis): kunci `menus.ingredients` & `AddOn.ingredients` A→B + `menu_components.child_id` A→B (urut child→parent untuk bundle); **guard**: tolak saat cart/split reserve **/ opname aktif** memakai item (eksekusi di luar jam operasional + backup dulu — reuse backupService). **Aturan gabung stok di `ANALYSE.md` F.8** (stok PER CABANG — tidak ada gabung lintas cabang; hanya dalam satu cabang):
+  - [ ] **19.13h2a** **Klasifikasi gabung**: otomatis bila `B.stock=0` atau `A.stock=0` (tidak konflik); **manual** (dialog per item: gabung / pindah nominal / jadikan item terpisah-tidak di-adopt) bila **keduanya > 0** (potensi key-collision palsu) atau stok A negatif/aneh.
+  - [ ] **19.13h2b** Tulis stok gabungan via **RPC delta** `adjust_inventory_stock(B, +A.stock)` (bukan set absolut — anti double-count saat 2 device cabang sama adopsi bersamaan, pola 18.1).
+  - [ ] **19.13h2c** **Riwayat stock log A dibiarkan utuh** + entry adopsi di kedua sisi (B: `type:'add'` amount +A.stock reason "Adopsi katalog pusat: gabung stok dari {A}"; A: `type:'adjust'` stockAfter 0 "Di-adopsi ke {B}"); UI riwayat B via resolve-at-read sertakan log A dengan label "sebelum adopsi" (atau cukup entry adopsi — keputusan UX).
+  - [ ] **19.13h2d** **Dampak opname**: guard tolak adopsi saat opname AKTIF (systemStock A menjadi −5 palsu bila adopsi di tengah opname — laporan loss bingung); opname historis & lossValue (costPerUnit tersimpan) TIDAK berubah.
+  - [ ] **19.13h2e** **Dialog gabung manual** — **spesifikasi lengkap di `ANALYSE.md` F.9**: list per item (bukan wizard) + 3 opsi radio (Gabung stok default / Pindah sebagian dengan input nominal X → A tetap hidup ber-key baru `{slug}-lokal` / Jadikan terpisah → A tidak di-adopt + key baru); role-gate Manager/Owner (PIN 10.2); guard disabled saat opname/cart/split reserve aktif; backup otomatis (backupService) + idempoten via item_identity + in-flight guard (pola A4); toast ringkasan per aksi; tanpa undo (restore via backup).
+  - [ ] **19.13h2f** **Pratinjau dampak live**: stok sebelum→sesudah per opsi; jumlah menu terdampak (rewrite refs); **dampak HPP** (cost A ≠ B → delta Rp per menu via `hpp.ts:17`/`calculateBundleHPP`, menu manualHpp dicatat tidak terpengaruh); **banner amber key-collision** bila cost selisih >10% / nama beda / stok A > 2× B / A punya riwayat penjualan — tombol "Periksa manual" (buka form edit berdampingan), item flagged tercatat di audit log; helper murni `previewAdoption(item, option, x)` untuk unit test.
+  - [ ] **19.13h2g** **Alur batch otomatis** — **desain di `ANALYSE.md` F.10**: pre-flight guard + backup otomatis (simpan `backupId`) + rencana batch disimpan sebelum eksekusi; eksekusi berurutan per item (idempoten via item_identity); kegagalan per item tidak membatalkan batch (best-effort, retry idempoten); **verifikasi pasca-batch** (item_identity == dieksekusi, stok B == awal+Σdelta, scan sisa refs aktif menunjuk A → warning).
+  - [ ] **19.13h2h** **Toast ringkasan & audit log** — toast via `toastStore` (sukses hijau/sebagian amber/gagal merah + tombol "Lihat Audit"; ringkasan selalu menyebut jumlah per aksi); **action baru `'catalog_adopt'`** di `AuditAction` + filter dropdown Audit Log (`AuditLog.tsx:53`); **1 entry batch** (metadata: outletId, mode, backupId, counts, verified, remainingRefs, items[] A→B/opsi/delta) + **1 entry per-item hanya untuk flagged/gagal** (mudah dicari); audit tersync ke cloud (`syncAuditLog`) → terlihat lintas device; opsional blok "Riwayat Adopsi Terakhir" di Settings.
+  - [ ] **19.13h3** **Tombstone A** (`is_available=false` + deletedLocalIds O-8) — JANGAN DELETE (histori & refs lama tetap valid); snapshot transaksi/log/opname lama dibiarkan (nama tersimpan → laporan normal, lookup by-id via resolveRef).
+  - [ ] **19.13h4** Sesi lama (`splitStockSession`/keranjang pra-adopsi) di-reconcile via resolve-at-read; pusat menulis `item_identity` saat adopsi → cabang terima via realtime/watermark (resolve konsisten lintas device).
+  - [ ] **19.13h5** Item murni lokal (tidak ada di pusat) **tidak di-adopt** — tidak disentuh; estimasi ~4–5 file + ~10 test (invariant rantai, resolve, rewrite menu/bundle, guard sesi aktif, gabung stok).
+  - [ ] Pelanggan & loyalty lintas cabang (bila shared) — putuskan di F.1e.
+- [ ] **19.14** Permission granular per outlet per role (Kasir cabang A tidak melihat cabang B).
+
+### ✅ Yang SUDAH siap memudahkan (F.3)
+
+- `queue_counters.outlet_id` + RPC `allocate_queue_number(p_outlet)` — fondasi antrean per cabang **sudah ada**.
+- Konsep "1 shift aktif per outlet" & `computeShiftStats` (18.3) — tinggal plumb id outlet.
+- `Transaction.outletId` placeholder — tinggal diisi engine.
+- Offline queue, tombstone, freshness compare, RPC atomik, backup manifest — semua bisa di-scope per outlet tanpa mengubah mekanisme.
+
+### ⚠️ Risiko & catatan (F.4)
+
+- **RLS per-outlet** paling sensitif (lihat 19.4).
+- **Satu device = satu outlet aktif** (tanpa multi-tab cabang) — keputusan: logout/login untuk pindah cabang.
+- Realtime per cabang via filter (bukan global) — hemat bandwidth & privasi.
+- KDS/dapur: tiket hanya keluar di printer cabang yang sama.
+- Estimasi dampak: ~25–35 file (types, schema, cloudSync, auth, semua store filter, layout/login, settings, laporan, backup) + ~15–20 test baru — kerjakan bertahap dengan satu migration besar di awal.
+
+---
+
+## 🔴 PRIORITAS 20 — AUDIT FITUR EKSISTING PASCA-PRIORITAS 18 (Analisa, v4.7)
+
+> **Sumber audit**: audit menyeluruh fitur yang sudah ada (baseline 588/588 test hijau). Detail lengkap: `ANALYSE.md` Bagian G.
+
+### Temuan
+
+- [x] **20.1 (🟠 SEDANG) — `computeShiftStats` tidak mengecualikan transaksi refunded** (`src/utils/shiftStats.ts:46-51`): `shiftTx` menyertakan `t.refunded` → **Total Penjualan & Total Transaksi di ringkasan tutup shift overstated** saat ada refund (Dashboard/Reports/Transactions sudah exclude `!refunded` — inkonsisten).
+  - ✅ **SELESAI (v4.7 TO DO 20.1)**: `salesTx = shiftTx.filter(t => !t.refunded)` menjadi basis laporan (`totalSales`/`totalTx`/`cashSales`/`qrisSales`/`transferSales`); field baru **`refundedCashSales`** (sale tunai yang di-refund dalam window) di-**add-back** ke formula expected cash → netting tetap netral (sale refunded + movement 'out' Refund saling meniadakan; meng-exclude dari cashSales TANPA add-back akan double-subtract → `opening − refund`). UI: baris **"Refund Tunai (Dikembalikan)"** ditampilkan di modal tutup shift & struk ringkasan bila > 0 (Layout.tsx) agar angka bersih bisa dijelaskan.
+  - **Residual terdokumentasi**: kasus silang metode pembayaran (sale tunai di-refund via QRIS → movement 'out' tetap dicatat padahal uang tidak keluar laci → expectedCash understated; hasil identik dengan perilaku lama — TIDAK regresi). Fix penuh butuh field **metode refund** (`refundMethod`) di transaksi + movement (enhancement, bukan bug aktif).
+  - **Test (+5)** di `shiftStats.test.ts`: refund tunai → totalSales/totalTx bersih & expectedCash net 0 (`opening`); campuran sale aktif + refunded; refund sale QRIS dari laci → expectedCash `opening − refund`; lintas metode → tidak regresi; refunded tanpa movement → tidak double-count. Test **593/593** (56 file).
+
+- [x] **20.2 (🟢 MINOR/UX) — `alert()` tersisa di halaman non-printer** (~15 titik): `AuditLog.tsx:68/70`, `CashMovements.tsx:158/243`, `Catalog.tsx:537/599`, `SettingsPage.tsx:82/98/175/252/276/303/328/793`, `App.tsx:190` — inkonsisten dengan konvensi toast (Prioritas 14.6 baru menyentuh alur printer). Migrasi `alert()` → `useToastStore().addToast` di halaman-halaman tersebut.
+  - ✅ **SELESAI (v4.7 TO DO 20.2)**: **21 `alert()` → toast** (5 file target + **4 temuan tambahan** yang terpotong scan awal): `App.tsx` (warning, via `useToastStore.getState()` di callback subscription), `AuditLog.tsx` (success/warning clear logs), `CashMovements.tsx` (warning nominal ≤ 0 ×2), `Catalog.tsx` (error foto / warning komponen), `SettingsPage.tsx` (10 titik: warning validasi pajak/meja/file/username/shift aktif + success simpan/tema/PIN), **`StockOpname.tsx`** (warning isi item/alasan + success simpan), **`authStore.ts`** (warning session takeover, via getState). `window.confirm` sengaja dipertahankan (bukan target). Kode produksi **0 `alert()` tersisa**. Test **593/593** (56 file).
+
+- [x] **20.3 (🟢 MINOR/UX) — `window.confirm` tersisa (4 titik) → ConfirmDialog** (audit lanjutan konfirmasi UX): `Layout.tsx:826` (tutup shift selisih kas > 10%), `PendingPaymentsModal.tsx:88` (void pending), `POS.tsx:279` (resume pending saat keranjang berisi), `SettingsPage.tsx:1562` (hapus user).
+  - ✅ **SELESAI (v4.7 TO DO 20.3)**: semua diganti **ConfirmDialog** (komponen kustom dengan Modal + ikon + tombol Batal/Ya) — UX konfirmasi seragam di seluruh aplikasi. `Layout` reuse pola `confirmState` yang sudah ada; `PendingPaymentsModal`/`POS`/`SettingsPage` tambah state target + render ConfirmDialog. Perilaku sama (batal = tidak ada aksi; ya = aksi lama); label & pesan dipertahankan. **Kode produksi 0 `window.confirm` & 0 `alert()` tersisa.** Test **593/593** (56 file).
+
+- [x] **20.4 (🟠 SEDANG) — Filter tanggal CUSTOM di Laporan & Riwayat Transaksi memakai UTC untuk tanggal AWAL** (audit agregasi Laporan/Dashboard): `new Date(customDateFrom)` dengan format `"YYYY-MM-DD"` (tanpa `T`) di-parse sebagai **UTC tengah malam = 07:00 WIB** → transaksi **00:00–07:00** pada tanggal awal **tidak masuk** range custom; sementara `new Date(customDateTo + 'T23:59:59')` di-parse **lokal** → inkonsisten.
+  - **Titik**: `Reports.tsx:101` (`filteredTx`), `Reports.tsx:139` (`dateFrom` untuk tab opname/movement), `Transactions.tsx:153`.
+  - **Kelas bug sama dengan fix 18.3** (pagi buta — `toLocalDateKey` di queueNumber/transactionStore/cloudSync) **tapi Reports/Transactions filter custom terlewat** — dampak nyata untuk outlet buka 24 jam/pagi buta: laporan custom tanggal awal kehilangan transaksi dini hari.
+  - ✅ **SELESAI (v4.7 TO DO 20.4)**: tambah helper murni **`buildCustomDateRange(fromStr, toStr)`** di `src/utils/format.ts` — parse **lokal** `from = 'T00:00:00'`, `to = 'T23:59:59.999'` (fallback epoch/now); dipakai di 3 titik (Reports `filteredTx` + `dateFrom` opname/movement, Transactions filter custom). Test **`dateRange.test.ts` (+5)**: start = lokal midnight di zona waktu mana pun, transaksi **03:00 lokal tanggal awal MASUK range** (regresi utama G-3), transaksi 23:59:59.500 hari akhir masuk, sebelum/ sesudah ter-exclude, fallback kosong. Validasi: `tsc` 0 error, **598/598** (57 file).
+
+### ✅ Yang diperiksa & dinyatakan AMAN (jangan diubah)
+
+- **Mesin diskon promo** (`discountEngine.ts` + `promoDiscount.ts`): stacking vs eksklusif auto best-deal, cap subtotal di semua mode, BOGO gratis dari unit termurah — terpusat & teruji.
+- **`promoAmount` yang direkam di transaksi memakai nilai TER-APLIKASI (capped)** (`discountCalc.promoApplied`) — laporan performa promo akurat (fixed promo > subtotal tidak overstate).
+- **Refund flow** (`refund.ts` + `Transactions.tsx`): guard anti double-refund A4, revert stok via `calculateItemDeductions`, revert kunjungan, Kas Keluar 'Refund', sync `refunded` ke cloud, audit log — solid.
+- **Auto-kirim struk WA** (`POS.tsx:803-923`): guard `!result.idempotentReplay` (tidak kirim ganda), pre-open window popup blocker, hanya transaksi baru; tanpa pelanggan/HP tidak pre-open.
+- **Dashboard & Reports** filter konsisten `txStatus==='Selesai' && !splitParentId && !refunded`; laporan PPN & promo memakai `filteredTx` yang sudah exclude refunded.
+- **`catch {}`** di cloudSync/printer/shift semuanya intentional fallback (offline) — bukan swallow error.
+- **Baseline**: `npx vitest run` → **588/588 test hijau** (56 file), tsc 0 error.
+
 ---
 
 ## ✅ YANG SUDAH BENAR (jangan diubah)
