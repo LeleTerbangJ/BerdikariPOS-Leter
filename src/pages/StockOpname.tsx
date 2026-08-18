@@ -6,6 +6,7 @@ import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useAuthStore } from '../store/authStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useAuditLogStore } from '../store/auditLogStore';
+import { useToastStore } from '../store/toastStore';
 import { formatRupiah, formatDate } from '../utils/format';
 import {
   findDriftedOpnameItems,
@@ -36,6 +37,7 @@ interface OpnameRow {
 }
 
 export default function StockOpname() {
+  const { addToast } = useToastStore();
   const { items: inventory, applyBulkStock } = useInventoryStore();
   const { addLog: addStockLog } = useStockLogStore();
   const { records, addRecord } = useStockOpnameStore();
@@ -134,13 +136,15 @@ export default function StockOpname() {
   };
 
   const handleSubmitAttempt = () => {
-    if (filledCount === 0) return alert('Mohon isi setidaknya 1 item stok aktual.');
+    // v4.7 TO DO 20.2: alert → toast
+    if (filledCount === 0) return addToast('Mohon isi setidaknya 1 item stok aktual.', 'warning');
     
     // Only require reasons for differences if the user is NOT Staf Gudang (blind opname mode)
     if (!isWarehouseStaff) {
       const missingReason = opnameItems.filter((i) => i.difference !== 0 && (!i.reason || i.reason === '-'));
       if (missingReason.length > 0) {
-        return alert(`${missingReason.length} item dengan selisih belum diisi alasannya.`);
+        // v4.7 TO DO 20.2: alert → toast
+        return addToast(`${missingReason.length} item dengan selisih belum diisi alasannya.`, 'warning');
       }
     }
 
@@ -211,7 +215,8 @@ export default function StockOpname() {
     })));
     setNotes('');
     setView('history');
-    alert('✅ Stock Opname berhasil disimpan dan stok telah diperbarui.');
+    // v4.7 TO DO 20.2: alert → toast
+    addToast('✅ Stock Opname berhasil disimpan dan stok telah diperbarui.', 'success');
   };
 
   return (

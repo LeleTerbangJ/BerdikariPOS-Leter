@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAuditLogStore } from '../store/auditLogStore';
+import { useToastStore } from '../store/toastStore';
 import { formatDate } from '../utils/format';
 import { Search, Shield, Download, Trash2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -48,6 +49,7 @@ const actionColors: Record<string, string> = {
 };
 
 export default function AuditLog() {
+  const { addToast } = useToastStore();
   const { logs, clearOldLogs, clearAllLogs } = useAuditLogStore();
   const [search, setSearch] = useState('');
   const [filterAction, setFilterAction] = useState('all');
@@ -65,9 +67,10 @@ export default function AuditLog() {
     setShowPinModal(false);
     const ok = await clearAllLogs();
     if (ok) {
-      alert('✅ Semua log audit berhasil dihapus dari lokal dan cloud.');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('✅ Semua log audit berhasil dihapus dari lokal dan cloud.', 'success');
     } else {
-      alert('⚠️ Log audit terhapus lokal, namun gagal menyinkronkan penghapusan ke cloud.');
+      addToast('⚠️ Log audit terhapus lokal, namun gagal menyinkronkan penghapusan ke cloud.', 'warning');
     }
     setPage(1);
   };

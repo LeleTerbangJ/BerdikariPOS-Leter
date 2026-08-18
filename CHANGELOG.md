@@ -224,8 +224,10 @@ END $$;
 - **Nomor antrean di pagi buta (00:00–07:00 WIB) tidak lagi salah hitung** — perbandingan tanggal memakai **tanggal lokal** (bukan prefix UTC) di floor nomor antrean, deteksi duplikat, dan range query cloud — transaksi pagi-pagi tidak terlewat (nomor antrean tidak menabrak #N yang sudah ada).
 - **Replay/double-click transaksi tidak lagi menggandakan efek samping** — kunjungan pelanggan, pemakaian promo, dan penukaran poin loyalty hanya dijalankan sekali per transaksi (idempotent replay dilewati).
 - **Alert stok negatif lebih akurat** — revert kecil yang tidak memperbaiki item negatif tidak lagi menghapus peringatan yang masih relevan.
-
-### ⚙️ Langkah yang Wajib Dijalankan (Database Lama)
+- **Ringkasan tutup shift tidak lagi overstated saat ada refund (Prioritas 20.1)** — Total Penjualan & Total Transaksi mengecualikan transaksi yang sudah di-refund (konsisten dengan Dashboard/Laporan/Riwayat); expected cash tetap akurat (penjualan tunai yang di-refund dinetralkan dengan Kas Keluar Refund — tidak ada double-subtract), dengan baris **"Refund Tunai (Dikembalikan)"** di modal & struk ringkasan shift.
+- **Semua notifikasi `alert()` diganti toast (Prioritas 20.2)** — 21 titik di App, Audit Log, Rekap Kas, Katalog, Settings, Stock Opname & auth (session takeover) kini memakai `addToast` yang konsisten (sukses/warning/error).
+- **Semua konfirmasi memakai dialog kustom (Prioritas 20.3)** — 4 `window.confirm` terakhir (tutup shift selisih kas > 10%, void transaksi gantung, resume pending saat keranjang berisi, hapus user) diganti **ConfirmDialog** (modal + ikon + tombol Batal/Ya) agar UX konfirmasi seragam; **tidak ada dialog browser native (`alert`/`confirm`) tersisa di kode produksi**.
+- **Filter tanggal custom Laporan & Riwayat Transaksi tidak lagi melewatkan transaksi pagi buta (Prioritas 20.4)** — `new Date('YYYY-MM-DD')` (tanpa `T`) di-parse sebagai UTC tengah malam (= 07:00 WIB), sehingga transaksi 00:00–07:00 pada tanggal awal tidak masuk range custom; kini helper `buildCustomDateRange` mem-parse **lokal** (`'T00:00:00'` s.d. `'T23:59:59.999'`) di 3 titik (filter transaksi Reports, range opname/movement Reports, filter Riwayat Transaksi) — konsisten dengan fix tanggal lokal lainnya (18.3).
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` v4.7 — selesai, tidak perlu SQL tambahan.
 
@@ -341,7 +343,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **588/588 test lolos** (56 file — Prioritas 18: +128 test dari 460)
+- `npx vitest run` → **598/598 test lolos** (57 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test** — `shiftStats` refund tunai/lintas metode +5, `dateRange` filter tanggal custom lokal +5)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---

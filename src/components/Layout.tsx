@@ -293,6 +293,9 @@ export default function Layout() {
       `Jumlah Transaksi: ${shiftStats.totalTx}`,
       `Kas Masuk: +${formatRupiah(shiftStats.cashIn || 0)}`,
       `Kas Keluar: -${formatRupiah(shiftStats.cashOut || 0)}`,
+      ...(shiftStats.refundedCashSales > 0
+        ? [`Refund Tunai (dikembalikan): -${formatRupiah(shiftStats.refundedCashSales)}`]
+        : []),
       ``,
       `Expected Cash: ${formatRupiah(shiftStats.expectedCash)}`,
       `(Modal Awal + Tunai + Kas Masuk - Kas Keluar)`,
@@ -758,6 +761,19 @@ export default function Layout() {
                 </span>
               </div>
 
+              {/* v4.7 TO DO 20.1: penjualan tunai yang di-refund — ditampilkan agar angka
+                  totalSales/cashSales (bersih dari refund) tetap bisa dijelaskan ke kasir. */}
+              {shiftStats.refundedCashSales > 0 && (
+                <div className="flex justify-between items-center bg-orange-50 dark:bg-orange-950/30 px-2.5 py-1.5 rounded-lg border border-orange-200/50 dark:border-orange-900/30">
+                  <span className="text-orange-700 dark:text-orange-300 font-medium text-xs">
+                    ↩️ Refund Tunai (Dikembalikan)
+                  </span>
+                  <span className="font-bold text-orange-700 dark:text-orange-300">
+                    -{formatRupiah(shiftStats.refundedCashSales)}
+                  </span>
+                </div>
+              )}
+
               <div className="flex justify-between">
                 <span className="text-blue-700 dark:text-blue-300">Jumlah Transaksi</span>
                 <span className="font-medium text-slate-900 dark:text-slate-100">{shiftStats.totalTx}</span>
@@ -805,11 +821,15 @@ export default function Layout() {
               const closingCash = parseInt(closingCashInput) || 0;
               const diff = Math.abs(closingCash - shiftStats.expectedCash);
               const threshold = shiftStats.expectedCash * 0.1; // 10%
-              // BUG-08: Confirm if difference > 10% of expected
+              // BUG-08: Confirm if difference > 10% of expected — v4.7 TO DO 20.3: window.confirm → ConfirmDialog
               if (diff > threshold && shiftStats.expectedCash > 0) {
-                if (!window.confirm(
-                  `⚠️ Selisih kas ${formatRupiah(diff)} (${diff > 0 ? 'lebih' : 'kurang'}).\n\nApakah Anda yakin jumlah kas sudah benar?`
-                )) return;
+                setConfirmState({
+                  title: 'Selisih Kas Besar',
+                  message: `Selisih kas ${formatRupiah(diff)} (${diff > 0 ? 'lebih' : 'kurang'}) dari expected cash. Apakah Anda yakin jumlah kas sudah benar?`,
+                  confirmText: 'Ya, Tutup Shift',
+                  onConfirm: () => handleCloseShift(),
+                });
+                return;
               }
               handleCloseShift();
             }}

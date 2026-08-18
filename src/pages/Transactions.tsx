@@ -10,7 +10,7 @@ import { useToastStore } from '../store/toastStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
 import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { formatRupiah, formatDate } from '../utils/format';
+import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
 import { applyStatusStockEffects, type StockEffectStatus } from '../utils/transactionStockActions';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
@@ -150,8 +150,7 @@ export default function Transactions() {
           break;
         }
         case 'custom': {
-          const from = customDateFrom ? new Date(customDateFrom) : new Date(0);
-          const to = customDateTo ? new Date(customDateTo + 'T23:59:59') : new Date();
+          const { from, to } = buildCustomDateRange(customDateFrom, customDateTo);
           matchDate = d >= from && d <= to;
           break;
         }

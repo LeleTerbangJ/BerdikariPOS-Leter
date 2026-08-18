@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useCashMovementStore } from '../store/cashMovementStore';
+import { useToastStore } from '../store/toastStore';
 import { useAuthStore } from '../store/authStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useAuditLogStore } from '../store/auditLogStore';
@@ -43,6 +44,7 @@ type DateFilterType = 'today' | 'week' | 'month' | 'all';
 
 export default function CashMovements() {
   const { movements, confirmedSyncIds, addMovement, updateMovement, deleteMovement, loadFromCloud } = useCashMovementStore();
+  const { addToast } = useToastStore();
   const { currentUser } = useAuthStore();
   const { activeShift } = useShiftStore();
   const { addLog } = useAuditLogStore();
@@ -155,7 +157,8 @@ export default function CashMovements() {
     e.preventDefault();
     const amount = parseInt(amountInput) || 0;
     if (amount <= 0) {
-      alert('Nominal harus lebih dari 0');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Nominal harus lebih dari 0', 'warning');
       return;
     }
 
@@ -240,7 +243,8 @@ export default function CashMovements() {
 
     const amount = parseInt(editAmount) || 0;
     if (amount <= 0) {
-      alert('Nominal harus lebih dari 0');
+      // v4.7 TO DO 20.2: alert → toast
+      addToast('Nominal harus lebih dari 0', 'warning');
       return;
     }
 

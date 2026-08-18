@@ -7,7 +7,7 @@ import { useMenuStore } from '../store/menuStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePromoStore } from '../store/promoStore';
-import { formatRupiah, formatDate } from '../utils/format';
+import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
 import { splitContributionDivisor } from '../utils/splitAllocation';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
@@ -98,8 +98,7 @@ export default function Reports() {
         case 'all':
           return true;
         case 'custom': {
-          const from = customDateFrom ? new Date(customDateFrom) : new Date(0);
-          const to = customDateTo ? new Date(customDateTo + 'T23:59:59') : new Date();
+          const { from, to } = buildCustomDateRange(customDateFrom, customDateTo);
           return d >= from && d <= to;
         }
         default:
@@ -136,8 +135,7 @@ export default function Reports() {
         return { dateFrom: new Date(0), dateTo: new Date(2099, 11, 31) };
       }
       case 'custom': {
-        const from = customDateFrom ? new Date(customDateFrom) : new Date(0);
-        const to = customDateTo ? new Date(customDateTo + 'T23:59:59') : new Date();
+        const { from, to } = buildCustomDateRange(customDateFrom, customDateTo);
         return { dateFrom: from, dateTo: to };
       }
       default:

@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import Modal from './Modal';
+import ConfirmDialog from './ConfirmDialog';
 import { useTransactionStore, isPendingTransaction } from '../store/transactionStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
@@ -28,6 +29,8 @@ export default function PendingPaymentsModal({
   const { settings } = useSettingsStore();
   const { addToast } = useToastStore();
   const [search, setSearch] = useState('');
+  // v4.7 TO DO 20.3: void pending via ConfirmDialog (bukan window.confirm)
+  const [voidTarget, setVoidTarget] = useState<Transaction | null>(null);
 
   const pendingList = useMemo(() => allTransactions.filter(isPendingTransaction), [allTransactions]);
   // v4.7 TO DO 18.2: nomor antrean yang muncul > 1× di hari yang sama (kemungkinan 2 kasir offline)
@@ -85,10 +88,8 @@ export default function PendingPaymentsModal({
   };
 
   const handleVoid = (tx: Transaction) => {
-    if (window.confirm(`⚠️ Yakin ingin membatalkan transaksi gantung #${tx.queueNumber}? Stok bahan baku akan dikembalikan.`)) {
-      cancelPendingTransaction(tx.id);
-      addToast(`Transaksi pending #${tx.queueNumber} berhasil dibatalkan.`, 'success');
-    }
+    // v4.7 TO DO 20.3: window.confirm → ConfirmDialog
+    setVoidTarget(tx);
   };
 
   return (
@@ -310,6 +311,21 @@ export default function PendingPaymentsModal({
           </div>
         )}
       </div>
+
+      {/* v4.7 TO DO 20.3: konfirmasi void pending (bukan window.confirm) */}
+      <ConfirmDialog
+        open={!!voidTarget}
+        onClose={() => setVoidTarget(null)}
+        onConfirm={() => {
+          if (voidTarget) {
+            cancelPendingTransaction(voidTarget.id);
+            addToast(`Transaksi pending #${voidTarget.queueNumber} berhasil dibatalkan.`, 'success');
+          }
+        }}
+        title="Batalkan Transaksi Gantung"
+        message={`Yakin ingin membatalkan transaksi gantung #${voidTarget?.queueNumber ?? ''}? Stok bahan baku akan dikembalikan.`}
+        confirmText="Ya, Batalkan"
+      />
     </Modal>
   );
 }
