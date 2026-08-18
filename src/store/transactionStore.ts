@@ -14,8 +14,8 @@ export const isPendingTransaction = (t: Transaction): boolean =>
 // sudah displit dikelola sesi split (anak-anak 'Selesai' & stoknya terpakai sah) → jangan revert.
 export const hasPendingSplitChildren = (allTxs: Transaction[], parentId: string): boolean =>
   allTxs.some((t) => t.splitParentId === parentId);
-import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud } from '../lib/cloudSync';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud, fetchMaxQueueNumberCloud, allocateQueueNumberCloud } from '../lib/cloudSync';
+import { localMaxQueueNumber, toLocalDateKey } from '../utils/queueNumber';
 import { calculateItemDeductions } from '../utils/hpp';
 import { useMenuStore } from './menuStore';
 import { useInventoryStore } from './inventoryStore';
@@ -73,47 +73,24 @@ export const useTransactionStore = create<TransactionState>()(
 
       getNextQueueNumber: async () => {
         const today = getTodayDateStr();
-        
-        // Try to fetch max queue number from Supabase to prevent multi-device race conditions
-        if (isSupabaseConfigured && navigator.onLine) {
-          try {
-            const todayStart = `${today}T00:00:00.000Z`;
-            const todayEnd = `${today}T23:59:59.999Z`;
-            const { data, error } = await supabase
-              .from('transactions')
-              .select('queue_number')
-              .gte('date', todayStart)
-              .lte('date', todayEnd)
-              .neq('tx_status', 'Demo')
-              .neq('tx_status', 'Cancel')
-              .order('queue_number', { ascending: false })
-              .limit(1);
 
-            if (!error && data && data.length > 0) {
-              const cloudMax = data[0].queue_number || 0;
-              const localTxs = get().transactions.filter(
-                (t) => t.date.startsWith(today) && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
-              );
-              const localMax = localTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
-              const absoluteMax = Math.max(cloudMax, localMax);
-              return absoluteMax + 1;
-            }
-          } catch (e) {
-            console.warn('Failed to fetch max queue number from cloud, falling back to local:', e);
-          }
-        }
+        // FLOOR: nomor tertinggi yang sudah terpakai (cloud vs lokal) — alokasi tidak boleh
+        // menabrak transaksi yang sudah ada (data lama / device lain yang belum pakai RPC).
+        let floor = localMaxQueueNumber(get().transactions, today);
+        const cloudMax = await fetchMaxQueueNumberCloud(today); // 0 bila offline / tidak dikonfigurasi
+        floor = Math.max(floor, cloudMax);
 
-        // Fallback to local calculation (offline-first)
-        // v4.7 TO DO 13.6 (O-6, batasan terdokumentasi): dua device OFFLINE bisa memberi
-        // nomor antrean yang sama (tanpa otoritas pusat). Setelah sync, `loadFromCloud`
-        // mendeteksi & menormalkan nextQueueNumber dari max gabungan; duplikat pada
-        // transaksi yang sudah terlanjur dibuat tetap mungkin (label #N kembar) —
-        // mitigasi penuh (alokasi range per device / renumber) di TO DO 13.6.
-        const todayTxs = get().transactions.filter(
-          (t) => t.date.startsWith(today) && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
-        );
-        const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
-        return maxQueue + 1;
+        // v4.7 TO DO 18.2 (Prioritas 18): alokasi ATOMIK dari counter cloud via RPC
+        // `allocate_queue_number` (row-lock upsert) — dua kasir ONLINE tidak bisa mendapat
+        // nomor antrean yang sama (sebelumnya check-then-act → #N kembar).
+        const allocated = await allocateQueueNumberCloud(today, floor);
+        if (allocated !== null && allocated > 0) return allocated;
+
+        // Fallback lokal (offline / RPC belum dibuat di DB — flag queueCounterRpc):
+        // masih bisa duplikat lintas device (batasan TO DO 13.6 / O-6); duplikat yang
+        // terlanjur dibuat DIDETEKSI setelah merge (badge "#N duplikat" di Riwayat
+        // Transaksi & Pending Payments via findDuplicateQueueNumbers).
+        return floor + 1;
       },
 
       addTransaction: (tx) => {
@@ -125,8 +102,10 @@ export const useTransactionStore = create<TransactionState>()(
           const today = getTodayDateStr();
           const filteredExisting = s.transactions.filter((t) => t.id !== tx.id);
           const nextList = [tx, ...filteredExisting];
+          // v4.7 TO DO 18.3: bandingkan TANGGAL LOKAL (bukan prefix UTC) — transaksi
+          // jam 00:00–07:00 WIB (UTC = tanggal sebelumnya) tidak boleh terlewat dari hitungan.
           const todayTxs = nextList.filter(
-            (t) => t.date.startsWith(today) && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
+            (t) => toLocalDateKey(t.date) === today && t.txStatus !== 'Demo' && t.txStatus !== 'Cancel'
           );
           const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
           return {
@@ -314,7 +293,9 @@ export const useTransactionStore = create<TransactionState>()(
           // BUG-02 fix: Recalculate nextQueueNumber from merged data
           // to prevent duplicate queue numbers across devices
           const today = getTodayDateStr();
-          const todayTxs = merged.filter((t) => t.date.startsWith(today));
+          // v4.7 TO DO 18.3: tanggal LOKAL (bukan prefix UTC) — konsisten dengan floor
+          // localMaxQueueNumber & counter cloud per tanggal lokal.
+          const todayTxs = merged.filter((t) => toLocalDateKey(t.date) === today);
           const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
           const newNextQueue = Math.max(s.nextQueueNumber, maxQueue + 1);
 

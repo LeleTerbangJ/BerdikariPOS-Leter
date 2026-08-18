@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **460/460 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **588/588 tes otomatis lolos**.
 
 ---
 
@@ -62,6 +62,17 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Edit Menu tidak menumpuk** — toggle **Best Seller ⭐ / Level Gula 🍬 / Pilihan Suhu 🌡️** membentang penuh di desktop dan wrap rapi di mobile.
 - **Checkbox cetak berdampingan di desktop** — **"Cetak struk kasir" & "Cetak tiket dapur"** kini sejajar (desktop) / tetap vertikal (mobile), konsisten di modal POS & Split Bill.
 
+### 12. Skenario 2 Kasir & Offline (Prioritas 18 — 18.1 s.d. 18.8)
+- **Stok tidak bisa "oversell" antar kasir** — deduksi stok lewat **RPC atomik database** (`adjust_inventory_stock`, Migration 27): dua kasir memotong bahan yang sama bersamaan, yang kedua **ditolak** di level database (bukan stok negatif diam-diam) → stok dikoreksi + peringatan jelas. Bila RPC belum ada/offline, fallback aman otomatis.
+- **Nomor antrean tidak kembar antar kasir** — alokasi via counter cloud **`queue_counters` + RPC `allocate_queue_number`** (Migration 28): dua kasir online mustahil dapat #N sama. Offline tetap jalan (fallback max+1) dengan **badge "#N duplikat"** bila nomor kembar terdeteksi.
+- **Satu shift aktif per outlet** — shift kedua ditolak; device lain otomatis **melanjutkan shift yang sama**; `loadFromCloud` me-restore shift terbuka paling awal — laporan Shift Manager tidak lagi punya dua shift "aktif".
+- **Expected cash tutup shift dari data tersinkron** — saat tutup shift, aplikasi flush + tarik ulang dari cloud lalu menghitung dari **semua kasir**, dengan **peringatan bila masih ada data belum tersinkron**.
+- **Banner "Laporan belum final"** di Laporan & Dashboard — mengingatkan saat masih ada transaksi belum tersinkron (angka bisa berubah setelah sinkron).
+- **Catat transaksi Demo langsung dari POS** — tombol **"Catat sebagai Demo (tidak memotong stok)"** untuk pelatihan kasir: tanpa potong stok, tanpa nomor antrean (label DEMO), tanpa cetak, tidak masuk laporan; bisa diubah ke Selesai nanti.
+- **Promo usage dilindungi dari race** — pemakaian promo dicatat atomik dari store saat commit + ledger id transaksi (replay tidak menggandakan); replay transaksi tidak lagi menggandakan kunjungan/poin loyalty.
+- **Tiket dapur tidak hilang saat resume pesanan gantung** — status cetak tiket dicatat di transaksi (`kitchenTicketPrintedAt`, Migration 30): resume hanya melewati cetak bila tiket benar-benar sudah keluar; printer gagal → dicetak ulang.
+- **Bahan resep yang sudah dihapus tidak lolos diam-diam** — validasi stok memperingatkan "bahan tidak ditemukan" sebelum checkout.
+
 ---
 
 ## 🐛 Perbaikan Utama
@@ -73,6 +84,9 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - Perbaikan stabilitas penyimpanan: transaksi & audit log di **IndexedDB** (kuota lokal tidak terbatas).
 - **Perubahan menu pada pesanan gantung (tambah/kurangi) kini selalu muncul di riwayat transaksi** — sinkronisasi antar perangkat tidak lagi menimpa item yang baru diubah dengan versi lama (perbandingan kesegaran per transaksi, termasuk void/batal & perubahan metode bayar).
 - **Tidak ada lagi transaksi ganda saat pesanan gantung diedit lalu dibayar setelah pindah halaman/refresh** — identitas pending tersimpan bersama keranjang & dipulihkan otomatis → pembayaran meng-update pending yang sama (1 transaksi), bukan membuat transaksi baru; identitas dibersihkan pasca-bayar.
+- **Nomor antrean di pagi buta (00:00–07:00 WIB) tidak lagi salah hitung** — perbandingan tanggal kini memakai tanggal lokal, transaksi pagi tidak terlewat (tidak menabrak #N yang sudah ada).
+- **Replay/double-click transaksi tidak lagi menggandakan kunjungan/promo/poin** — efek samping hanya dijalankan sekali per transaksi.
+- **Alert stok negatif lebih akurat** — revert kecil yang tidak memperbaiki item negatif tidak lagi menghapus peringatan yang masih relevan.
 
 ---
 
@@ -118,9 +132,68 @@ DO $$ DECLARE cname TEXT; BEGIN
   IF cname IS NOT NULL THEN EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname); END IF;
 END $$;
 ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage', 'fixed', 'bogo'));
+
+-- ============================================================
+-- 12. ⚠️ WAJIB (Prioritas 18) — RPC atomik stok (Migration 27) — proteksi oversell 2 kasir
+-- ============================================================
+CREATE OR REPLACE FUNCTION adjust_inventory_stock(p_id TEXT, p_delta FLOAT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_stock FLOAT;
+BEGIN
+  SELECT stock INTO v_stock FROM inventory WHERE id = p_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'stock', NULL::FLOAT, 'reason', 'not_found');
+  END IF;
+  IF p_delta < 0 AND v_stock < -p_delta THEN
+    RETURN jsonb_build_object('ok', false, 'stock', v_stock, 'reason', 'insufficient');
+  END IF;
+  UPDATE inventory SET stock = v_stock + p_delta, updated_at = now() WHERE id = p_id;
+  RETURN jsonb_build_object('ok', true, 'stock', v_stock + p_delta, 'reason', 'ok');
+END;
+$$;
+
+-- ============================================================
+-- 13. ⚠️ WAJIB (Prioritas 18) — counter nomor antrean atomik (Migration 28)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS queue_counters (
+  outlet_id TEXT NOT NULL DEFAULT 'default',
+  date TEXT NOT NULL,
+  last_number INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (outlet_id, date)
+);
+ALTER TABLE queue_counters ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all for anon" ON queue_counters FOR ALL USING (true) WITH CHECK (true);
+CREATE OR REPLACE FUNCTION allocate_queue_number(p_date TEXT, p_outlet TEXT DEFAULT 'default', p_min INT DEFAULT 0)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_next INT;
+BEGIN
+  INSERT INTO queue_counters (outlet_id, date, last_number)
+  VALUES (p_outlet, p_date, GREATEST(0, p_min) + 1)
+  ON CONFLICT (outlet_id, date)
+  DO UPDATE SET last_number = GREATEST(queue_counters.last_number + 1, p_min + 1)
+  RETURNING last_number INTO v_next;
+  RETURN v_next;
+END;
+$$;
+
+-- ============================================================
+-- 14. ⚠️ WAJIB (Prioritas 18 — A5) — kolom updated_at inventory (Migration 29, last-write-wins)
+-- ============================================================
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+-- ============================================================
+-- 15. ⚠️ WAJIB (Prioritas 18 — A10) — kolom status cetak tiket dapur (Migration 30)
+-- ============================================================
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;
 ```
 
-> 💡 Aplikasi **mendeteksi otomatis** kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19–26) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
+> 💡 Aplikasi **mendeteksi otomatis** kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19–30 — termasuk **27: RPC stok atomik, 28: counter nomor antrean, 29: `updated_at` inventory, 30: `kitchen_ticket_printed_at`**) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
 
 **Opsional** — hanya jika memakai Auto Backup ke cloud: buat bucket `backups` + policy Storage (sekali per project Supabase; lihat `DEPLOYMENT.md` §4b).
 
@@ -128,8 +201,8 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **460/460 test lolos** (44 file)
-- `npm run build` → **sukses** (tsc + vite build + PWA)
+- `npx vitest run` → **588/588 test lolos** (56 file)
+- `npm run build` → **✅ BERHASIL (diverifikasi 18 Agt 2026, setelah seluruh Prioritas 18 tuntas)**: `✓ built in 16.61s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3622.00 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.7 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---
@@ -140,7 +213,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 - **Aplikasi tidak "hilang" saat offline** — tetap terbuka & bisa dipakai (PWA), dan data tidak hilang walau aplikasi ditutup di tengah offline (IndexedDB).
 - **Tidak ada lagi data raib diam-diam** — setiap operasi yang gagal tersinkron selalu terlihat (badge/banner + daftar dengan alasan) dan bisa dicoba lagi.
 - **Printer thermal tidak bikin antrean berhenti** — saat printer terputus (mis. setelah refresh), aplikasi mencoba menyambungkan ulang otomatis atau mencetak lewat dialog browser; kasir tidak diblokir dan pesanan dapur tidak hilang.
-- **Panduan verifikasi**: [`TESTING-OFFLINE.md`](./TESTING-OFFLINE.md) — 6 tahap uji (≈ 30–45 menit) untuk memastikan semua perilaku di atas bekerja di perangkat Anda.
+- **Panduan verifikasi**: [`TESTING-OFFLINE.md`](./testing/TESTING-OFFLINE.md) — 6 tahap uji (≈ 30–45 menit) untuk memastikan semua perilaku di atas bekerja di perangkat Anda.
 
 ---
 

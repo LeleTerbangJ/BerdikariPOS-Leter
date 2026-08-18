@@ -19,6 +19,10 @@ export interface InventoryItem {
   unit: string; // kg, L, pcs, dll
   costPerUnit: number; // harga dasar untuk hitung HPP
   minStock?: number; // threshold alert (default 3)
+  // v4.7 TO DO 18.8 (A5): timestamp mutasi TERAKHIR — dikirim ke cloud (kolom updated_at)
+  // & dibandingkan saat loadFromCloud (last-write-wins). Mencegah fetch cloud STALE menimpa
+  // mutasi lokal yang lebih baru saat dua device memproses bersamaan (race sync stok burst).
+  updatedAt?: string; // ISO
 }
 
 export interface AddOn {
@@ -189,6 +193,13 @@ export interface Transaction {
   promoName?: string;            // Nama promo (snapshot saat checkout)
   promoAmount?: number;          // Nominal diskon promo yang diterapkan (snapshot saat checkout)
 
+  // v4.7 TO DO 18.8 (A10): waktu tiket dapur benar-benar tercetak (Simpan Pending).
+  // Dipakai saat resume: item TIDAK berubah && sudah pernah cetak → skip tiket dapur
+  // (anti tiket DOBEL); item berubah / belum pernah tercetak → cetak ulang. Sebelumnya
+  // keputusan skip memakai asumsi "selalu sudah tercetak saat Simpan Pending" — salah
+  // bila printer gagal saat itu (tiket hilang diam-diam).
+  kitchenTicketPrintedAt?: string; // ISO timestamp saat tiket dapur sukses dicetak
+
   // v4.7 TO DO 11.2 (P0.2): refund/retur penuh — transaksi Selesai yang dikembalikan.
   // Stok & kunjungan pelanggan sudah di-revert saat refund; Kas Keluar 'Refund' dicatat
   // di Rekap Kas (akuntabel). Transaksi refunded TIDAK dihitung sebagai penjualan di laporan.
@@ -223,7 +234,6 @@ export interface AtomicCheckoutParams {
   skipKitchenPrint?: boolean;
 
   // v4.1 Extensions for Pending & Split
-  skipStockDeduction?: boolean;  // If true, bypass inventory deduction (prevent double deduction)
   reservedDeductions?: Record<string, number>; // Stok yang sudah di-reserve dari pesanan pending → deduksi DELTA saat resume/update/finalize
   bypassIdempotency?: boolean;   // Izinkan re-commit dengan ID transaksi yang sama (resume/update/finalize pending)
   overrideKitchenStatus?: KitchenStatus; // Pertahankan status dapur (jangan reset ke Waiting) saat finalisasi/update pending
@@ -442,6 +452,10 @@ export interface Promo {
   // Pencatatan pemakaian per pelanggan: { customerId: jumlahPakai }. Disinkronkan bersama promo
   // (pola sama dengan usageCount global). undefined = belum pernah dipakai.
   usageByCustomer?: Record<string, number>;
+  // v4.7 TO DO 18.8 (E7): ledger id transaksi yang sudah mengonsumsi pemakaian promo ini
+  // (upsert anti-duplikat) — re-commit / replay transaksi yang sama (idempotentReplay) tidak
+  // boleh menaikkan usage dua kali. Disinkronkan bersama promo (union saat merge lintas device).
+  usageKeys?: Record<string, true>;
   createdAt: string;
 }
 
@@ -473,6 +487,8 @@ export type AuditAction =
   | 'create_user' | 'update_user' | 'delete_user'
   | 'create_inventory' | 'update_inventory' | 'delete_inventory' | 'deduct_inventory'
   | 'open_shift' | 'close_shift'
+  // v4.7 TO DO 18.3: melanjutkan shift yang sudah dibuka (1 shift aktif per outlet)
+  | 'resume_shift'
   | 'update_settings' | 'create_promo' | 'update_promo' | 'delete_promo'
   | 'create_customer' | 'update_customer' | 'delete_customer'
   | 'update_cash_movement' | 'delete_cash_movement'

@@ -9,6 +9,9 @@ export interface InventoryValidationResult {
     required: number;
     available: number;
     unit: string;
+    // v4.7 TO DO 18.8 (A11): true bila bahan yang direferensikan resep TIDAK ADA lagi di
+    // inventory (id sudah dihapus) — sebelumnya dilewati diam-diam tanpa peringatan apa pun.
+    missing?: boolean;
   }[];
 }
 
@@ -31,7 +34,20 @@ export class InventoryEngine {
 
     for (const [invId, needed] of Object.entries(required)) {
       const inv = inventory.find((i) => i.id === invId);
-      if (!inv) continue;
+      // v4.7 TO DO 18.8 (A11): bahan yang direferensikan resep sudah DIHAPUS dari inventory —
+      // jangan dilewati diam-diam. Laporkan sebagai warning (stok tidak bisa diverifikasi;
+      // deduksi untuk id ini juga tidak akan terjadi). Kasir bisa lanjut via "Lanjutkan Tetap".
+      if (!inv) {
+        warnings.push({
+          ingredientId: invId,
+          ingredientName: invId,
+          required: needed,
+          available: 0,
+          unit: '',
+          missing: true,
+        });
+        continue;
+      }
       if (inv.stock < needed) {
         warnings.push({
           ingredientId: invId,

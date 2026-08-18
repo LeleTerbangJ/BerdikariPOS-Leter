@@ -13,6 +13,7 @@ import { useTransactionStore } from '../store/transactionStore';
 import { useMenuStore } from '../store/menuStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
+import { didKitchenPrintSucceed } from '../utils/kitchenTicket';
 import { syncTransaction, deleteTransactionCloud } from './cloudSync';
 import {
   pruneIdempotencyEntries,
@@ -122,7 +123,15 @@ export class AtomicTransactionEngine {
     const inventorySnapshot = InventoryEngine.captureSnapshot(inventory);
 
     try {
-      const queueNum = params.overrideQueueNumber || (await useTransactionStore.getState().getNextQueueNumber());
+      // v4.7 TO DO 18.8 (A13): transaksi DEMO dicatat TANPA mengonsumsi nomor antrean
+      // (queueNumber 0 — Demo dikecualikan dari hitungan antrean & laporan) dan TANPA
+      // memotong stok (bukan penjualan nyata). Jalur pembuatan ini melengkapi satu-satunya
+      // cara lama (transisi Selesai→Demo di Transactions yang me-revert stok).
+      const targetTxStatus = params.overrideTxStatus || 'Selesai';
+      const isDemo = targetTxStatus === 'Demo';
+      const queueNum =
+        params.overrideQueueNumber ||
+        (isDemo ? 0 : await useTransactionStore.getState().getNextQueueNumber());
       const { itemsWithSnapshot, totalHpp } = createSnapshotForCartItems(
         params.cartItems,
         menus,
@@ -136,7 +145,6 @@ export class AtomicTransactionEngine {
       const scaledHpp = Math.round(totalHpp * (params.scaleHpp ?? 1));
       const netSales = Math.max(0, params.subtotal - params.discount);
       const grossProfit = netSales - scaledHpp;
-      const targetTxStatus = params.overrideTxStatus || 'Selesai';
 
       const tx: Transaction = {
         id: txId,
@@ -185,9 +193,13 @@ export class AtomicTransactionEngine {
       };
 
       // 4. Commit Local Mutations (COMMITTED)
-      if (params.skipStockDeduction) {
-        // Reserved stock sudah menutupi transaksi ini (contoh: sub-bill split dari pesanan pending)
-      } else if (params.reservedDeductions) {
+      // v4.7 TO DO 18.8 (A1): `skipStockDeduction` dead param DIHAPUS — tidak ada caller yang
+      // mengirimnya (SplitBillModal memakai `reservedDeductions` delta-0 sebagai gantinya).
+      // Param mati menyesatkan: caller baru yang memakai skipStockDeduction:true akan melewati
+      // potong stok TANPA reserve → stok bocor diam-diam.
+      // v4.7 TO DO 18.8 (A13): transaksi DEMO tidak menyentuh stok sama sekali (bukan
+      // penjualan nyata — Selesai→Demo di Transactions juga me-revert stok).
+      if (!isDemo && params.reservedDeductions) {
         // Resume/update/finalize pending: deduksi DELTA antara cart baru vs stok yang sudah di-reserve.
         // Item baru → potong stok; item yang dihapus → kembalikan stok (revert).
         const deltaDeduct: Record<string, number> = {};
@@ -210,7 +222,7 @@ export class AtomicTransactionEngine {
         if (Object.keys(deltaRevert).length > 0) {
           useInventoryStore.getState().revertStock(deltaRevert, `Transaksi #${queueNum} (Koreksi Pending)`);
         }
-      } else {
+      } else if (!isDemo) {
         useInventoryStore.getState().deductStock(deductions, `Transaksi #${queueNum}`);
       }
       useTransactionStore.getState().addTransaction(tx);
@@ -254,11 +266,20 @@ export class AtomicTransactionEngine {
    */
   private static async executeRollback(txId: string, inventorySnapshot: Map<string, number>) {
     try {
-      // 1. Restore Inventory
+      // 1. Restore Inventory — v4.7 TO DO 18.8 (A3): pakai `revertStock` (log 'add' + sync bulk),
+      // BUKAN `updateItem(stock, { skipLog: true })` — sebelumnya stok kembali tapi stock log
+      // menunjukkan 'deduct' tanpa 'add' balasan → jejak audit stok tidak seimbang untuk
+      // transaksi yang gagal (log "dipotong" padahal batal). Delta dihitung dari snapshot.
       const inventoryStore = useInventoryStore.getState();
+      const revertDeltas: Record<string, number> = {};
       inventorySnapshot.forEach((originalStock, invId) => {
-        inventoryStore.updateItem(invId, { stock: originalStock }, { skipLog: true });
+        const current = inventoryStore.items.find((i) => i.id === invId)?.stock ?? originalStock;
+        const diff = originalStock - current;
+        if (diff > 0) revertDeltas[invId] = diff;
       });
+      if (Object.keys(revertDeltas).length > 0) {
+        inventoryStore.revertStock(revertDeltas, 'Rollback transaksi gagal (stok dikembalikan)');
+      }
 
       // 2. Remove Staged Transaction if present
       const txStore = useTransactionStore.getState();
@@ -312,8 +333,17 @@ export class AtomicTransactionEngine {
             printReceipt(receiptData, params.settings, 'cashier', params.preOpenedPrintWindow || undefined);
           }
           // 2. Tiket dapur — dilewati bila skipKitchenPrint
+          // v4.7 TO DO 18.8 (A10): tiket yang BENAR-BENAR sukses dicetak di-stamp ke
+          // `kitchenTicketPrintedAt` (sync lintas device). Resume pending memakai stamp ini
+          // (bukan asumsi "selalu sudah tercetak") — printer gagal saat Simpan Pending →
+          // tiket tidak hilang diam-diam, resume akan mencetak ulang.
           if (!params.skipKitchenPrint) {
-            printReceipt(receiptData, params.settings, 'kitchen');
+            const kitchenResults = await printReceipt(receiptData, params.settings, 'kitchen');
+            if (didKitchenPrintSucceed(kitchenResults)) {
+              useTransactionStore
+                .getState()
+                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: new Date().toISOString() });
+            }
           }
         }
       } catch (printErr) {

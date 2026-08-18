@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/cloudSync', () => ({
   syncInventoryItem: vi.fn(),
   syncInventoryStock: vi.fn(),
+  adjustInventoryStockCloud: vi.fn().mockResolvedValue({ ok: [], conflicts: [], degraded: false }),
+  fetchMaxQueueNumberCloud: vi.fn().mockResolvedValue(0),
+  allocateQueueNumberCloud: vi.fn().mockResolvedValue(null),
   deleteInventoryCloud: vi.fn(),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn(),
@@ -24,7 +27,7 @@ vi.mock('../lib/cloudSync', () => ({
 
 import { findNegativeStocksAfterDeduction } from '../utils/stockCheck';
 import { useInventoryStore } from '../store/inventoryStore';
-import { syncInventoryStock, syncInventoryItem } from '../lib/cloudSync';
+import { adjustInventoryStockCloud, syncInventoryStock, syncInventoryItem } from '../lib/cloudSync';
 import type { InventoryItem } from '../types';
 
 // toastStore memakai window.setTimeout (auto-hilang) — stub untuk environment node.
@@ -93,28 +96,33 @@ describe('deductStock — warning stok negatif pasca-deduksi (TO DO 8.4)', () =>
   });
 });
 
-describe('Unifikasi jalur sync stok cloud (TO DO 8.3)', () => {
-  it('deductStock: syncInventoryStock dipanggil SEKALI dengan stok pasca-deduksi (bulk)', () => {
+describe('Jalur sync stok cloud ATOMIK (TO DO 8.3 + 18.1)', () => {
+  it('deductStock: adjustInventoryStockCloud dipanggil SEKALI dengan DELTA negatif + stok pasca-deduksi', () => {
     useInventoryStore.setState({ items: [makeItem('invA', 10), makeItem('invB', 20)] });
     useInventoryStore.getState().deductStock({ invA: 4, invB: 6 }, 'Transaksi #1');
 
-    expect(syncInventoryStock).toHaveBeenCalledTimes(1);
-    const [deductions, items] = (syncInventoryStock as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(deductions).toEqual({ invA: 4, invB: 6 });
-    // Items yang dikirim sudah memuat nilai stok post-deduksi
+    expect(adjustInventoryStockCloud).toHaveBeenCalledTimes(1);
+    const [adjustments, items] = (adjustInventoryStockCloud as ReturnType<typeof vi.fn>).mock.calls[0];
+    // Delta NEGATIF (deduksi) — RPC atomik `stock = stock + delta` dengan guard stok
+    expect(adjustments).toEqual([
+      { id: 'invA', delta: -4 },
+      { id: 'invB', delta: -6 },
+    ]);
+    // Items yang dikirim sudah memuat nilai stok post-deduksi (fallback absolut bila RPC gagal)
     expect(items.find((i: InventoryItem) => i.id === 'invA').stock).toBe(6);
     expect(items.find((i: InventoryItem) => i.id === 'invB').stock).toBe(14);
+    // syncInventoryItem tidak dipakai untuk deduct (unifikasi bulk)
+    expect(syncInventoryItem).not.toHaveBeenCalled();
   });
 
-  it('revertStock: pakai helper BULK yang sama (syncInventoryStock) — bukan loop syncInventoryItem', () => {
+  it('revertStock: adjustInventoryStockCloud dipanggil SEKALI dengan DELTA positif', () => {
     useInventoryStore.setState({ items: [makeItem('invA', 6)] });
     useInventoryStore.getState().revertStock({ invA: 4 }, 'Revert: Cancel transaksi #1');
 
-    expect(syncInventoryStock).toHaveBeenCalledTimes(1);
-    const [deductions, items] = (syncInventoryStock as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(deductions).toEqual({ invA: 4 });
+    expect(adjustInventoryStockCloud).toHaveBeenCalledTimes(1);
+    const [adjustments, items] = (adjustInventoryStockCloud as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(adjustments).toEqual([{ id: 'invA', delta: 4 }]); // delta POSITIF (revert)
     expect(items.find((i: InventoryItem) => i.id === 'invA').stock).toBe(10); // 6 + 4
-    // syncInventoryItem tidak dipakai untuk revert (unifikasi bulk)
     expect(syncInventoryItem).not.toHaveBeenCalled();
   });
 
@@ -125,6 +133,37 @@ describe('Unifikasi jalur sync stok cloud (TO DO 8.3)', () => {
 
     useInventoryStore.getState().revertStock({ invA: 5 }, 'Revert: Cancel transaksi #1');
     expect(useInventoryStore.getState().items.find((i) => i.id === 'invA')?.stock).toBe(2);
+    expect(useInventoryStore.getState().lastNegativeStockAlerts).toHaveLength(0);
+  });
+
+  // v4.7 TO DO 18.8 (A12) — revert APA PUN tidak lagi menghapus peringatan yang masih relevan
+  it('revert item LAIN (tidak memperbaiki negatif) → alert stok negatif PERTAHAN', () => {
+    useInventoryStore.setState({ items: [makeItem('invA', 2), makeItem('invB', 10)] });
+    useInventoryStore.getState().deductStock({ invA: 5 }, 'Transaksi #1');
+    expect(useInventoryStore.getState().lastNegativeStockAlerts).toHaveLength(1);
+
+    // Revert hanya invB (stok positif) — invA masih negatif, peringatan TIDAK boleh hilang
+    useInventoryStore.getState().revertStock({ invB: 3 }, 'Koreksi Pending');
+    const alerts = useInventoryStore.getState().lastNegativeStockAlerts;
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ inventoryId: 'invA', stock: -3 });
+  });
+
+  it('revert SEBAGIAN memperbaiki negatif → alert tetap ada dengan stok terbaru', () => {
+    useInventoryStore.setState({ items: [makeItem('invA', 2)] });
+    useInventoryStore.getState().deductStock({ invA: 5 }, 'Transaksi #1'); // stok -3
+    expect(useInventoryStore.getState().lastNegativeStockAlerts).toHaveLength(1);
+
+    useInventoryStore.getState().revertStock({ invA: 2 }, 'Koreksi Pending'); // stok -1
+    const alerts = useInventoryStore.getState().lastNegativeStockAlerts;
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ inventoryId: 'invA', stock: -1 });
+  });
+
+  it('revert MENYELURUH memperbaiki negatif → alert bersih', () => {
+    useInventoryStore.setState({ items: [makeItem('invA', 2)] });
+    useInventoryStore.getState().deductStock({ invA: 5 }, 'Transaksi #1'); // stok -3
+    useInventoryStore.getState().revertStock({ invA: 3 }, 'Cancel transaksi #1'); // stok 2
     expect(useInventoryStore.getState().lastNegativeStockAlerts).toHaveLength(0);
   });
 });

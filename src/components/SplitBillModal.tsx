@@ -4,7 +4,7 @@ import { formatRupiah } from '../utils/format';
 import type { CartItem, PaymentMethod, Transaction, AppSettings, OrderType } from '../types';
 import { AtomicTransactionEngine } from '../lib/atomicTransactionEngine';
 import { InventoryEngine } from '../lib/inventoryEngine';
-import { createSnapshotForCartItems } from '../utils/hpp';
+import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { useSettingsStore } from '../store/settingsStore';
 import { useAuthStore } from '../store/authStore';
 import { useToastStore } from '../store/toastStore';
@@ -23,8 +23,12 @@ import {
   getActiveSplitStockSession,
   setActiveSplitStockSession,
   recordPaidBill,
+  isFreshSplitReserveActive,
+  cartSignatureMatches,
+  resolveSplitQueueNumber,
+  computePendingSplitReconcile,
 } from '../utils/splitStockSession';
-import { Scissors, Users, ShoppingBag, CheckCircle, CreditCard, Banknote, QrCode, ArrowRight } from 'lucide-react';
+import { Scissors, Users, ShoppingBag, CheckCircle, CreditCard, Banknote, QrCode, ArrowRight, AlertTriangle } from 'lucide-react';
 
 interface SplitBillModalProps {
   open: boolean;
@@ -87,7 +91,7 @@ export default function SplitBillModal({
   const { items: inventory } = useInventoryStore();
   const { menus } = useMenuStore();
   const { recordVisit } = useCustomerStore();
-  const { incrementUsage } = usePromoStore();
+  const { reservePromoUsage } = usePromoStore();
 
   // v4.5 TO DO 5.1 — Manajemen stok split bill:
   // - Fresh split (tanpa parentTx): stok dipotong SEKALI untuk seluruh item cart saat sub-bill
@@ -103,9 +107,10 @@ export default function SplitBillModal({
   // (stoknya sudah terpakai sah oleh transaksi sub-bill yang tercatat).
   useEffect(() => {
     if (parentTx) return; // split pending tidak memakai session reserve
-    const sig = computeCartSignature(cartItems);
     const activeSession = getActiveSplitStockSession();
-    if (activeSession && activeSession.cartSignature !== sig) {
+    // v4.7 TO DO 18.8 (A6): cocokkan format baru ATAU legacy — sesi lama tidak boleh
+    // dianggap "cart berbeda" (kalau tidak reserve tidak dilepas → double deduction).
+    if (activeSession && !cartSignatureMatches(activeSession.cartSignature, cartItems)) {
       const unpaid = computeUnpaidPortion(activeSession);
       if (Object.keys(unpaid).length > 0) {
         useInventoryStore
@@ -140,7 +145,8 @@ export default function SplitBillModal({
     // Rehydrate paidState dari sesi stock (fresh split) jika masih aktif dengan cart yang sama
     if (!parentTx) {
       const session = getActiveSplitStockSession();
-      if (session && session.cartSignature === cartSig) {
+      // v4.7 TO DO 18.8 (A6): format baru ATAU legacy (sesi pra-18.8) dianggap cocok
+      if (session && cartSignatureMatches(session.cartSignature, cartItems)) {
         if (session.mode) setMode(session.mode);
         if (session.count) {
           if (session.mode === 'item') setBillCountCustom(session.count);
@@ -294,6 +300,11 @@ export default function SplitBillModal({
 
   const activeBills = mode === 'equal' ? equalBills : itemBills;
 
+  // v4.7 TO DO 18.8 (A8): sesi pending split sudah di-rekonsiliasi (parent → cart saat ini)?
+  // Sekali per parent — sub-bill memakai delta-0 terhadap CART SAAT INI; rekonsiliasi
+  // menyelaraskan reserve stok yang terpotong saat Simpan Pending dengan isi cart sekarang.
+  const reconciledPendingSplitRef = useRef<string | null>(null);
+
   const handlePaySubBill = async (billIdx: number) => {
     const targetBill = activeBills[billIdx];
     if (!targetBill) return;
@@ -346,6 +357,33 @@ export default function SplitBillModal({
     // Reserve sesi DI-PERTAHANKAN lintas buka/tutup modal (module-level) → buka ulang tidak deduct ganda.
     // Pending split: stok sudah dipotong saat pending dibuat — cukup reservedDeductions per sub-bill (delta 0).
     const activeSession = getActiveSplitStockSession();
+
+    // v4.7 TO DO 18.8 (A8): rekonsiliasi reserve pending → cart saat ini, SEKALI per parent,
+    // saat sub-bill pertama benar-benar dibayar (titik komit). Stok parent terpotong PENUH saat
+    // Simpan Pending; bila kasir mengedit cart setelah resume lalu split, item baru harus dipotong
+    // & item dihapus dikembalikan — kalau tidak delta-0 per sub-bill mengasumsikan item sub-bill ==
+    // item parent → stok bocor. Idempoten: selalu dihitung dari deduksi ORIGINAL parent (tidak
+    // pernah menumpuk), dan hanya berjalan bila sub-bill benar-benar dibayar (bila tidak jadi split,
+    // jalur finalize pending biasa tetap memakai delta engine — tidak ada double-adjust).
+    if (parentTx && reconciledPendingSplitRef.current !== parentTx.id) {
+      reconciledPendingSplitRef.current = parentTx.id;
+      const parentDeductions = calculateItemDeductions(parentTx.items, menus);
+      const currentDeductions = computeDeductions(cartItems);
+      const { deltaRevert, deltaDeduct } = computePendingSplitReconcile(
+        parentDeductions,
+        currentDeductions
+      );
+      if (Object.keys(deltaRevert).length > 0) {
+        useInventoryStore.getState().revertStock(deltaRevert, 'Split Pending (Item Dihapus — Stok Dikembalikan)');
+      }
+      if (Object.keys(deltaDeduct).length > 0) {
+        useInventoryStore.getState().deductStock(deltaDeduct, 'Split Pending (Item Ditambah — Stok Dipotong)');
+      }
+      if (Object.keys(deltaRevert).length > 0 || Object.keys(deltaDeduct).length > 0) {
+        addToast('Isi keranjang berubah sejak pesanan disimpan — stok pending disesuaikan sebelum di-split.', 'info');
+      }
+    }
+
     // v4.5 TO DO 5.7 (sabuk pengaman review): tolak re-pay sub-bill yang sudah tercatat lunas di
     // session (kasus rehydrate paidState gagal / sesi lama tanpa paidBills di localStorage) —
     // mencegah duplikasi revenue walau guard UI lolos.
@@ -401,8 +439,12 @@ export default function SplitBillModal({
       suppressAutoPrint: true,
       overrideTxStatus: 'Selesai',
       // v4.5 TO DO 5.9: sub-bill split FRESH memakai SATU nomor antrean (dari sub-bill pertama sesi)
-      // — 1 pesanan tidak menghasilkan N nomor antrean. Pending split tidak diubah (parent punya nomornya).
-      overrideQueueNumber: !parentTx ? activeSession?.queueNumber || undefined : undefined,
+      // — 1 pesanan tidak menghasilkan N nomor antrean.
+      // v4.7 TO DO 18.8 (A7): sub-bill split PENDING memakai nomor antrean PARENT — sebelumnya
+      // overrideQueueNumber undefined → engine memanggil getNextQueueNumber PER SUB-BILL → N nomor
+      // baru dikonsumsi + counter melompat, dan struk sub-bill bernomor beda dari parent. Sekarang
+      // seragam dengan split fresh: 1 pesanan = 1 nomor (struk sub-bill = nomor parent).
+      overrideQueueNumber: resolveSplitQueueNumber(parentTx, activeSession),
       splitParentId: parentTx?.id,
       splitIndex: billIdx + 1,
       totalSplitCount: activeBills.length,
@@ -437,6 +479,15 @@ export default function SplitBillModal({
 
     // v4.1 TO DO 2.8: rekam kunjungan customer & usage promo SEKALI per sesi split.
     // Fresh split → flag di session (bertahan lintas buka/tutup); pending split → keyed by parent id.
+    // v4.7 TO DO 18.8 (E7): usage promo dicatat via reservePromoUsage — cek batas dari STORE saat
+    // commit (bukan render) + ledger usageKey subTx.id (anti double-increment saat replay).
+    const recordPromoUsage = () => {
+      if (!appliedPromoId) return;
+      const res = reservePromoUsage(appliedPromoId, selectedCustomerId || undefined, subTx.id);
+      if (!res.ok && res.reason === 'limit-reached') {
+        addToast('Promo sudah mencapai batas pemakaian — pembayaran tetap diproses tanpa menambah pemakaian promo.', 'warning', 6000);
+      }
+    };
     if (!parentTx) {
       const session = getActiveSplitStockSession();
       if (session && !session.visitRecorded) {
@@ -445,9 +496,7 @@ export default function SplitBillModal({
         if (selectedCustomerId) {
           recordVisit(selectedCustomerId, totalAmount);
         }
-        if (appliedPromoId) {
-          incrementUsage(appliedPromoId, selectedCustomerId || undefined);
-        }
+        recordPromoUsage();
       }
     } else {
       if (pendingVisitRecordedId !== parentTx.id) {
@@ -455,9 +504,7 @@ export default function SplitBillModal({
         if (selectedCustomerId) {
           recordVisit(selectedCustomerId, totalAmount);
         }
-        if (appliedPromoId) {
-          incrementUsage(appliedPromoId, selectedCustomerId || undefined);
-        }
+        recordPromoUsage();
       }
     }
 
@@ -515,9 +562,30 @@ export default function SplitBillModal({
     }
   };
 
+  // v4.7 TO DO 18.4: sesi reserve split FRESH tersimpan di localStorage DEVICE INI saja —
+  // kasir lain tidak tahu reserve ini. Baca langsung saat render (sesi dibuat/dibersihkan
+  // oleh handler komponen ini yang selalu setState → re-render; POS melepas sesi hanya saat
+  // modal tertutup, jadi render-time read sudah cukup akurat).
+  const freshReserveActive = isFreshSplitReserveActive(parentTx, getActiveSplitStockSession());
+
   return (
     <Modal open={open} onClose={handleClose} title="✂️ Split Bill (Pisah Pembayaran)" maxWidth="max-w-3xl">
       <div className="space-y-4">
+        {/* v4.7 TO DO 18.4: warning batasan reserve per-device (hanya split FRESH) */}
+        {freshReserveActive && (
+          <div className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+            <div className="text-xs leading-relaxed">
+              <p className="font-semibold">Stok item di-reserve hanya di device ini</p>
+              <p className="mt-0.5 opacity-90">
+                Sesi split berjalan di perangkat/kasir ini saja — kasir lain di device berbeda
+                tidak mengetahui reserve stok ini dan bisa menjual item yang sama. Selesaikan
+                semua sub-bill di device ini sebelum berpindah kasir/device.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Mode Selector */}
         <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
           <button

@@ -9,6 +9,9 @@ import { useToastStore } from '../store/toastStore';
 import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
+// v4.7 TO DO 18.3: expected cash tutup shift dari SEMUA transaksi Selesai tersinkron
+import { computeShiftStats, EMPTY_SHIFT_STATS } from '../utils/shiftStats';
+import { fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   getQueueLength,
@@ -152,6 +155,10 @@ export default function Layout() {
   // Close shift modal
   const [showCloseShift, setShowCloseShift] = useState(false);
   const [closingCashInput, setClosingCashInput] = useState('');
+  // v4.7 TO DO 18.3: peringatan data belum sinkron saat tutup shift + status muat data tersinkron
+  const [unsyncedAtClose, setUnsyncedAtClose] = useState(0);
+  const [failedAtClose, setFailedAtClose] = useState(0);
+  const [syncingCloseStats, setSyncingCloseStats] = useState(false);
   // Acaraki summary modal
   const [showAcarakiSummary, setShowAcarakiSummary] = useState(false);
 
@@ -161,68 +168,55 @@ export default function Layout() {
 
   const items = navItems[currentUser.role] || [];
 
-  // Today's transactions for this cashier (for shift summary print)
+  // v4.7 TO DO 18.3: riwayat cetak ringkasan shift memakai window shift (SEMUA kasir,
+  // bukan hanya kasir device ini) — konsisten dengan model 1 shift aktif per outlet.
   const todayTx = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    if (!activeShift) return [];
+    const windowStart = new Date(activeShift.openedAt).getTime();
     return transactions.filter(
       (t) =>
-        t.cashierId === currentUser.id &&
         t.txStatus === 'Selesai' &&
         !t.splitParentId && // v4.1 TO DO 1.6: sub-bill split tidak dihitung ulang (sudah di transaksi induk)
-        new Date(t.date) >= today
+        new Date(t.date).getTime() >= windowStart
     );
-  }, [transactions, currentUser]);
+  }, [transactions, activeShift]);
 
-  // Calculate shift stats
+  // Calculate shift stats — v4.7 TO DO 18.3: helper murni computeShiftStats memakai
+  // SEMUA transaksi Selesai tersinkron dalam window shift (1 shift per outlet),
+  // bukan hanya transaksi lokal device / kasir ini.
   const movements = useCashMovementStore((s) => s.movements);
   const shiftStats = useMemo(() => {
-    if (!activeShift) return { totalSales: 0, totalTx: 0, expectedCash: 0, cashIn: 0, cashOut: 0, cashSales: 0, qrisSales: 0, transferSales: 0 };
-    // LOGIC-4 fix: Only count Selesai transactions for sales and expected cash
-    const shiftTx = transactions.filter(
-      (t) =>
-        t.cashierId === currentUser.id &&
-        t.txStatus === 'Selesai' &&
-        !t.splitParentId && // v4.1 TO DO 1.6: sub-bill split tidak dihitung ulang (sudah di transaksi induk)
-        new Date(t.date) >= new Date(activeShift.openedAt)
-    );
-    const totalSales = shiftTx.reduce((a, t) => a + t.totalAmount, 0);
+    if (!activeShift) return EMPTY_SHIFT_STATS;
+    return computeShiftStats(activeShift, transactions, movements);
+  }, [activeShift, transactions, movements]);
 
-    const cashSales = shiftTx
-      .filter((t) => t.paymentMethod === 'Cash')
-      .reduce((a, t) => a + t.totalAmount, 0);
-    const qrisSales = shiftTx
-      .filter((t) => t.paymentMethod === 'QRIS')
-      .reduce((a, t) => a + t.totalAmount, 0);
-    const transferSales = shiftTx
-      .filter((t) => t.paymentMethod === 'Transfer')
-      .reduce((a, t) => a + t.totalAmount, 0);
+  // v4.7 TO DO 18.3: sebelum tutup shift — flush antrean + muat ulang transaksi, shift,
+  // dan cash movements dari cloud agar expected cash dihitung dari data TERSINKRON.
+  // Kegagalan sync tidak menggagalkan tutup shift (best-effort, pola 6.4).
+  const syncCloseStats = async () => {
+    setSyncingCloseStats(true);
+    try {
+      await flushQueue();
+      const txs = await fetchTransactionsFromCloud();
+      if (txs && txs.length > 0) useTransactionStore.getState().loadFromCloud(txs, true);
+      await useShiftStore.getState().loadFromCloud();
+      await useCashMovementStore.getState().loadFromCloud(true);
+    } catch (e) {
+      console.warn('[Shift] Gagal memuat data tersinkron saat tutup shift (dilewati):', e);
+    } finally {
+      setUnsyncedAtClose(getQueueLength());
+      setFailedAtClose(getFailedOpsCount());
+      setSyncingCloseStats(false);
+    }
+  };
 
-    // Calculate cash movements (Kas Masuk & Kas Keluar) during active shift
-    const shiftMovements = movements.filter((m) => {
-      if (m.shiftId && activeShift.id && m.shiftId === activeShift.id) {
-        return true;
-      }
-      return (
-        m.cashierId === currentUser.id &&
-        new Date(m.date).getTime() >= new Date(activeShift.openedAt).getTime() - 60000
-      );
-    });
-    const cashIn = shiftMovements
-      .filter((m) => m.type === 'in')
-      .reduce((a, m) => a + m.amount, 0);
-    const cashOut = shiftMovements
-      .filter((m) => m.type === 'out')
-      .reduce((a, m) => a + m.amount, 0);
-
-    const expectedCash = activeShift.openingCash + cashSales + cashIn - cashOut;
-    return { totalSales, totalTx: shiftTx.length, expectedCash, cashSales, qrisSales, transferSales, cashIn, cashOut };
-  }, [activeShift, transactions, movements, currentUser]);
-
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (activeShift && (currentUser.role === 'Kasir' || currentUser.role === 'Manager')) {
       setShowCloseShift(true);
       setClosingCashInput('');
+      // Sinkronkan data terbaru dari cloud di latar belakang — statistik shift
+      // (termasuk expected cash) diperbarui otomatis via store subscription.
+      void syncCloseStats();
     } else if (currentUser.role === 'Acaraki') {
       setShowAcarakiSummary(true);
     } else {
@@ -680,6 +674,35 @@ export default function Layout() {
         dismissible={false}
       >
         <div className="space-y-5">
+          {/* v4.7 TO DO 18.3: peringatan bila masih ada data belum sinkron — expected cash
+              di bawah belum termasuk transaksi yang belum terkirim (mis. dari perangkat lain) */}
+          {(syncingCloseStats || unsyncedAtClose > 0 || failedAtClose > 0) && (
+            <div className={`rounded-xl p-3 text-xs border ${
+              failedAtClose > 0
+                ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900/40 text-red-700 dark:text-red-300'
+                : unsyncedAtClose > 0
+                ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-300'
+                : 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900/40 text-blue-700 dark:text-blue-300'
+            }`}>
+              {syncingCloseStats ? (
+                <span className="flex items-center gap-2">
+                  <span className="animate-pulse">⏳</span> Menyinkronkan data terbaru dari cloud…
+                </span>
+              ) : (
+                <div className="flex items-start justify-between gap-3">
+                  <span>
+                    ⚠️ <b>{unsyncedAtClose}</b> data belum tersinkron{failedAtClose > 0 && ` + ${failedAtClose} gagal`} — expected cash di bawah bisa belum lengkap (transaksi dari perangkat lain belum terhitung).
+                  </span>
+                  <button
+                    onClick={() => void syncCloseStats()}
+                    className="shrink-0 text-[11px] font-semibold underline underline-offset-2 hover:opacity-80"
+                  >
+                    Kirim & Muat Ulang
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/50 rounded-xl p-4">
             <h3 className="font-semibold text-sm text-blue-900 dark:text-blue-200 mb-2.5 flex items-center justify-between">
               <span>Ringkasan Shift</span>

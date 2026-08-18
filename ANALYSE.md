@@ -53,6 +53,7 @@
 - **Lokasi**: `src/store/inventoryStore.ts` `deductStock`/`revertStock` → `syncInventoryStock` (`src/lib/cloudSync.ts`).
 - **Fakta**: `syncInventoryStock` mengirim **nilai stok pasca-mutasi lokal** (`item.stock` saat itu). Dua device memotong bahan yang sama hampir bersamaan → urutan selesai network bisa tertukar → cloud bisa berakhir dengan nilai **lebih tinggi (stale)** sampai mutasi berikutnya; fetch berikutnya (loadFromCloud inventory) bisa menimpa lokal dengan nilai stale itu. O-7 mendeteksi konflik (banner kuning) tapi **tidak mengoreksi otomatis**.
 - **Usulan**: pertimbangkan kolom `updated_at`/versi di tabel `inventory` + perbandingan saat sync (last-write-wins berbasis timestamp), atau normalisasi stok cloud dari stock log (Σ log) saat load. Minimal: dokumentasikan batasan & SOP cek stok pagi.
+- ✅ **SELESAI (v4.7 TO DO 18.8/A5 — last-write-wins via updatedAt)**: kolom `updated_at` sudah ada di `CREATE TABLE inventory`; ditambah **Migration 29** (ALTER idempoten self-heal DB lama + flag `inventoryUpdatedAt`). `InventoryItem.updatedAt` dipakai `isLocalNewer()` (`src/utils/inventoryFreshness.ts`): (1) SEMUA mutasi stok (deduct/revert/updateItem/applyBulkStock/import/addItem) men-stamp `updatedAt`; (2) payload sync (`syncInventoryItem`, `syncInventoryStock`, fallback absolut `adjustInventoryStockCloud`) menyertakan `updated_at`; (3) `fetchInventoryFromCloud` memetakan `updated_at`; (4) `loadFromCloud` **last-write-wins per item** — mutasi lokal yang lebih baru TIDAK ditimpa fetch cloud stale (versi cloud yang kalah tidak di-merge → anti duplikat), cloud yang lebih baru diadopsi, legacy tanpa timestamp → cloud otoritatif (perilaku lama). Sisa risiko: online-atomic RPC (18.1) sudah menutup lost-update; jalur fallback absolut tetap last-write-wins by timestamp — **SOP: cek stok pagi** tetap disarankan. +15 test.
 
 ### A6 — `computeCartSignature` tidak menyertakan harga add-on / kuantitas (Sedang)
 - **Lokasi**: `src/utils/splitStockSession.ts` (`computeCartSignature`), dipakai `releaseSplitReserveForCart` (POS sebelum checkout normal) & `pendingItemsChanged` (POS).
@@ -69,29 +70,35 @@
 - **Lokasi**: `src/components/SplitBillModal.tsx` — `overrideQueueNumber: !parentTx ? activeSession?.queueNumber || undefined : undefined`.
 - **Fakta**: split **fresh** → semua sub-bill memakai **satu nomor** (kunci dari sub-bill pertama). Split **dari pending** → `overrideQueueNumber = undefined` → engine memanggil `getNextQueueNumber()` **per sub-bill** → N sub-bill mengonsumsi N nomor antrean baru, sementara parent pending sudah punya nomornya → counter melompat & struk sub-bill bernomor beda dari parent.
 - **Usulan/keputusan**: seragamkan — sub-bill split pending juga memakai nomor parent (`overrideQueueNumber: parentTx?.queueNumber`), atau dokumentasikan bahwa N sub-bill = N nomor (bila memang disengaja).
+- ✅ **KEPUTUSAN & SELESAI (v4.7 TO DO 18.8/A7)**: **seragamkan 1 pesanan = 1 nomor** — helper murni `resolveSplitQueueNumber(parentTx, session)`: split pending → nomor PARENT; split fresh → nomor sesi; dipakai di `overrideQueueNumber`. Bonus: `findDuplicateQueueNumbers` kini mengecualikan sub-bill split (`splitParentId`/`splitIndex`) — nomor bersama dalam satu pesanan tidak lagi salah terbaca sebagai "#N duplikat" (juga memperbaiki false-positive latent untuk split fresh). +5 test.
 
 ### A8 — Pending split: delta-0 mengasumsikan item sub-bill == item parent
 - **Lokasi**: `SplitBillModal` → engine (`reservedDeductions: reservedForSubBill`).
 - **Fakta**: stok parent sudah terpotong penuh saat Simpan Pending. Sub-bill memakai `reservedDeductions = deduksi sub-bill itu sendiri` → delta 0 → stok tidak disentuh. **Benar HANYA bila item sub-bill identik dengan item parent**. Bila alur pending-split memungkinkan edit item (tambah/kurangi), item baru tidak dipotong & item dihapus tidak dikembalikan → **stok bocor**.
 - **Usulan**: verifikasi bahwa modal pending-split mengunci item = item parent (tidak bisa diedit); bila bisa diedit, sub-bill harus memakai delta terhadap reserved parent (`reservedDeductions = calculateItemDeductions(parent.items, menus)`).
+- ✅ **KEPUTUSAN & SELESAI (v4.7 TO DO 18.8/A8)**: cart TIDAK dikunci (kasir boleh edit sebelum split) — sebagai gantinya **rekonsiliasi reserve SEKALI per parent** saat sub-bill pertama benar-benar dibayar (titik komit): helper murni `computePendingSplitReconcile(parentDeductions, currentDeductions)` menghitung delta (item dihapus → `revertStock`; item ditambah → `deductStock`) + toast info. Idempoten (selalu dari deduksi ORIGINAL parent) dan TIDAK double-adjust bila user batal split lalu finalize biasa (jalur finalize pending tetap pakai delta engine). +5 test.
 
 ### A9 — Cancel parent pending beranak split: bagian belum lunas tidak otomatis kembali
 - **Lokasi**: `src/store/transactionStore.ts` `cancelPendingTransaction` (guard `hasPendingSplitChildren`).
 - **Fakta**: guard mencegah double-revert (benar), tapi konsekuensinya stok bagian **belum lunas** hanya bisa kembali bila **setiap sub-bill Selesai di-void satu per satu**. Operator yang hanya membatalkan parent akan kehilangan stok bagian unpaid.
 - **Usulan**: SOP/panduan (void sub-bill dulu), atau alur "Batalkan Parent + Semua Sub-bill Belum Lunas" sekali klik dengan revert gabungan yang aman.
+- ✅ **KEPUTUSAN & SELESAI (v4.7 TO DO 18.8/A9)**: **SOP void satu per satu** — void parent beranak split / sub-bill memunculkan toast peringatan jelas di Transactions.tsx ("stok bagian belum lunas hanya kembali bila setiap sub-bill Selesai di-void satu per satu"). Alur sekali-klik dengan revert gabungan TIDAK dibuat (risiko double-revert & fabrikasi data) — dicatat sebagai batasan desain; SOP di-applyStockEffects + terdokumentasi.
 
 ### A10 — Tiket dapur bisa hilang saat resume pending item tidak berubah
 - **Lokasi**: `POS.tsx` (default `skipKitchenPrint = !!currentPendingTx && !pendingItemsChanged`).
 - **Fakta**: anti-tiket-dobel membuat tiket dapur **tidak dicetak ulang** saat finalize resume dengan item sama — benar **bila** tiket sudah keluar saat Simpan Pending. Tapi bila printer dapur **gagal/offline saat Simpan Pending** (dan retry queue juga gagal), tiket tidak pernah sampai dapur dan tidak dicetak ulang saat bayar.
-- **Usulan**: catat status cetak tiket di pending (mis. `kitchenTicketPrintedAt`); saat resume dengan item sama, kalau tiket belum pernah tercetak → default ON.
+- ✅ **SELESAI (v4.7 TO DO 18.8/A10)**: engine men-stamp **`kitchenTicketPrintedAt`** pada transaksi HANYA bila tiket dapur **benar-benar sukses** dicetak saat Simpan Pending (`didKitchenPrintSucceed` di `triggerPostCommitTasks`; printer gagal → tidak di-stamp). Resume memakai fakta itu via helper murni `shouldSkipKitchenPrintAtResume` (`src/utils/kitchenTicket.ts`): item berubah → cetak ulang; item sama & sudah cetak → skip (anti dobel); item sama & belum pernah cetak (printer gagal) → **cetak ulang** — tiket tidak hilang diam-diam. Kolom `kitchen_ticket_printed_at` + Migration 30 (self-heal DB lama) + mapping `syncTransaction`/`syncTransactionMeta` (lintas device). Split dari pending tetap tidak mencetak tiket (target 'cashier'). Test **566/566**.
 
 ---
 
 ## 🟢 C. Temuan kecil / kosmetik
 
 - **A11** — `validateStockAvailability` & `deductStock` melewati id bahan yang sudah tidak ada di inventory (`if (!inv) continue` / `if (item && amount > 0)`): resep dengan id bahan yang sudah dihapus tidak memberi peringatan apa pun. Usulan: tambah warning "bahan {id} tidak ditemukan" di validasi.
+  - ✅ **SELESAI (v4.7 TO DO 18.8/A11)**: `InventoryEngine.validateStockAvailability` kini melaporkan bahan yang direferensikan resep tapi **sudah dihapus** sebagai warning `missing: true` (`ingredientName` = id, `available: 0`) — checkout terblokir dengan peringatan (bisa "Lanjutkan Tetap", perilaku sama dengan stok kurang). Modal peringatan stok POS menampilkan pesan khusus "Bahan tidak ditemukan (ID: …) — resep memakai bahan ini tapi sudah dihapus dari Inventaris". +2 test (`stockCheck.test.ts`).
 - **A12** — `revertStock` me-reset `lastNegativeStockAlerts` untuk revert apa pun (tidak hanya yang memperbaiki item negatif) → banner hilang lebih cepat. Kosmetik.
+  - ✅ **SELESAI (v4.7 TO DO 18.8/A12)**: `revertStock` kini **memfilter** alert: item yang MASIH negatif pasca-revert dipertahankan (stok terbaru); alert hanya hilang bila revert benar-benar mengeluarkan item dari negatif. Revert item lain yang tidak relevan tidak lagi menghapus peringatan. +3 test (`stockNegativeAlert.test.ts`).
 - **A13** — Demo tidak punya jalur **pembuatan** (hanya transisi status Selesai→Demo). Bila produk ingin tombol "Catat Transaksi Demo" dari POS, belum ada. Keputusan produk.
+  - ✅ **SELESAI (v4.7 TO DO 18.8/A13 — keputusan produk: dibuat)**: tombol **"Catat sebagai Demo (tidak memotong stok)"** di modal checkout POS → `overrideTxStatus: 'Demo'` + `suppressAutoPrint`. Engine: demo **tidak memotong stok** (bukan penjualan nyata), **queueNumber = 0** (tidak konsumsi nomor antrean RPC; Demo dikecualikan hitungan/laporan), tidak mencetak struk/tiket dapur, tidak merekam kunjungan/promo/loyalty. Riwayat Transaksi menampilkan label **DEMO** (bukan #0) & bisa dicari "demo"; demo hasil konversi Selesai→Demo tetap memakai nomor aslinya. Bila demo diubah ke Selesai, `applyStatusStockEffects` men-deduct stok + merekam kunjungan (perilaku 8.1 yang sudah ada). +3 test (`demoTransaction.test.ts`).
 
 ---
 
@@ -151,7 +158,7 @@
 
 ### E7 — Promo usage & Loyalty (🟢/🟠 minor)
 - `incrementUsage(promoId, customerId)` & `recordVisit`/poin loyalty **tanpa guard race** → dua kasir memakai voucher yang sama hampir bersamaan bisa **double-increment** (usage limit per pelanggan terlewati). Dampak kecil (nominal promo), tapi untuk voucher berbatas 1× per orang bisa lolos 2×.
-- **Usulan**: untuk promo berbatas per pelanggan, cek usage dari store **saat checkout** (bukan hanya dari render) + catat usage dengan id unik (upsert anti-duplikat).
+- ✅ **SELESAI (v4.7 TO DO 18.8/E7)**: (1) **`reservePromoUsage(id, customerId, usageKey)`** di promoStore — cek batas (global & per pelanggan) dari **STORE saat commit** (bukan salinan render) + naikkan **atomik** dalam satu functional `set` (dua panggilan berurutan di device sama tidak bisa lolos ganda) + **ledger `usageKeys` id unik transaksi** → replay/re-commit transaksi yang sama (idempotentReplay) TIDAK menaikkan usage dua kali (sebelumnya `incrementUsage` jalan lagi saat replay → voucher berbatas 1× bisa terpakai 2×). (2) **Replay guard efek samping** di POS finalize: `recordVisit`/`deductLoyaltyPoints` (dan usage promo) kini hanya jalan bila `!result.idempotentReplay` — sebelumnya replay double-click mencatat **kunjungan ganda + poin loyalty terpotong 2×**. (3) **Merge ledger lintas device**: `loadFromCloud` menggabungkan `usageKeys` UNION (monotonik — key yang tercatat di mana pun adalah pemakaian nyata), bukan ditimpa last-write-wins. POS & SplitBillModal memakai `reservePromoUsage(subTx.id)` + toast peringatan bila batas tercapai (transaksi tetap diproses). **Residual terdokumentasi**: dua device OFFLINE memakai voucher sama hampir bersamaan tetap bisa lolos batas (sync promo LWW per record) — proteksi penuh lintas device butuh RPC counter (pola 18.2); kunjungan/loyalty lintas device juga LWW.
 
 ---
 
@@ -160,7 +167,7 @@
 2. **E1** (nomor antrean duplikat) — alokasi range per device atau verifikasi+retry saat insert.
 3. **E3** (shift & expected cash) — 1 shift aktif per outlet + expected cash dari data tersinkron.
 4. **A4** (double-refund), **A6** (signature cart), **E4** (reserve split per-device → dokumentasi/UI warning).
-5. **A7/A8/A9/A10** (konsistensi split pending & tiket) → **A1–A3** (pembersihan) → **E7** (promo race).
+5. **A7/A8/A9/A10** (konsistensi split pending & tiket) → **A1–A3** (pembersihan) → **E7** (promo race) ✅ SELESAI.
 
 ---
 

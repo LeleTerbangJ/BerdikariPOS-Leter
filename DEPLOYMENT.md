@@ -74,7 +74,7 @@ Vercel otomatis detect push ke `main` dan re-deploy dalam 1–2 menit. Tidak per
 
 ### Sebelum merge ke produksi, pastikan:
 - `npx tsc --noEmit` → 0 error
-- `npx vitest run` → semua test lolos (saat ini **434/434** — 41 file)
+- `npx vitest run` → semua test lolos (saat ini **588/588** — 56 file)
 - `npm run build` → sukses
 - Perubahan database (jika ada) sudah dijalankan di Supabase SQL Editor — lihat §4
 
@@ -137,7 +137,7 @@ Setiap klien (toko) yang membeli aplikasi ini perlu:
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` (v4.7) — selesai.
 > Untuk **meng-upgrade database yang sudah ada** ke v4.7, jalankan seluruh blok berikut di Supabase SQL Editor. Aman dijalankan berulang (`IF NOT EXISTS` / DO block idempoten).
-> **v4.7 menambah lima hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), (b) butir 9 — kolom Refund transaksi (WAJIB bila memakai fitur Refund/Retur), (c) butir 10 — kolom `auto_send_digital_receipt` di `settings` (WAJIB bila memakai fitur Struk Digital / auto-kirim WA), (d) butir 11 — kolom Promo & Loyalty (WAJIB bila memakai fitur Promo/Loyalty), dan (e) §4b — bucket Storage untuk Auto Backup cloud (opsional).
+> **v4.7 menambah tujuh hal**: (a) butir 8 — kolom otorisasi opname (WAJIB untuk semua DB yang memakai Stock Opname), (b) butir 9 — kolom Refund transaksi (WAJIB bila memakai fitur Refund/Retur), (c) butir 10 — kolom `auto_send_digital_receipt` di `settings` (WAJIB bila memakai fitur Struk Digital / auto-kirim WA), (d) butir 11 — kolom Promo & Loyalty (WAJIB bila memakai fitur Promo/Loyalty), (e) **butir 12–15 — RPC atomik stok, counter nomor antrean, `updated_at` inventory, `kitchen_ticket_printed_at` (WAJIB — proteksi 2 kasir & status tiket dapur, Prioritas 18)**, dan (f) §4b — bucket Storage untuk Auto Backup cloud (opsional).
 
 ```sql
 -- ============================================================
@@ -269,6 +269,68 @@ DO $$ DECLARE cname TEXT; BEGIN
   IF cname IS NOT NULL THEN EXECUTE format('ALTER TABLE promos DROP CONSTRAINT %I', cname); END IF;
 END $$;
 ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage', 'fixed', 'bogo'));
+
+-- ============================================================
+-- 12. ⚠️ v4.7 WAJIB (Prioritas 18) — RPC atomik stok (Migration 27) — proteksi oversell 2 kasir
+-- ============================================================
+-- deduksi stok berbasis DELTA dengan guard `stock >= -p_delta` di level database — dua kasir
+-- yang memotong bahan sama bersamaan, yang kedua ditolak (bukan stok negatif diam-diam).
+CREATE OR REPLACE FUNCTION adjust_inventory_stock(p_id TEXT, p_delta FLOAT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_stock FLOAT;
+BEGIN
+  SELECT stock INTO v_stock FROM inventory WHERE id = p_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'stock', NULL::FLOAT, 'reason', 'not_found');
+  END IF;
+  IF p_delta < 0 AND v_stock < -p_delta THEN
+    RETURN jsonb_build_object('ok', false, 'stock', v_stock, 'reason', 'insufficient');
+  END IF;
+  UPDATE inventory SET stock = v_stock + p_delta, updated_at = now() WHERE id = p_id;
+  RETURN jsonb_build_object('ok', true, 'stock', v_stock + p_delta, 'reason', 'ok');
+END;
+$$;
+
+-- ============================================================
+-- 13. ⚠️ v4.7 WAJIB (Prioritas 18) — counter nomor antrean atomik (Migration 28)
+-- ============================================================
+-- alokasi nomor antrean via row-lock upsert — dua kasir online mustahil mendapat #N sama.
+CREATE TABLE IF NOT EXISTS queue_counters (
+  outlet_id TEXT NOT NULL DEFAULT 'default',
+  date TEXT NOT NULL,
+  last_number INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (outlet_id, date)
+);
+ALTER TABLE queue_counters ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all for anon" ON queue_counters FOR ALL USING (true) WITH CHECK (true);
+CREATE OR REPLACE FUNCTION allocate_queue_number(p_date TEXT, p_outlet TEXT DEFAULT 'default', p_min INT DEFAULT 0)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_next INT;
+BEGIN
+  INSERT INTO queue_counters (outlet_id, date, last_number)
+  VALUES (p_outlet, p_date, GREATEST(0, p_min) + 1)
+  ON CONFLICT (outlet_id, date)
+  DO UPDATE SET last_number = GREATEST(queue_counters.last_number + 1, p_min + 1)
+  RETURNING last_number INTO v_next;
+  RETURN v_next;
+END;
+$$;
+
+-- ============================================================
+-- 14. ⚠️ v4.7 WAJIB (Prioritas 18 — A5) — kolom updated_at inventory (Migration 29, last-write-wins)
+-- ============================================================
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+-- ============================================================
+-- 15. ⚠️ v4.7 WAJIB (Prioritas 18 — A10) — kolom status cetak tiket dapur (Migration 30)
+-- ============================================================
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;
 ```
 
 > [!NOTE] **Self-healing di sisi app**
@@ -279,6 +341,7 @@ ALTER TABLE promos ADD CONSTRAINT promos_type_check CHECK (type IN ('percentage'
 > - **Migration 20 (v4.7)** mendeteksi kolom refund yang kurang di `transactions` (refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name) dan mencetak SQL butir 9.
 > - **Migration 21 (v4.7)** mendeteksi kolom `auto_send_digital_receipt` yang kurang di `settings` dan mencetak SQL butir 10.
 > - **Migration 22 (v4.7)** mendeteksi kolom `promo_name`/`promo_amount` yang kurang di `transactions`; **Migration 23** — `stackable` di `promos`; **Migration 24** — `min_qty`/`bogo_config` di `promos` (+ relaksasi CHECK `promos.type` agar menerima `'bogo'`); **Migration 25** — `usage_limit_per_customer`/`usage_by_customer` di `promos`; **Migration 26** — `loyalty_points` di `customers`. Semuanya mencetak SQL butir 11.
+> - **Migration 27 (v4.7 — Prioritas 18)** mendeteksi RPC `adjust_inventory_stock` belum ada (probe PGRST202) dan mencetak SQL butir 12 — proteksi oversell stok 2 kasir. **Migration 28** — tabel `queue_counters` + RPC `allocate_queue_number` belum ada → cetak SQL butir 13 (nomor antrean atomik). **Migration 29** — kolom `updated_at` di `inventory` kurang → cetak SQL butir 14 (last-write-wins stok). **Migration 30** — kolom `kitchen_ticket_printed_at` di `transactions` kurang → cetak SQL butir 15 (status cetak tiket dapur).
 > Jadi jika ada yang terlewat, console browser akan menunjukkan persis apa yang perlu dijalankan.
 
 ### 4b. (v4.7) Supabase Storage — bucket untuk Auto Backup cloud
@@ -388,9 +451,10 @@ Butuh bantuan? Hubungi: [WA Anda]
 - [x] **Mode Offline andal (v4.7 — Prioritas 13, O-1 s.d. O-10)** — antrean offline di IndexedDB (payload besar aman, migrasi otomatis dari localStorage), retry berkala 30 dtk + visibilitychange (error jaringan sementara tidak bakar retries), failed-ops list (badge merah + modal Coba Lagi/Hapus + audit log, tidak drop diam-diam), banner global offline/belum-sync di semua device, badge "Belum Sync" per transaksi, banner cold start perangkat baru, deteksi konflik stok lintas device, tombstone cap 1000, PWA navigateFallback + NetworkFirst, urutan flush kronologis
 - [x] **Integrasi Printer Thermal andal (v4.7 — Prioritas 14, 14.1 s.d. 14.6)** — silent re-pair via `getDevices()` pasca-refresh + state sesi + banner reconnect 1-klik "Sambungkan Ulang", tidak buka picker otomatis saat checkout, fallback browser eksplisit per printer (`cashierFallbackBrowser`/`kp.fallbackBrowser`) dengan status error bila nonaktif, print queue FIFO + retry 1×, status koneksi lintas tab (BroadcastChannel + indikator hijau/merah di KDS), alert→toast + satu sumber kebenaran device identity (`getPrinterDeviceId/Name`)
 - [x] **UX Kasir & Validasi (v4.7 — Prioritas 15, 15.1 s.d. 15.4)** — harga add-on divalidasi > 0 (form memblokir simpan + toast; import CSV drop invalid + laporan, JSON rusak tidak menggagalkan import), daftar Pending Payment jadi carousel horizontal (panah/dot/counter/geser mobile — tidak memakan layar), opsi cetak per-transaksi **dua toggle independen** — **"Cetak struk kasir"** (`skipReceiptPrint`) & **"Cetak tiket dapur"** (`skipKitchenPrint`): skip struk saja → tiket dapur **tetap keluar di awal**; skip keduanya → tanpa cetakan; **anti tiket DOBEL otomatis** saat resume pending (tiket dapur default OFF bila item tidak berubah); berlaku di checkout normal, Split Bill, & resume pending), header aksi bahan baku hanya di tab Bahan Baku (tab Stock Opname bersih)
-- [x] Validasi otomatis: tsc 0 error, **434/434 test** (41 file), build produksi sukses (diverifikasi v4.7)
+- [x] **Skenario 2 Kasir & Offline (v4.7 — Prioritas 18, 18.1 s.d. 18.8)** — RPC atomik `adjust_inventory_stock` (Migration 27: delta + guard `stock >= -delta` — dua kasir tidak bisa oversell; koreksi stok + peringatan saat ditolak), nomor antrean atomik `queue_counters` + `allocate_queue_number` (Migration 28; fallback offline max+1 + badge "#N duplikat"), satu shift aktif per outlet (`resumeExistingShift` + restore shift terbuka paling awal), expected cash tutup shift dari semua transaksi Selesai tersinkron + peringatan belum-sync, banner **"Laporan belum final — N transaksi belum sinkron"** di Laporan & Dashboard (18.6), fitur **"Catat sebagai Demo"** di POS (tanpa potong stok/antrean/cetak), promo usage anti-race (`reservePromoUsage` + ledger id unik + replay guard efek samping), tiket dapur tidak hilang saat resume pending (`kitchenTicketPrintedAt` — Migration 30), warning bahan resep yang dihapus, alert stok negatif presisi, fix tanggal lokal UTC-vs-pagi-buta, `updated_at` inventory (Migration 29, last-write-wins A5)
+- [x] Validasi otomatis: tsc 0 error, **588/588 test** (56 file), build produksi sukses (diverifikasi v4.7)
 
-> **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./testing/TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./testing/TESTING-DEMO-SALES.md)**. Panduan verifikasi mode offline (antrean IndexedDB, retry 30 dtk, failed-ops list, badge "Belum Sync", konflik stok, PWA offline): **[`TESTING-OFFLINE.md`](./testing/TESTING-OFFLINE.md)**. Panduan verifikasi printer thermal & split printer (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue, indikator KDS): **[`TESTING-PRINTER.md`](./testing/TESTING-PRINTER.md)**. Panduan verifikasi opsi cetak per-transaksi **"Cetak Tanpa Struk"** (dua toggle independen struk & tiket dapur — skip struk saja atau tanpa cetakan; anti tiket dobel saat resume pending): **[`TESTING-CETAK-TANPA-STRUK.md`](./testing/TESTING-CETAK-TANPA-STRUK.md)**. Panduan verifikasi **Stock Opname** (otorisasi PIN Manager, alasan wajib pasca-PIN, clamp stok negatif, mode blind): **[`TESTING-OPNAME.md`](./testing/TESTING-OPNAME.md)**. Panduan verifikasi **Struk Digital** (kirim WA/email, auto-kirim pasca-checkout, sync lintas device): **[`TESTING-STRUK-DIGITAL.md`](./testing/TESTING-STRUK-DIGITAL.md)**. Panduan verifikasi fitur **"Semua Dapur"** (menu dicetak ke semua printer dapur aktif — atur di Edit Menu, cek tiket di semua target, kontrol target spesifik, konsistensi split/pending/import): **[`TESTING-SEMUA-DAPUR.md`](./testing/TESTING-SEMUA-DAPUR.md)**.
+> **Panduan tes terperinci** (langkah + hasil yang diharapkan untuk setiap item di bawah): **[`TESTING-PRADEPLOY.md`](./testing/TESTING-PRADEPLOY.md)**. Panduan demo penjualan cepat untuk tim sales (alur POS: promo BOGO, split bill, pending, struk digital): **[`TESTING-DEMO-SALES.md`](./testing/TESTING-DEMO-SALES.md)**. Panduan verifikasi mode offline (antrean IndexedDB, retry 30 dtk, failed-ops list, badge "Belum Sync", konflik stok, PWA offline): **[`TESTING-OFFLINE.md`](./testing/TESTING-OFFLINE.md)**. Panduan verifikasi printer thermal & split printer (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue, indikator KDS): **[`TESTING-PRINTER.md`](./testing/TESTING-PRINTER.md)**. Panduan verifikasi opsi cetak per-transaksi **"Cetak Tanpa Struk"** (dua toggle independen struk & tiket dapur — skip struk saja atau tanpa cetakan; anti tiket dobel saat resume pending): **[`TESTING-CETAK-TANPA-STRUK.md`](./testing/TESTING-CETAK-TANPA-STRUK.md)**. Panduan verifikasi **Stock Opname** (otorisasi PIN Manager, alasan wajib pasca-PIN, clamp stok negatif, mode blind): **[`TESTING-OPNAME.md`](./testing/TESTING-OPNAME.md)**. Panduan verifikasi **Struk Digital** (kirim WA/email, auto-kirim pasca-checkout, sync lintas device): **[`TESTING-STRUK-DIGITAL.md`](./testing/TESTING-STRUK-DIGITAL.md)**. Panduan verifikasi fitur **"Semua Dapur"** (menu dicetak ke semua printer dapur aktif — atur di Edit Menu, cek tiket di semua target, kontrol target spesifik, konsistensi split/pending/import): **[`TESTING-SEMUA-DAPUR.md`](./testing/TESTING-SEMUA-DAPUR.md)**. Panduan verifikasi **skenario 2 kasir & offline** (RPC stok atomik anti-oversell, nomor antrean unik + badge duplikat, satu shift per outlet + expected cash tersinkron, banner "Laporan belum final", Catat Demo tanpa potong stok): **[`TESTING-2KASIR.md`](./testing/TESTING-2KASIR.md)**.
 
 ### 🔲 Sebelum Serah Terima ke Klien
 - [ ] Ganti password default semua akun
@@ -410,7 +474,7 @@ Riwayat lengkap setiap rilis — **fitur baru, perbaikan bug, dan langkah SQL ya
 
 | Versi | Ringkasan |
 |---|---|
-| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)**, **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)**, **Mode Offline andal (queue IndexedDB, retry berkala, failed-ops list, badge "Belum Sync", deteksi konflik stok, PWA offline)**, **Integrasi Printer Thermal andal (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab)** & **UX Kasir (validasi harga add-on, daftar pending jadi carousel, opsi cetak tanpa struk di semua jalur pembayaran, header Inventaris rapi)** |
+| **v4.7** | Stabilitas stok, Stock Opname aman (mode blind + otorisasi ganda + alasan wajib), Backup & Restore lengkap + Auto Backup cloud, **Laporan PPN**, **Refund penuh**, **Struk Digital (WA/email + auto-kirim)**, **Promo/Loyalty lengkap (laporan performa, stacking/eksklusif, BOGO, batas per pelanggan, promo di struk, poin loyalty)**, **Mode Offline andal (queue IndexedDB, retry berkala, failed-ops list, badge "Belum Sync", deteksi konflik stok, PWA offline)**, **Integrasi Printer Thermal andal (auto re-pair pasca-refresh, fallback browser eksplisit per printer, print queue FIFO, indikator KDS lintas tab)**, **UX Kasir (validasi harga add-on, daftar pending jadi carousel, opsi cetak tanpa struk, header Inventaris rapi)** & **Skenario 2 Kasir & Offline (RPC atomik stok & nomor antrean — Migration 27–28, satu shift aktif, expected cash tersinkron, banner "Laporan belum final", fitur Catat Demo, promo anti-race, tiket dapur anti-hilang — Migration 29–30)** |
 | **v4.6** | Fix Rekap Kas (Kas Masuk/Keluar) — RLS policy + offline queue + badge "Belum Sync" |
 | **v4.5** | Penyimpanan IndexedDB (kuota lokal tak terbatas) + pemantapan Pending/Split |
 | **v4.4** | Pending Payment (Simpan & Gantung) & Split Bill |
