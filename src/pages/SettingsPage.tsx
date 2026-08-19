@@ -905,6 +905,21 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+            <label className="label font-medium text-sm">Pencetakan Pesanan Gantung (Pending Payment)</label>
+            <p className="text-xs text-slate-500 mb-2">Pilih perilaku pencetakan saat pesanan disimpan ke Pesanan Gantung di POS</p>
+            <select
+              value={settings.pendingPrintOption || 'dapur_only'}
+              onChange={(e) => updateSettings({ pendingPrintOption: e.target.value as 'dapur_only' | 'ask' | 'dapur_and_cashier' | 'none' })}
+              className="input"
+            >
+              <option value="dapur_only">🍳 Cetak Tiket Dapur Saja (Tanpa Struk Kasir)</option>
+              <option value="ask">❓ Tanyakan Pilihan Cetak saat Simpan Pending</option>
+              <option value="dapur_and_cashier">🖨️ Cetak Struk Kasir & Tiket Dapur</option>
+              <option value="none">🚫 Jangan Cetak Apapun</option>
+            </select>
+          </div>
+
           {settings.printerType === 'bluetooth' && (
             <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-xl text-sm space-y-3 border border-amber-200 dark:border-amber-900/50">
               <div>

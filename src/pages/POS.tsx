@@ -58,6 +58,7 @@ import {
   UserPlus,
   FlaskConical,
   Tag,
+  Printer,
 } from 'lucide-react';
 
 // v4.7 UX: pemilih pelanggan yang bisa dicari (nama / HP / email) — hemat waktu kasir
@@ -166,6 +167,7 @@ export default function POS() {
   // Pending & Split Bill Modals State
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [showSplitModal, setShowSplitModal] = useState(false);
+  const [showPendingPrintModal, setShowPendingPrintModal] = useState(false);
   const [currentPendingTx, setCurrentPendingTx] = useState<Transaction | null>(null);
   // v4.7 TO DO 21.3: flag rekonsiliasi split pending — jika true, POS.tsx skip reservedDeductions
   // saat finalisasi pending (stok sudah disesuaikan oleh SplitBillModal → anti double-adjust).
@@ -196,11 +198,37 @@ export default function POS() {
   }, [cart.items, currentPendingTx]);
 
   // Save Cart as Pending Transaction
-  const handleSavePending = async () => {
+  const handleSavePending = async (printOverride?: { skipReceiptPrint?: boolean; skipKitchenPrint?: boolean }) => {
     if (cart.items.length === 0) return;
     if (orderType === 'Dine In' && settings.tableFeaturesEnabled && !tableNumber) {
       addToast('Silakan pilih nomor meja untuk menyimpan pesanan gantung!', 'warning');
       return;
+    }
+
+    const pendingOption = settings.pendingPrintOption || 'dapur_only';
+
+    // Jika opsi diatur ke 'ask' dan belum ada override pilihan dari modal
+    if (pendingOption === 'ask' && !printOverride) {
+      setShowPendingPrintModal(true);
+      return;
+    }
+
+    // Tentukan flag pencetakan berdasarkan setting atau override
+    let skipReceiptPrint = false;
+    let skipKitchenPrint = false;
+
+    if (printOverride) {
+      skipReceiptPrint = !!printOverride.skipReceiptPrint;
+      skipKitchenPrint = !!printOverride.skipKitchenPrint;
+    } else if (pendingOption === 'dapur_only') {
+      skipReceiptPrint = true; // Struk kasir TIDAK dicetak langsung
+      skipKitchenPrint = false; // Tiket dapur dicetak
+    } else if (pendingOption === 'dapur_and_cashier') {
+      skipReceiptPrint = false;
+      skipKitchenPrint = false;
+    } else if (pendingOption === 'none') {
+      skipReceiptPrint = true;
+      skipKitchenPrint = true;
     }
 
     const subtotal = Math.round(cart.getSubtotal());
@@ -242,6 +270,8 @@ export default function POS() {
       settings,
       overrideTxStatus: 'Pending',
       pendingNotes: 'Pesanan Gantung POS',
+      skipReceiptPrint,
+      skipKitchenPrint,
       // v4.5 TO DO 5.5: rekam promo/voucher agar total resume konsisten lintas device
       appliedPromoId: appliedPromoId || undefined,
       voucherCode: voucherCode || undefined,
@@ -1917,7 +1947,7 @@ export default function POS() {
 
               <div className="flex gap-2 pt-1">
                 <button
-                  onClick={handleSavePending}
+                  onClick={() => handleSavePending()}
                   disabled={cart.items.length === 0}
                   className="btn-secondary flex-1 text-sm py-2.5 flex items-center justify-center gap-1.5"
                   title="Simpan ke pesanan gantung (Pending)"
@@ -2426,6 +2456,90 @@ export default function POS() {
         confirmText="Ya, Muat"
         variant="warning"
       />
+
+      {/* Modal Opsi Cetak Pesanan Pending (jika pendingPrintOption === 'ask') */}
+      <Modal
+        open={showPendingPrintModal}
+        onClose={() => setShowPendingPrintModal(false)}
+        title="🖨️ Opsi Cetak Pesanan Pending"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Pilih jenis pencetakan struk/tiket untuk pesanan gantung ini:
+          </p>
+
+          <div className="grid grid-cols-1 gap-2.5">
+            <button
+              onClick={() => {
+                setShowPendingPrintModal(false);
+                handleSavePending({ skipReceiptPrint: true, skipKitchenPrint: false });
+              }}
+              className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-100/60 dark:hover:bg-amber-900/40 text-left transition flex items-start gap-3 group"
+            >
+              <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 mt-0.5">
+                <UtensilsCrossed size={18} />
+              </div>
+              <div>
+                <div className="font-semibold text-sm text-slate-800 dark:text-slate-200 group-hover:text-amber-700 dark:group-hover:text-amber-300">
+                  Cetak Struk (Dapur) Saja
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Mencetak tiket pesanan ke printer dapur/bar. Struk kasir dilewati.
+                </div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowPendingPrintModal(false);
+                handleSavePending({ skipReceiptPrint: false, skipKitchenPrint: false });
+              }}
+              className="p-3.5 rounded-xl border border-brand-200 dark:border-brand-800/60 bg-brand-50/50 dark:bg-brand-950/20 hover:bg-brand-100/60 dark:hover:bg-brand-900/40 text-left transition flex items-start gap-3 group"
+            >
+              <div className="p-2 rounded-lg bg-brand-100 dark:bg-brand-900/60 text-brand-700 dark:text-brand-300 mt-0.5">
+                <Printer size={18} />
+              </div>
+              <div>
+                <div className="font-semibold text-sm text-slate-800 dark:text-slate-200 group-hover:text-brand-700 dark:group-hover:text-brand-300">
+                  Cetak Struk Sekarang (Kasir & Dapur)
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Mencetak Struk Kasir untuk konsumen dan tiket pesanan ke printer dapur.
+                </div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowPendingPrintModal(false);
+                handleSavePending({ skipReceiptPrint: true, skipKitchenPrint: true });
+              }}
+              className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition flex items-start gap-3 group"
+            >
+              <div className="p-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 mt-0.5">
+                <X size={18} />
+              </div>
+              <div>
+                <div className="font-semibold text-sm text-slate-800 dark:text-slate-200">
+                  Simpan Tanpa Cetak
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Simpan ke daftar Pesanan Gantung tanpa mencetak struk atau tiket dapur.
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={() => setShowPendingPrintModal(false)}
+              className="btn-secondary text-sm"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

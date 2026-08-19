@@ -179,4 +179,6 @@ export const seedSettings: AppSettings = {
   autoPrintKitchen: false,
   // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (default off)
   autoSendDigitalReceipt: false,
+  // v4.8: Default opsi cetak pesanan pending (dapur_only = cetak dapur saja, tanpa struk kasir)
+  pendingPrintOption: 'dapur_only',
 };
