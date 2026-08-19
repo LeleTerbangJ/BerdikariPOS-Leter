@@ -552,4 +552,28 @@ Dalam model multi-outlet, `stock` adalah kolom per outlet (per cabang). Maka ske
 
 ---
 
-*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `develop`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**).*
+### H — Audit Flow Pending + Tambah Item + Split Bill + KDS
+
+**Ringkasan**: Flow "Makan Dulu Bayar Nanti + Tambah Pesanan + Split Bill" sudah **didukung secara fungsional** (delta stok, rekonsiliasi, nomor antrean, finalize parent), tapi ada **5 temuan yang perlu diperbaiki** agar tidak terjadi tiket dapur dobel, rekonsiliasi ganda, dan kebingungan di KDS:
+
+**Temuan:**
+
+1. ✅ **Tiket Dapur Cetak Ulang Semua Item (21.1) — SELESAI**: `AtomicCheckoutParams` dapat `deltaKitchenItems`; engine cetak tiket HANYA item baru jika ada; POS.tsx hitung delta saat finalize pending dengan `pendingItemsChanged = true`. Test +4.
+
+2. ✅ **Tiket Dapur Dobel saat Split dari Pending (21.2) — SELESAI**: `SplitBillModal` set `skipSplitKitchen = !!parentTx` saat modal dibuka → split dari pending otomatis skip tiket dapur (anti dobel); split fresh tetap cetak.
+
+3. ✅ **Rekonsiliasi Ganda (21.3) — SELESAI**: `SplitBillModal` panggil `onReconcile?.()` setelah rekonsiliasi stok; `POS.tsx` track `pendingSplitReconciled` → jika true, `reservedDeductions = undefined` saat finalisasi (skip delta engine). Reset saat `onCompleteSplit`.
+
+4. ✅ **Indikator Visual Pending (21.4) — SELESAI**: Badge **"✓ Diupdate"** (biru) di kartu pending jika `updatedAt > date + 5 detik` — deteksi otomatis, tidak perlu field tambahan.
+
+5. ✅ **KDS: Tidak Ada Indikator "UPDATED" (21.5) — SELESAI**: `isUpdatedOrder()` deteksi via `updatedAt > date + 5 detik`; badge "🔄 Diupdate" + background biru di kartu; `isOverdue`/`getWaitingMinutes` pakai `updatedAt` untuk order update (timer restart); catatan "Pesanan diperbarui — periksa item baru" di bawah daftar item; label waktu "X mnt (sejak update)".
+
+**Yang Sudah Benar**: delta stok, rekonsiliasi idempoten, `shouldSkipKitchenPrintAtResume`, nomor antrean seragam, finalize parent, anti double deduction, filter KDS (hanya `Selesai`/`Pending` + hari ini + bukan split), clear KDS `lastKdsClearTime`.
+
+Rincian eksekusi: `TO DO.md` Prioritas 21.
+
+Baseline: **602/602 test hijau** (57 file), tsc 0 error. (+4 test `kitchenTicketPrint` — filtering deltaKitchenItems)
+
+---
+
+*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**).*

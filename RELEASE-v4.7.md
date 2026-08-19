@@ -1,6 +1,6 @@
 # 📣 BerdikariPOS v4.7 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal** dan **pengalaman kasir yang mulus**). Validasi: build produksi sukses, **598/598 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, dan **audit flow Pending + Split Bill yang aman**). Validasi: build produksi sukses, **602/602 tes otomatis lolos**.
 
 ---
 
@@ -112,6 +112,7 @@ Mode **blind** untuk Staf Gudang (tanpa bocor stok sistem), persetujuan selisih 
 - **Semua notifikasi kini memakai toast (Prioritas 20.2)** — 21 `alert()` diganti `addToast` di seluruh aplikasi (App/session, Audit Log, Rekap Kas, Katalog, Settings, Stock Opname).
 - **Semua konfirmasi memakai dialog kustom (Prioritas 20.3)** — 4 `window.confirm` terakhir (tutup shift selisih kas > 10%, void transaksi gantung, resume pending saat keranjang berisi, hapus user) diganti **ConfirmDialog** yang seragam; **tidak ada dialog browser native (`alert`/`confirm`) tersisa** di kode produksi.
 - **Filter tanggal custom tidak lagi melewatkan transaksi pagi buta (Prioritas 20.4)** — tanggal awal range custom kini dip-parse **lokal** (`'T00:00:00'`, bukan UTC tengah malam = 07:00 WIB) di Laporan & Riwayat Transaksi, sehingga transaksi 00:00–07:00 pada hari pertama tetap masuk laporan.
+- **Audit flow Pending + Tambah Item + Split Bill (Prioritas 21)** — tiket dapur saat finalisasi pending hanya mencetak item baru (delta); tiket dapur saat split dari pending otomatis skip; guard rekonsiliasi ganda mencegah stok di-adjust dua kali; badge "✓ Diupdate" di kartu Pending Payments; badge "🔄 Diupdate" + background biru di KDS + timer overdue restart.
 
 ---
 
@@ -226,7 +227,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **598/598 test lolos** (57 file — Prioritas 20: +10 test — `shiftStats` refund +5, `dateRange` filter tanggal custom lokal +5)
+- `npx vitest run` → **602/602 test lolos** (57 file — Prioritas 20: +10 test; **Prioritas 21: +4 test** — `kitchenTicketPrint` filtering deltaKitchenItems)
 - `npm run build` → **✅ BERHASIL (diverifikasi 18 Agt 2026, setelah seluruh Prioritas 18 tuntas)**: `✓ built in 16.61s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3622.00 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.7 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 

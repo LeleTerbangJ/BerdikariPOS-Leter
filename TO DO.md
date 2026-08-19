@@ -1312,6 +1312,81 @@
 
 ---
 
+## 🔴 PRIORITAS 21 — AUDIT FLOW PENDING + TAMBAH ITEM + SPLIT BILL (Analisa, v4.7)
+
+> **Sumber audit**: `src/pages/POS.tsx` (handleSavePending, handleResumePendingOrder, finalize), `src/components/SplitBillModal.tsx` (finalizeSplitParent, computePendingSplitReconcile), `src/utils/kitchenTicket.ts` (shouldSkipKitchenPrintAtResume), `src/lib/atomicTransactionEngine.ts` (delta stok).
+
+### ✅ 21.1 (🟠 SEDANG) — Tiket Dapur Cetak Ulang SEMUA Item Saat Finalisasi Pending yang Diedit
+
+- **Kondisi**: Kasir resume pending → tambah 1 item → bayar (finalisasi)
+- **Masalah**: `overrideKitchenStatus: pendingItemsChanged ? 'Waiting' : ...` → tiket dapur dicetak ULANG untuk SEMUA item (4 item), bukan hanya item baru (1 item)
+- **Dampak**: Dapur menerima tiket dobel untuk 3 item yang sudah selesai/diantar
+- **Fix diterapkan (v4.7)**: 
+  - `AtomicCheckoutParams` dapat `deltaKitchenItems?: CartItem[]`
+  - `atomicTransactionEngine.ts`: jika `deltaKitchenItems` ada, cetak tiket HANYA item baru (`receiptData.items = deltaKitchenItems`)
+  - `POS.tsx`: hitung `deltaKitchenItems = cart.items.filter(ci => !parentTx.items.some(pi => pi.lineId === ci.lineId))` saat finalisasi pending dengan `pendingItemsChanged = true`
+  - Test `kitchenTicketPrint.test.ts`: 4 test case baru (filtering item baru, tanpa parentTx, items sama, qty berubah)
+- **Status**: ✅ SELESAI — tsc 0 error, 602/602 test (57 file)
+
+### ✅ 21.2 (🟠 SEDANG) — Tiket Dapur Dobel Saat Split dari Pending
+
+- **Kondisi**: Split bill dari pending yang sudah ditambah item
+- **Masalah**: `skipSplitKitchen` default = false → tiket dapur dicetak lagi untuk semua item di sub-bill (meski sudah tercetak saat Simpan Pending)
+- **Dampak**: Dapur menerima tiket dobel untuk item yang sama
+- **Fix diterapkan (v4.7)**:
+  - `SplitBillModal.tsx`: `setSkipSplitKitchen(!!parentTx)` saat modal dibuka konteks baru — split dari pending otomatis skip tiket dapur
+  - Split fresh tetap cetak tiket dapur (`parentTx = null → skipSplitKitchen = false`)
+- **Status**: ✅ SELESAI — tsc 0 error, 602/602 test (57 file)
+
+### ✅ 21.3 (🟡 SEDANG) — Rekonsiliasi Ganda: Pending + Split
+
+- **Kondisi**: Kasir resume pending → tambah item → buka Split → bayar sub-bill pertama (rekonsiliasi jalan) → tutup Split → bayar normal (finalisasi pending)
+- **Masalah**: Rekonsiliasi stok bisa jalan 2x (SplitBillModal line 368 + POS.tsx line 816-822)
+- **Dampak**: Toast误导 ("stok disesuaikan" 2x), meski idempoten tidak merusak data
+- **Fix diterapkan (v4.7)**: 
+  - `SplitBillModalProps` dapat `onReconcile?: () => void`
+  - `SplitBillModal`: panggil `onReconcile?.()` setelah rekonsiliasi stok selesai
+  - `POS.tsx`: state `pendingSplitReconciled` — jika true, `reservedDeductions = undefined` saat finalisasi pending (skip delta engine)
+  - Reset `pendingSplitReconciled = false` saat `onCompleteSplit` (selesai split)
+- **Status**: ✅ SELESAI — tsc 0 error, 602/602 test (57 file)
+
+### ✅ 21.4 (🟢 MINOR) — Indikator Visual Pending yang Diedit
+
+- **Kondisi**: Tidak ada badge/indikator di PendingPaymentsModal yang menunjukkan "ada item baru ditambahkan"
+- **Dampak**: Kasir mungkin lupa bahwa pesanan sudah diedit sebelumnya
+- **Fix diterapkan (v4.7)**:
+  - Badge **"✓ Diupdate"** (biru) muncul di kartu pending jika `updatedAt > date + 5 detik` — deteksi otomatis tanpa field tambahan
+  - Reset saat `onCompleteSplit` agar tidak tampil di sesi berikutnya
+- **Status**: ✅ SELESAI — tsc 0 error, 602/602 test (57 file)
+
+### ✅ 21.5 (🟠 SEDANG) — KDS: Tidak Ada Indikator "UPDATED" Saat Pesanan Selesai Ditambah Item
+
+- **Sumber**: `src/pages/Kitchen.tsx` (filter, `isOverdue`, rendering kartu), `src/pages/POS.tsx` (overrideKitchenStatus)
+- **Kondisi**: Pesanan sudah "Done" di KDS → pelanggan tambah item → `kitchenStatus` reset ke `Waiting` → pesanan MUNCUL LAGI di kolom "Antrean Menunggu" **tanpa badge/tanda bahwa ini UPDATE, bukan pesanan baru**
+- **Masalah 1 — Tidak ada indikator UPDATED**: Dapur tidak tahu pesanan ini sudah pernah diproses → bisa proses ulang item lama yang sudah diantar
+- **Masalah 2 — Semua item ditampilkan tanpa highlight**: KDS menampilkan SEMUA item (3 lama + 1 baru) tanpa menandai mana yang BARU → dapur bingung harus proses yang mana
+- **Masalah 3 — Waktu antrean salah**: `isOverdue` dihitung dari `order.date` (waktu awal pesanan), bukan waktu update → pesanan bisa langsung muncul "overdue" meski baru diupdate beberapa detik lalu
+- **Masalah 4 — Clear KDS tidak konsisten**: Jika kasir sudah clear pesanan lama (`lastKdsClearTime`), pesanan update muncul lagi di "Waiting" tanpa notifikasi "Pesanan diperbarui"
+- **Dampak**: Dapur kebingungan, proses ulang item lama, atau mengabaikan item baru karena mengira itu pesanan lama
+- **Fix diterapkan (v4.7)**:
+  - (a) **Badge "🔄 Diupdate"** (biru) di kartu KDS saat `isUpdatedOrder()` (deteksi via `updatedAt > date + 5 detik`) — menandai pesanan yang di-update
+  - (b) **Background kartu biru** untuk pesanan update (`bg-blue-50/60 border-blue-300`) — visual distinction dari pesanan baru
+  - (c) **`isOverdue` & `getWaitingMinutes` dari `updatedAt`** untuk pesanan update — timer restart saat order muncul kembali di KDS
+  - (d) **Catatan "🔄 Pesanan diperbarui — periksa item baru di atas"** di bawah daftar item
+  - (e) **Label waktu "X mnt (sejak update)"** untuk pesanan update yang belum overdue
+- **Status**: ✅ SELESAI — tsc 0 error, 602/602 test (57 file)
+
+### ✅ Yang Sudah Benar (jangan diubah)
+
+- **Delta stok pending**: `calculateItemDeductions` membandingkan parentTx.items vs cartItems → hanya selisih yang dipotong/dikembalikan
+- **Rekonsiliasi split pending**: `computePendingSplitReconcile` adjust stok SEKALI saat sub-bill pertama dibayar, idempoten via `reconciledPendingSplitRef`
+- **Tiket dapur resume**: `shouldSkipKitchenPrintAtResume`: items berubah → cetak ulang; items sama & sudah cetak → skip; items sama & belum cetak → cetak
+- **Nomor antrean split pending**: `resolveSplitQueueNumber(parentTx, ...)` pakai nomor parent (seragam)
+- **Finalize parent**: `finalizeSplitParent` update status parent → 'Selesai' + paymentMethod mayoritas
+- **Anti double deduction**: `reconciledPendingSplitRef` idempoten — rekonsiliasi hanya sekali per parent
+
+---
+
 ## 🎯 Urutan Eksekusi yang Disarankan
 
 1. **DB layer dulu** (1.2) — tanpa ini, fitur lain tidak bisa sync lintas device.

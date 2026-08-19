@@ -161,7 +161,15 @@ export default function PendingPaymentsModal({
                       </div>
 
                       <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-700/50">
-                        <span className="text-slate-400">{tx.items.length} Menu</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-400">{tx.items.length} Menu</span>
+                          {/* v4.7 TO DO 21.4: badge 'Diupdate' jika pending sudah diedit (updatedAt > date + 5 detik) */}
+                          {tx.updatedAt && new Date(tx.updatedAt).getTime() - new Date(tx.date).getTime() > 5000 && (
+                            <span className="text-[9px] bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 font-semibold px-1.5 py-0.5 rounded-full">
+                              ✓ Diupdate
+                            </span>
+                          )}
+                        </div>
                         <span className="font-bold text-slate-900 dark:text-slate-100">
                           {formatRupiah(tx.totalAmount)}
                         </span>

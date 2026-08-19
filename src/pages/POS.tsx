@@ -166,6 +166,9 @@ export default function POS() {
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [currentPendingTx, setCurrentPendingTx] = useState<Transaction | null>(null);
+  // v4.7 TO DO 21.3: flag rekonsiliasi split pending — jika true, POS.tsx skip reservedDeductions
+  // saat finalisasi pending (stok sudah disesuaikan oleh SplitBillModal → anti double-adjust).
+  const [pendingSplitReconciled, setPendingSplitReconciled] = useState(false);
 
   // v4.1 TO DO 3.1: selector primitive yang stabil — hasil number, re-render hanya saat count berubah
   // (s.transactions + useMemo malah re-render pada tiap mutasi transaksi, termasuk kitchenStatus KDS).
@@ -813,13 +816,23 @@ export default function POS() {
 
     // v4.1 FIX (TO DO 1.3 & 1.4): finalisasi pesanan gantung — re-commit dengan ID sama,
     // pertahankan nomor antrean & status dapur, deduksi stok delta (item baru dipotong, item dihapus dikembalikan)
+    // v4.7 TO DO 21.1: hitung deltaKitchenItems (hanya item baru yang tidak ada di parentTx)
+    // agar tiket dapur HANYA mencetak item baru (bukan semua item → anti tiket dobel).
+    const deltaKitchenItems = currentPendingTx && pendingItemsChanged
+      ? cart.items.filter((ci) => !currentPendingTx.items.some((pi) => pi.lineId === ci.lineId))
+      : undefined;
     const pendingFinalizeParams: Partial<AtomicCheckoutParams> = currentPendingTx
       ? {
           overrideQueueNumber: currentPendingTx.queueNumber,
           overrideTxStatus: 'Selesai',
           overrideKitchenStatus: pendingItemsChanged ? 'Waiting' : currentPendingTx.kitchenStatus,
           bypassIdempotency: true,
-          reservedDeductions: calculateItemDeductions(currentPendingTx.items, menus),
+          // v4.7 TO DO 21.3: jika SplitBillModal sudah merekonsiliasi stok pending (pendingSplitReconciled),
+          // skip reservedDeductions — stok sudah disesuaikan, jangan double-adjust.
+          reservedDeductions: pendingSplitReconciled
+            ? undefined
+            : calculateItemDeductions(currentPendingTx.items, menus),
+          deltaKitchenItems,
         }
       : {};
 
@@ -2254,7 +2267,11 @@ export default function POS() {
           setTableNumber('');
           setCheckoutTxId(uuid());
           setCurrentPendingTx(null);
+          setPendingSplitReconciled(false);
         }}
+        // v4.7 TO DO 21.3: callback saat SplitBillModal merekonsiliasi stok pending —
+        // POS.tsx skip reservedDeductions di finalisasi (anti double-adjust).
+        onReconcile={() => setPendingSplitReconciled(true)}
       />
 
       {/* v4.7 TO DO 20.3: konfirmasi resume pending saat keranjang berisi (bukan window.confirm) */}
