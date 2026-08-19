@@ -106,17 +106,28 @@ export default function Kitchen() {
 
   const waitingOrders = activeOrders.filter((t) => t.kitchenStatus === 'Waiting');
 
-  const getWaitingMinutes = (dateStr: string): number => {
-    return Math.floor((now - new Date(dateStr).getTime()) / 60000);
+  // v4.7 TO DO 21.5: deteksi pesanan yang di-update (Done → Waiting setelah tambah item)
+  // updatedAt > date + 5 detik = order pernah selesai lalu di-reset ke Waiting
+  const isUpdatedOrder = (t: { date: string; updatedAt?: string }): boolean => {
+    if (!t.updatedAt) return false;
+    return new Date(t.updatedAt).getTime() - new Date(t.date).getTime() > 5000;
   };
 
-  const isOverdue = (dateStr: string): boolean => {
-    return (now - new Date(dateStr).getTime()) >= ALERT_THRESHOLD_MS;
+  // v4.7 TO DO 21.5: waktu referensi untuk overdue & wait — pakai updatedAt jika order di-update
+  // (restart timer saat order muncul kembali di KDS setelah Done → Waiting)
+  const getWaitingMinutes = (t: { date: string; updatedAt?: string }): number => {
+    const refTime = isUpdatedOrder(t) && t.updatedAt ? t.updatedAt : t.date;
+    return Math.floor((now - new Date(refTime).getTime()) / 60000);
+  };
+
+  const isOverdue = (t: { date: string; updatedAt?: string }): boolean => {
+    const refTime = isUpdatedOrder(t) && t.updatedAt ? t.updatedAt : t.date;
+    return (now - new Date(refTime).getTime()) >= ALERT_THRESHOLD_MS;
   };
 
   // Count overdue orders
   const overdueCount = activeOrders.filter(
-    (t) => t.kitchenStatus === 'Waiting' && isOverdue(t.date)
+    (t) => t.kitchenStatus === 'Waiting' && isOverdue(t)
   ).length;
 
   // Sound: chime when new order arrives
@@ -235,8 +246,9 @@ export default function Kitchen() {
 
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
                 {orders.map((order) => {
-                  const overdue = status === 'Waiting' && isOverdue(order.date);
-                  const waitMins = getWaitingMinutes(order.date);
+                  const updated = isUpdatedOrder(order);
+                  const overdue = status === 'Waiting' && isOverdue(order);
+                  const waitMins = getWaitingMinutes(order);
 
                   return (
                     <div
@@ -244,7 +256,9 @@ export default function Kitchen() {
                       className={`rounded-xl p-4 shadow-sm transition-all ${
                         overdue
                           ? 'bg-red-50 dark:bg-red-950/40 border-2 border-red-300 dark:border-red-700 animate-pulse'
-                          : 'bg-white dark:bg-slate-800'
+                          : updated
+                            ? 'bg-blue-50/60 dark:bg-blue-950/30 border-2 border-blue-300 dark:border-blue-600/60'
+                            : 'bg-white dark:bg-slate-800'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -252,13 +266,22 @@ export default function Kitchen() {
                           <span className="text-2xl font-extrabold text-brand-700 dark:text-brand-400">
                             #{order.queueNumber}
                           </span>
+                          {/* v4.7 TO DO 21.5: badge '🔄 Diupdate' untuk pesanan yang di-update (Done → Waiting) */}
+                          {updated && status === 'Waiting' && (
+                            <span className="badge bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 text-xs font-semibold">
+                              🔄 Diupdate
+                            </span>
+                          )}
                           {overdue && (
                             <span className="badge bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-400 text-xs">
                               <AlertTriangle size={10} /> {waitMins} mnt
                             </span>
                           )}
-                          {status === 'Waiting' && !overdue && (
+                          {status === 'Waiting' && !overdue && !updated && (
                             <span className="text-xs text-slate-400">{waitMins} mnt</span>
+                          )}
+                          {status === 'Waiting' && !overdue && updated && (
+                            <span className="text-xs text-blue-400">{waitMins} mnt (sejak update)</span>
                           )}
                         </div>
                         {getNextStatus(status) && (
@@ -305,6 +328,13 @@ export default function Kitchen() {
                           </div>
                         ))}
                       </div>
+
+                      {/* v4.7 TO DO 21.5: catatan untuk pesanan yang di-update */}
+                      {updated && status === 'Waiting' && (
+                        <p className="text-[10px] text-blue-500 dark:text-blue-400 mt-2 pt-2 border-t border-blue-200 dark:border-blue-700/40 italic">
+                          🔄 Pesanan diperbarui — periksa item baru di atas
+                        </p>
+                      )}
                     </div>
                   );
                 })}

@@ -254,6 +254,9 @@ export interface AtomicCheckoutParams {
   // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo saat checkout
   promoName?: string;
   promoAmount?: number;
+  // v4.7 TO DO 21.1: tiket dapur HANYA untuk item BARU (delta) saat finalisasi pending yang diedit.
+  // Tanpa ini, tiket dicetak ULANG untuk SEMUA item (3 lama + 1 baru) → dobel.
+  deltaKitchenItems?: CartItem[];
 }
 
 // Split Bill Interfaces

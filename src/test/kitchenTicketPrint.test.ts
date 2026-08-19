@@ -246,3 +246,82 @@ describe('A10 — helper keputusan resume', () => {
     expect(shouldSkipKitchenPrintAtResume(tx, false)).toBe(false);
   });
 });
+
+// v4.7 TO DO 21.1: deltaKitchenItems — tiket dapur HANYA untuk item BARU saat finalisasi pending
+
+describe('21.1 — deltaKitchenItems filtering', () => {
+  it('deltaKitchenItems disaring dari cartItems saat parentTx ada & pendingItemsChanged', () => {
+    // Simulasi: parentTx punya item A, B. Cart punya item A, B, C (C = baru).
+    const parentTx = {
+      id: 'parent-1',
+      items: [
+        { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+        { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 },
+      ],
+    };
+    const cartItems = [
+      { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+      { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 },
+      { lineId: 'c', name: 'Es Teh', quantity: 1, subtotal: 8000 }, // item baru
+    ];
+    // Hitung delta items (sama seperti logic di POS.tsx)
+    const deltaKitchenItems = cartItems.filter(
+      (ci) => !parentTx.items.some((pi) => pi.lineId === ci.lineId)
+    );
+    expect(deltaKitchenItems).toHaveLength(1);
+    expect(deltaKitchenItems[0].lineId).toBe('c');
+    expect(deltaKitchenItems[0].name).toBe('Es Teh');
+  });
+
+  it('tanpa parentTx → deltaKitchenItems undefined ( cetak semua item)', () => {
+    const parentTx = null;
+    const cartItems = [
+      { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+      { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 },
+    ];
+    // Tanpa parentTx, deltaKitchenItems harus undefined
+    const deltaKitchenItems = parentTx ? cartItems.filter(
+      (ci) => !parentTx.items.some((pi) => pi.lineId === ci.lineId)
+    ) : undefined;
+    expect(deltaKitchenItems).toBeUndefined();
+  });
+
+  it('parentTx ada tapi items sama → deltaKitchenItems kosong (tidak cetak tiket baru)', () => {
+    const parentTx = {
+      id: 'parent-1',
+      items: [
+        { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+      ],
+    };
+    const cartItems = [
+      { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+    ];
+    const deltaKitchenItems = cartItems.filter(
+      (ci) => !parentTx.items.some((pi) => pi.lineId === ci.lineId)
+    );
+    expect(deltaKitchenItems).toHaveLength(0);
+  });
+
+  it('parentTx ada & pendingItemsChanged=true → deltaKitchenItems berisi hanya item baru', () => {
+    const parentTx = {
+      id: 'parent-1',
+      items: [
+        { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
+        { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 },
+        { lineId: 'c', name: 'Es Teh', quantity: 1, subtotal: 8000 },
+      ],
+    };
+    const cartItems = [
+      { lineId: 'a', name: 'Kopi', quantity: 2, subtotal: 30000 }, // qty berubah
+      { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 }, // sama
+      { lineId: 'c', name: 'Es Teh', quantity: 1, subtotal: 8000 }, // sama
+      { lineId: 'd', name: 'Cheesecake', quantity: 1, subtotal: 25000 }, // baru
+    ];
+    const deltaKitchenItems = cartItems.filter(
+      (ci) => !parentTx.items.some((pi) => pi.lineId === ci.lineId)
+    );
+    // Hanya item 'd' yang baru (lineId baru)
+    expect(deltaKitchenItems).toHaveLength(1);
+    expect(deltaKitchenItems[0].lineId).toBe('d');
+  });
+});

@@ -45,6 +45,9 @@ interface SplitBillModalProps {
   selectedCustomerName?: string | null;
   appliedPromoId?: string | null;
   onCompleteSplit: () => void;
+  // v4.7 TO DO 21.3: callback saat rekonsiliasi stok pending split dilakukan —
+  // POS.tsx memakai ini untuk skip reservedDeductions (anti double-adjust).
+  onReconcile?: () => void;
 }
 
 type SplitMode = 'equal' | 'item';
@@ -83,6 +86,7 @@ export default function SplitBillModal({
   selectedCustomerName,
   appliedPromoId,
   onCompleteSplit,
+  onReconcile,
 }: SplitBillModalProps) {
   const { settings } = useSettingsStore();
   const { currentUser } = useAuthStore();
@@ -140,7 +144,9 @@ export default function SplitBillModal({
       setPaidState({});
       // v4.7 TO DO 15.3: reset opsi cetak ke default (cetak semua) saat modal dibuka konteks baru
       setSkipSplitReceipt(false);
-      setSkipSplitKitchen(false);
+      // v4.7 TO DO 21.2: split dari pending → tiket dapur sudah tercetak saat Simpan Pending
+      // → skip tiket dapur (anti dobel). Split fresh → cetak semua (tiket belum pernah keluar).
+      setSkipSplitKitchen(!!parentTx);
     }
     // Rehydrate paidState dari sesi stock (fresh split) jika masih aktif dengan cart yang sama
     if (!parentTx) {
@@ -382,6 +388,9 @@ export default function SplitBillModal({
       if (Object.keys(deltaRevert).length > 0 || Object.keys(deltaDeduct).length > 0) {
         addToast('Isi keranjang berubah sejak pesanan disimpan — stok pending disesuaikan sebelum di-split.', 'info');
       }
+      // v4.7 TO DO 21.3: notifikasi POS.tsx bahwa rekonsiliasi sudah dilakukan —
+      // POS.tsx akan skip reservedDeductions di finalisasi pending (anti double-adjust).
+      onReconcile?.();
     }
 
     // v4.5 TO DO 5.7 (sabuk pengaman review): tolak re-pay sub-bill yang sudah tercatat lunas di

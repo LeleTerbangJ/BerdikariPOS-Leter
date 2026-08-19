@@ -337,8 +337,14 @@ export class AtomicTransactionEngine {
           // `kitchenTicketPrintedAt` (sync lintas device). Resume pending memakai stamp ini
           // (bukan asumsi "selalu sudah tercetak") — printer gagal saat Simpan Pending →
           // tiket tidak hilang diam-diam, resume akan mencetak ulang.
+          // v4.7 TO DO 21.1: saat finalisasi pending yang diedit (deltaKitchenItems ada),
+          // cetak tiket HANYA untuk item BARU (bukan semua item) → anti tiket dobel
+          // untuk item lama yang sudah diproses/diantar dapur.
           if (!params.skipKitchenPrint) {
-            const kitchenResults = await printReceipt(receiptData, params.settings, 'kitchen');
+            const kitchenReceiptData = params.deltaKitchenItems && params.deltaKitchenItems.length > 0
+              ? { ...receiptData, items: params.deltaKitchenItems }
+              : receiptData;
+            const kitchenResults = await printReceipt(kitchenReceiptData, params.settings, 'kitchen');
             if (didKitchenPrintSucceed(kitchenResults)) {
               useTransactionStore
                 .getState()

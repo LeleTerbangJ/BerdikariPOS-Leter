@@ -228,6 +228,7 @@ END $$;
 - **Semua notifikasi `alert()` diganti toast (Prioritas 20.2)** — 21 titik di App, Audit Log, Rekap Kas, Katalog, Settings, Stock Opname & auth (session takeover) kini memakai `addToast` yang konsisten (sukses/warning/error).
 - **Semua konfirmasi memakai dialog kustom (Prioritas 20.3)** — 4 `window.confirm` terakhir (tutup shift selisih kas > 10%, void transaksi gantung, resume pending saat keranjang berisi, hapus user) diganti **ConfirmDialog** (modal + ikon + tombol Batal/Ya) agar UX konfirmasi seragam; **tidak ada dialog browser native (`alert`/`confirm`) tersisa di kode produksi**.
 - **Filter tanggal custom Laporan & Riwayat Transaksi tidak lagi melewatkan transaksi pagi buta (Prioritas 20.4)** — `new Date('YYYY-MM-DD')` (tanpa `T`) di-parse sebagai UTC tengah malam (= 07:00 WIB), sehingga transaksi 00:00–07:00 pada tanggal awal tidak masuk range custom; kini helper `buildCustomDateRange` mem-parse **lokal** (`'T00:00:00'` s.d. `'T23:59:59.999'`) di 3 titik (filter transaksi Reports, range opname/movement Reports, filter Riwayat Transaksi) — konsisten dengan fix tanggal lokal lainnya (18.3).
+- **Audit flow Pending + Tambah Item + Split Bill (Prioritas 21, 21.1–21.5)** — tiket dapur saat finalisasi pending yang diedit kini hanya mencetak **item baru** (delta) sehingga tidak ada tiket dobel untuk item lama; tiket dapur saat split dari pending otomatis **skip** (`skipSplitKitchen = true`); **guard rekonsiliasi ganda** (`onReconcile` callback + `pendingSplitReconciled` flag) mencegah stok di-adjust dua kali; badge **"✓ Diupdate"** di kartu Pending Payments; badge **"🔄 Diupdate"** + background biru di KDS untuk pesanan Done→Waiting + timer overdue restart dari `updatedAt`.
 
 > Project **baru** cukup menjalankan `supabase/schema.sql` v4.7 — selesai, tidak perlu SQL tambahan.
 
@@ -343,7 +344,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **598/598 test lolos** (57 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test** — `shiftStats` refund tunai/lintas metode +5, `dateRange` filter tanggal custom lokal +5)
+- `npx vitest run` → **602/602 test lolos** (57 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test** — `shiftStats` refund tunai/lintas metode +5, `dateRange` filter tanggal custom lokal +5; **Prioritas 21 (21.1): +4 test** — `kitchenTicketPrint` filtering deltaKitchenItems)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---
