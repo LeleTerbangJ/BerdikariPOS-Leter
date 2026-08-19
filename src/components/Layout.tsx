@@ -278,11 +278,29 @@ export default function Layout() {
       console.warn('[Shift] Gagal mencatat audit log saat tutup shift (dilewati):', e);
     }
 
-    // ITEM-4 fix: Explicit breakdown & explanation of Expected Cash vs Kas Aktual
+    // v4.7: Agregasi penjualan per menu dari SEMUA transaksi shift
+    const menuSalesMap: Record<string, { qty: number; revenue: number }> = {};
+    let totalItemQty = 0;
+    todayTx.forEach((t) => {
+      t.items.forEach((item) => {
+        if (item.isBundle) return; // skip bundle parent, ambil child saja
+        const key = item.name;
+        if (!menuSalesMap[key]) menuSalesMap[key] = { qty: 0, revenue: 0 };
+        menuSalesMap[key].qty += item.quantity;
+        menuSalesMap[key].revenue += item.subtotal;
+        totalItemQty += item.quantity;
+      });
+    });
+    const menuSalesSorted = Object.entries(menuSalesMap)
+      .sort((a, b) => b[1].qty - a[1].qty); // terlaris di atas
+
+    const now = new Date();
     const lines = [
       `=== RINGKASAN TRANSAKSI ===`,
       `${settings.storeName}`,
-      `Tanggal: ${new Date().toLocaleDateString('id-ID')}`,
+      `Tanggal: ${now.toLocaleDateString('id-ID')}`,
+      `Jam Mulai: ${new Date(activeShift?.openedAt || now).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`,
+      `Jam Tutup: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`,
       `Kasir: ${currentUser.name}`,
       ``,
       `Modal Awal: ${formatRupiah(activeShift?.openingCash || 0)}`,
@@ -291,14 +309,27 @@ export default function Layout() {
       `  - QRIS: ${formatRupiah(shiftStats.qrisSales || 0)}`,
       `  - Transfer: ${formatRupiah(shiftStats.transferSales || 0)}`,
       `Jumlah Transaksi: ${shiftStats.totalTx}`,
+      `Total Item Terjual: ${totalItemQty} item`,
       `Kas Masuk: +${formatRupiah(shiftStats.cashIn || 0)}`,
       `Kas Keluar: -${formatRupiah(shiftStats.cashOut || 0)}`,
       ...(shiftStats.refundedCashSales > 0
         ? [`Refund Tunai (dikembalikan): -${formatRupiah(shiftStats.refundedCashSales)}`]
         : []),
       ``,
+      ...(menuSalesSorted.length > 0
+        ? [
+            `--- Penjualan Menu ---`,
+            ...menuSalesSorted.flatMap(([name, data]) => {
+              const unitPrice = data.qty > 0 ? Math.round(data.revenue / data.qty) : 0;
+              return [
+                `${name}`,
+                `  ${data.qty} x ${formatRupiah(unitPrice)}          ${formatRupiah(data.revenue)}`,
+              ];
+            }),
+            ``,
+          ]
+        : []),
       `Expected Cash: ${formatRupiah(shiftStats.expectedCash)}`,
-      `(Modal Awal + Tunai + Kas Masuk - Kas Keluar)`,
       `Kas Aktual (Fisik): ${formatRupiah(closingCash)}`,
       `Selisih Kas: ${formatRupiah(closingCash - shiftStats.expectedCash)}`,
       ``,
