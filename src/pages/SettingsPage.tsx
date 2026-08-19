@@ -1657,11 +1657,10 @@ tersalin ke struk digital.
                     if (isMatch) {
                       setSuperPinError('');
                       setSuperPinInput('');
+                      setSuperAdminUnlocked(true);
                       // v4.8 TO DO 12.1.6: cek apakah masih pakai PIN default
                       if (!settings.superAdminPinChanged) {
                         setRequirePinChange(true);
-                      } else {
-                        setSuperAdminUnlocked(true);
                       }
                     } else setSuperPinError('PIN salah');
                   }
@@ -1678,11 +1677,10 @@ tersalin ke struk digital.
                   if (isMatch) {
                     setSuperPinError('');
                     setSuperPinInput('');
+                    setSuperAdminUnlocked(true);
                     // v4.8 TO DO 12.1.6: cek apakah masih pakai PIN default
                     if (!settings.superAdminPinChanged) {
                       setRequirePinChange(true);
-                    } else {
-                      setSuperAdminUnlocked(true);
                     }
                   } else setSuperPinError('PIN salah');
                 }}
