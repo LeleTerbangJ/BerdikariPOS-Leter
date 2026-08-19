@@ -651,3 +651,94 @@ Tambah field `itemDiscount?: number` di `CartItem` + UI kecil di keranjang POS:
 ---
 
 *Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**; **I = audit promo/loyalty/diskon per menu, rincian eksekusi di `TO DO.md` Prioritas 22**).*
+
+---
+
+## 🔴 J. Analisis Error Fitur "Bersihkan Data Transaksi" (Cloud Data Wipe Failure)
+
+### J.1 — Deskripsi Masalah & Tangkapan Layar Error
+Saat pengguna menjalankan fitur **"Bersihkan Data Transaksi"** (`clearOperationalData`) dari menu Manajemen Data, muncul dialog peringatan dari browser:
+
+> **Gagal menghapus data dari cloud. Data lokal dipertahankan.**
+> Coba lagi setelah koneksi stabil, atau jalankan manual dari Supabase SQL Editor:
+> `DELETE FROM cash_movements WHERE id != '';`
+> `DELETE FROM shifts WHERE id != '';`
+> `DELETE FROM transactions WHERE id != '';`
+
+Data lokal dengan sengaja dipertahankan (tidak dihapus dan aplikasi tidak di-reload) sebagai mekanisme keamanan, agar data tidak mendadak "bangkit kembali" dari cloud saat sinkronisasi berikutnya.
+
+---
+
+### J.2 — Akar Penyebab Teknis (Technical Root Causes)
+
+Setelah dilakukan penelusuran kode pada `src/utils/dataManager.ts` dan struktur database Supabase di `supabase/schema.sql`, ditemukan **3 akar penyebab utama** mengapa operasi hapus tabel di cloud mengalami kegagalan:
+
+#### 1. Inkompatibilitas Tipe Data PostgreSQL (`UUID` vs `TEXT ''`)
+- **Lokasi Kode**: `src/utils/dataManager.ts` fungsi `clearCloudTables` (baris 285).
+- **Penjelasan**: 
+  Fungsi `clearCloudTables` mengirimkan query hapus Supabase SDK:
+  `supabase.from(table).delete().neq('id', '')`
+  Query ini diterjemahkan oleh PostgREST menjadi klausa SQL: `DELETE FROM table WHERE id != ''`.
+- **Inkompatibilitas**:
+  Di `supabase/schema.sql`, kolom `id` pada tabel `transactions`, `shifts`, `cash_movements`, `customers`, `audit_logs`, `stock_logs`, `promos`, dan `stock_opnames` didefinisikan sebagai tipe data **`UUID`** (`id UUID PRIMARY KEY DEFAULT gen_random_uuid()`).
+  Sedangkan nilai `''` (string kosong) bertipe **`TEXT`**.
+- **Dampak**: 
+  PostgreSQL menolak query tersebut dan mengembalikan error sintaks tipe data:
+  `ERROR: invalid input syntax for type uuid: ""` atau `ERROR: operator does not exist: uuid <> text`.
+  Akibatnya, Supabase API mengembalikan objek `error`, menyebabkan `clearCloudTables` bernilai `false`.
+
+#### 2. Pelanggaran Constraint Foreign Key (FK Violation & Urutan Penghapusan)
+- **Lokasi Kode**: `src/utils/dataManager.ts` konstanta `OPERATIONAL_WIPE_TABLES` (baris 252).
+- **Penjelasan**: 
+  Array `OPERATIONAL_WIPE_TABLES` mengeksekusi penghapusan dengan urutan:
+  `['transactions', 'shifts', 'customers', 'audit_logs', 'stock_logs', 'promos', 'stock_opnames', 'cash_movements']`.
+- **Masalah Relasi DB**:
+  - `stock_logs` memiliki referensi data ke `transactions`.
+  - `cash_movements` memiliki referensi `shift_id` ke `shifts`.
+  - `transactions` memiliki referensi `customer_id` ke `customers` dan `shift_id` ke `shifts`.
+- **Dampak**:
+  Saat `clearCloudTables` mencoba menghapus tabel induk (`transactions` / `shifts`) terlebih dahulu sebelum tabel anak (`stock_logs` / `cash_movements`), PostgreSQL menolak transaksi hapus dengan error relasi: `update or delete on table "shifts" violates foreign key constraint "cash_movements_shift_id_fkey" on table "cash_movements"`.
+
+#### 3. Kebijakan Row Level Security (RLS) & Filter Mandatori PostgREST
+- **Penjelasan**:
+  Supabase / PostgREST melarang eksekusi query `DELETE` tanpa klausa `WHERE` untuk mencegah terhapusnya seluruh isi tabel secara tidak sengaja.
+- **Masalah Filter**:
+  Menggunakan filter `.neq('id', '')` pada kolom `UUID` menyebabkan error casting Postgres di atas. Filter yang valid secara sintaks untuk tipe `UUID` adalah `.not('id', 'is', null)` atau `.neq('id', '00000000-0000-0000-0000-000000000000')` atau filter berbasis timestamp `.gt('created_at', '1970-01-01')`.
+
+---
+
+### J.3 — Solusi & Langkah Perbaikan yang Direkomendasikan
+
+1. **Perbaikan Filter Query Supabase SDK di `src/utils/dataManager.ts`**:
+   Ubah pembuat filter pada `clearCloudTables` agar mendukung kolom bertipe `UUID`:
+   ```ts
+   // Menggunakan filter not null yang valid untuk tipe UUID maupun TEXT/INT
+   const { error } = await supabase
+     .from(table)
+     .delete()
+     .not('id', 'is', null);
+   ```
+
+2. **Perbaikan Urutan Penghapusan Tabel (`OPERATIONAL_WIPE_TABLES`)**:
+   Urutkan tabel anak (child tables) terlebih dahulu sebelum tabel induk (parent tables):
+   ```ts
+   export const OPERATIONAL_WIPE_TABLES = [
+     'stock_logs',       // anak dari inventory & transactions
+     'cash_movements',   // anak dari shifts
+     'stock_opnames',    // anak dari users/inventory
+     'audit_logs',       // log audit
+     'transactions',     // anak dari shifts & customers
+     'shifts',           // induk dari cash_movements & transactions
+     'customers',        // induk dari transactions
+     'promos',           // promo
+   ];
+   ```
+
+3. **Perbaikan Pesan Skrip Manual SQL di Alert UI**:
+   Sediakan sintaks SQL yang valid pada instruksi fallback SQL Editor:
+   ```sql
+   DELETE FROM cash_movements WHERE id IS NOT NULL;
+   DELETE FROM transactions WHERE id IS NOT NULL;
+   DELETE FROM shifts WHERE id IS NOT NULL;
+   ```
+
