@@ -132,6 +132,25 @@ export default function SettingsPage() {
     await factoryReset(resetActor);
   };
 
+  // v4.8 TO DO 12.1.6: forced PIN change — ganti PIN default '000000' sebelum akses Manajemen Data
+  const handleForcedPinChange = () => {
+    if (forcedPinInput.length < 4) {
+      setForcedPinError('PIN minimal 4 digit');
+      return;
+    }
+    if (forcedPinInput !== forcedPinConfirm) {
+      setForcedPinError('Konfirmasi PIN tidak cocok');
+      return;
+    }
+    updateSettings({ superAdminPin: forcedPinInput, superAdminPinChanged: true });
+    setRequirePinChange(false);
+    setSuperAdminUnlocked(true);
+    setForcedPinInput('');
+    setForcedPinConfirm('');
+    setForcedPinError('');
+    addToast('PIN berhasil diubah! Simpan PIN baru Anda di tempat aman.', 'success');
+  };
+
   // UI Theme Settings
   const [themeColor, setThemeColor] = useState(settings.themeColor || '#b85f21');
   const [themeShades, setThemeShades] = useState<Record<string, string>>(
@@ -242,6 +261,11 @@ export default function SettingsPage() {
   const [superPinInput, setSuperPinInput] = useState('');
   const [superPinError, setSuperPinError] = useState('');
   const [newSuperPin, setNewSuperPin] = useState('');
+  // v4.8 TO DO 12.1.6: forced PIN change saat default '000000' masih dipakai
+  const [requirePinChange, setRequirePinChange] = useState(false);
+  const [forcedPinInput, setForcedPinInput] = useState('');
+  const [forcedPinConfirm, setForcedPinConfirm] = useState('');
+  const [forcedPinError, setForcedPinError] = useState('');
   const [activeTab, setActiveTab] = useState<'general' | 'printers' | 'users' | 'backup'>(() => {
     return currentUser?.role === 'Kasir' ? 'printers' : 'general';
   });
@@ -1630,8 +1654,16 @@ tersalin ke struk digital.
                     // BUG-M4: Support bcrypt-hashed super admin PIN
                     const stored = settings.superAdminPin;
                     const isMatch = stored.startsWith('$2') ? bcrypt.compareSync(superPinInput, stored) : superPinInput === stored;
-                    if (isMatch) { setSuperAdminUnlocked(true); setSuperPinError(''); }
-                    else setSuperPinError('PIN salah');
+                    if (isMatch) {
+                      setSuperPinError('');
+                      setSuperPinInput('');
+                      // v4.8 TO DO 12.1.6: cek apakah masih pakai PIN default
+                      if (!settings.superAdminPinChanged) {
+                        setRequirePinChange(true);
+                      } else {
+                        setSuperAdminUnlocked(true);
+                      }
+                    } else setSuperPinError('PIN salah');
                   }
                 }}
                 placeholder="Super Admin PIN"
@@ -1643,8 +1675,16 @@ tersalin ke struk digital.
                   // BUG-M4: Support bcrypt-hashed super admin PIN
                   const stored = settings.superAdminPin;
                   const isMatch = stored.startsWith('$2') ? bcrypt.compareSync(superPinInput, stored) : superPinInput === stored;
-                  if (isMatch) { setSuperAdminUnlocked(true); setSuperPinError(''); }
-                  else setSuperPinError('PIN salah');
+                  if (isMatch) {
+                    setSuperPinError('');
+                    setSuperPinInput('');
+                    // v4.8 TO DO 12.1.6: cek apakah masih pakai PIN default
+                    if (!settings.superAdminPinChanged) {
+                      setRequirePinChange(true);
+                    } else {
+                      setSuperAdminUnlocked(true);
+                    }
+                  } else setSuperPinError('PIN salah');
                 }}
                 className="btn-primary text-sm"
               >
@@ -1652,6 +1692,48 @@ tersalin ke struk digital.
               </button>
             </div>
             {superPinError && <p className="text-xs text-red-500">{superPinError}</p>}
+          </div>
+        ) : requirePinChange ? (
+          /* v4.8 TO DO 12.1.6: forced PIN change — ganti PIN default sebelum akses Manajemen Data */
+          <div className="space-y-4 p-4 bg-amber-50 dark:bg-amber-950/20 rounded-xl border border-amber-200 dark:border-amber-800/40">
+            <div className="flex items-start gap-3">
+              <AlertTriangle size={20} className="text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium text-sm text-amber-800 dark:text-amber-300">PIN Default Terdeteksi</p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  Anda menggunakan PIN default (<code>000000</code>). Untuk keamanan, silakan buat PIN baru sebelum mengakses Manajemen Data.
+                </p>
+              </div>
+            </div>
+            <div className="max-w-xs space-y-2">
+              <input
+                type="password"
+                value={forcedPinInput}
+                onChange={(e) => { setForcedPinInput(e.target.value.replace(/\D/g, '').slice(0, 6)); setForcedPinError(''); }}
+                placeholder="PIN baru (4-6 digit)"
+                className="input font-mono text-center tracking-widest"
+                maxLength={6}
+                autoFocus
+              />
+              <input
+                type="password"
+                value={forcedPinConfirm}
+                onChange={(e) => { setForcedPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 6)); setForcedPinError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleForcedPinChange(); }}
+                placeholder="Konfirmasi PIN baru"
+                className="input font-mono text-center tracking-widest"
+                maxLength={6}
+              />
+              {forcedPinError && <p className="text-xs text-red-500">{forcedPinError}</p>}
+              <div className="flex gap-2">
+                <button onClick={handleForcedPinChange} className="btn-primary text-sm" disabled={forcedPinInput.length < 4}>
+                  <Save size={14} /> Simpan PIN Baru
+                </button>
+                <button onClick={() => { setRequirePinChange(false); setSuperPinInput(''); }} className="btn-secondary text-sm">
+                  Batal
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -1713,7 +1795,7 @@ tersalin ke struk digital.
                 <button
                   onClick={() => {
                     if (newSuperPin.length >= 4) {
-                      updateSettings({ superAdminPin: newSuperPin });
+                      updateSettings({ superAdminPin: newSuperPin, superAdminPinChanged: true });
                       setNewSuperPin('');
                       // v4.7 TO DO 20.2: alert → toast
                       addToast('Super Admin PIN berhasil diubah!', 'success');

@@ -352,6 +352,7 @@ export interface AppSettings {
   kitchenPrinters?: KitchenPrinterConfig[]; // Konfigurasi printer dapur untuk split print
   // Super Admin & Demo
   superAdminPin: string; // PIN untuk akses Manajemen Data (hanya developer)
+  superAdminPinChanged?: boolean; // v4.8 TO DO 12.1.6: true jika PIN sudah diganti dari default '000000'
   demoMode: boolean; // true = tampilkan demo accounts di login
   // UI Theme Settings
   themeColor?: string;

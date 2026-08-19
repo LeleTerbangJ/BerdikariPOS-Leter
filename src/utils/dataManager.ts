@@ -147,9 +147,13 @@ export async function resetToDefault(actor?: ResetActor) {
   // Dilakukan PALING AWAL, sebelum cloud clear & sebelum recordResetAudit.
   clearQueue();
 
-  // Clear cloud first, then re-seed full demo
+  // v4.8 FIX: Cloud delete DULU, cek success, baru reseed + local clear + reload.
   if (isSupabaseConfigured) {
-    await clearAllCloudData();
+    const cloudOk = await clearAllCloudData();
+    if (!cloudOk) {
+      alert('Gagal menghapus data dari cloud. Coba lagi setelah koneksi stabil.');
+      return;
+    }
     await reseedCloudData('demo');
     recordResetAudit(actor, 'Reset ke Default (Demo) — semua data dihapus & di-seed ulang');
   } else {
@@ -182,17 +186,30 @@ export async function clearOperationalData(actor?: ResetActor) {
   // 12.1.5: buang antrean offline (ops operasional lama) sebelum cloud di-wipe
   clearQueue();
 
-  // Clear local via adapter yang benar (IDB + localStorage) — v4.7 fix 12.1.1
-  await clearLocalData(OPERATIONAL_CLEAR_KEYS);
-
-  // Also clear from Supabase if configured
+  // v4.8 FIX: Cloud delete DULU, baru local clear + reload.
+  // Sebelumnya local dihapus dulu → reload → loadFromCloud mengambil data lama
+  // karena cloud delete gagal diam-diam (error ditelan clearCloudTables lama).
   if (isSupabaseConfigured) {
-    await clearCloudOperationalData();
+    const cloudOk = await clearCloudOperationalData();
+    if (!cloudOk) {
+      // Cloud delete gagal — JANGAN hapus lokal, karena reload akan mengambil
+      // data lama dari cloud. Biarkan data lokal utuh agar user bisa coba lagi.
+      const msg = 'Gagal menghapus data dari cloud. Data lokal dipertahankan.\n' +
+        'Coba lagi setelah koneksi stabil, atau jalankan manual dari Supabase SQL Editor:\n' +
+        'DELETE FROM cash_movements WHERE id != \'\';\n' +
+        'DELETE FROM shifts WHERE id != \'\';\n' +
+        'DELETE FROM transactions WHERE id != \'\';';
+      console.error('[DataManager] Cloud clear gagal — data lokal dipertahankan:', msg);
+      alert(msg);
+      return; // ← TIDAK reload, data lokal tetap ada
+    }
     recordResetAudit(actor, 'Bersihkan Data Transaksi — data operasional dihapus (master data tetap)');
   } else {
     recordResetAudit(actor, 'Bersihkan Data Transaksi — lokal saja (cloud tidak dikonfigurasi)');
   }
 
+  // Cloud sudah bersih — baru hapus lokal lalu reload
+  await clearLocalData(OPERATIONAL_CLEAR_KEYS);
   window.location.reload();
 }
 
@@ -205,9 +222,13 @@ export async function factoryReset(actor?: ResetActor) {
   // 12.1.5: buang antrean offline yang mereferensikan data lama
   clearQueue();
 
-  // Clear cloud, then re-seed only essential data (users + settings)
+  // v4.8 FIX: Cloud delete DULU, cek success, baru reseed + local clear + reload.
   if (isSupabaseConfigured) {
-    await clearAllCloudData();
+    const cloudOk = await clearAllCloudData();
+    if (!cloudOk) {
+      alert('Gagal menghapus data dari cloud. Coba lagi setelah koneksi stabil.');
+      return;
+    }
     await reseedCloudData('factory');
     recordResetAudit(actor, 'Factory Reset — semua data dihapus, seed minimal (akun + settings)');
   } else {
@@ -249,28 +270,52 @@ export const FULL_WIPE_TABLES = [
   'settings',
 ];
 
-async function clearCloudTables(tables: string[]) {
+/**
+ * Hapus semua baris dari tabel cloud (kecuali settings id=0).
+ * v4.8 FIX: Cek error response Supabase — sebelumnya error ditelan diam-diam
+ * sehingga cloud delete gagal tanpa diketahui, lalu loadFromCloud mengambil
+ * data lama → data "bangkit lagi" setelah Bersihkan Data Transaksi.
+ * @returns true jika SEMUA tabel berhasil dihapus, false jika ada yang gagal.
+ */
+async function clearCloudTables(tables: string[]): Promise<boolean> {
+  let allOk = true;
   for (const table of tables) {
-    // settings memakai id=0 sebagai penanda khusus, sisanya id=''
-    const filter = table === 'settings' ? { column: 'id', value: 0 } : { column: 'id', value: '' };
-    await supabase.from(table).delete().neq(filter.column, filter.value);
+    try {
+      // settings memakai id=0 sebagai penanda khusus, sisanya id=''
+      const filter = table === 'settings' ? { column: 'id', value: 0 } : { column: 'id', value: '' };
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .neq(filter.column, filter.value);
+
+      if (error) {
+        console.error(`[DataManager] Gagal hapus tabel cloud "${table}":`, error.message);
+        allOk = false;
+      } else {
+        console.log(`[DataManager] ✅ Tabel "${table}" — dihapus dari cloud`);
+      }
+    } catch (e) {
+      console.error(`[DataManager] Exception hapus tabel cloud "${table}":`, e);
+      allOk = false;
+    }
   }
+  return allOk;
 }
 
-async function clearCloudOperationalData() {
-  try {
-    await clearCloudTables(OPERATIONAL_WIPE_TABLES);
-  } catch (e) {
-    console.warn('Cloud clear failed:', e);
-  }
+/**
+ * Bersihkan data operasional dari cloud.
+ * @returns true jika semua tabel berhasil dihapus.
+ */
+async function clearCloudOperationalData(): Promise<boolean> {
+  return clearCloudTables(OPERATIONAL_WIPE_TABLES);
 }
 
-async function clearAllCloudData() {
-  try {
-    await clearCloudTables(FULL_WIPE_TABLES);
-  } catch (e) {
-    console.warn('Cloud factory reset failed:', e);
-  }
+/**
+ * Bersihkan SEMUA data dari cloud (termasuk master data).
+ * @returns true jika semua tabel berhasil dihapus.
+ */
+async function clearAllCloudData(): Promise<boolean> {
+  return clearCloudTables(FULL_WIPE_TABLES);
 }
 
 /**
