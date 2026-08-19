@@ -1063,4 +1063,14 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 ---
 
+## 26. Riwayat Pengerjaan v4.7 — Peningkatan Struk Ringkasan Shift
+
+### 26.1 Struk ringkasan shift lebih informatif (FIX)
+
+- **Perubahan**: Tambah baris Jam Mulai/Jam Tutup shift, Total Item Terjual, daftar **Penjualan Menu per item** (Nama Menu + Qty x Harga = Jumlah, diurutkan terlaris di atas via `menuSalesMap`), dan rumusan formula expected cash dihapus.
+- **File**: `src/components/Layout.tsx` (`handleCloseShift` — baris `menuSalesMap` + format struk).
+- **Validasi**: tsc 0 error, 602/602 test (57 file).
+
+---
+
 *Dokumen ini dibuat agar AI developer manapun bisa melanjutkan pengembangan tanpa kehilangan konteks.*
