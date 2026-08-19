@@ -114,11 +114,13 @@ export interface CartItem {
   temperature: Temperature;
   sugar: SugarLevel;
   addons: AddOn[];
-  subtotal: number; // (basePrice + sum(addons)) * qty
+  subtotal: number; // (basePrice + sum(addons)) * qty - itemDiscount
   kitchenTarget?: string; // target kitchen for split printing
   showSugarLevel?: boolean;
   showTemperature?: boolean;
   tableNumber?: string;
+  // v4.7 TO DO 22.2: Diskon per item (Rp)
+  itemDiscount?: number; // diskon Rp untuk item ini (default 0)
   // Snapshot Recipe & HPP (BOM at checkout time)
   recipeSnapshot?: RecipeIngredientSnapshot[];
   cogs?: number; // Total HPP / Cost of Goods Sold untuk item ini

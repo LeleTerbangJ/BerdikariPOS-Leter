@@ -1405,6 +1405,51 @@
 14. **Prioritas 16 (Bug Item Pending Tidak Ter-update di Riwayat + Fitur Semua Dapur)**: **SELESAI ✅ (v4.7)** — **16.1 ✅** freshness compare di `loadFromCloud` (pilih versi lebih baru per transaksi; **anti-duplikat** — versi cloud yang kalah tidak ikut merge) + **`updatedAt` minimal** (stamp engine tiap commit & `updateKitchenStatus`/`updateTxStatus`/`updateTxMeta`; fallback `date` untuk legacy; tanpa migrasi DB) — menutup race item pending (tambah/kurangi menu) DAN jalur void/cancel/status/meta. Test permanen `pendingUpdateHistory` (3) + `pendingCloudOverwrite` (8) + **16.2 ✅** opsi "Semua Dapur" di Edit Menu (`kitchenTarget: 'ALL'` → tiket ke semua printer dapur aktif; `printTarget` +2) — test **449/449** (43 file), tsc 0 error.
 15. **Prioritas 17 (UX Edit Menu, Checkbox Cetak & Duplikat Transaksi Pending)**: **SELURUHNYA SELESAI ✅ (v4.7)** — **17.1 ✅** baris checkbox Best Seller/Level Gula/Pilihan Suhu `sm:col-span-2` + wrap rapi; **17.2 ✅** checkbox cetak berdampingan di desktop (POS + SplitBillModal, catatan "tidak ada cetakan" wrap ke baris sendiri); **17.3 ✅ (KRITIS)** duplikat transaksi saat pending diedit & dibayar setelah remount — persist `resumeContext` di cartStore + restore via `resolveResumeRestore` saat mount POS + bersihkan identity saat finalize sukses (bonus bug laten: `setCurrentPendingTx(null)`). Test **460/460** (44 file; +11 `pendingResumeContext`).
 16. **Prioritas 18 (Skenario 2 Kasir & Offline)**: **18.1–18.8 SELURUHNYA TUNTAS ✅ (v4.7)** — 18.1 lost-update stok ditutup via **RPC atomik `adjust_inventory_stock`** (Migration 27); **18.2 nomor antrean duplikat via RPC `allocate_queue_number`** (Migration 28) + badge "#N duplikat"; **18.3 shift**: guard 1 shift/outlet + `resumeExistingShift` + restore shift terbuka paling awal, expected cash dari semua transaksi Selesai tersinkron (flush + fetch cloud saat tutup shift), peringatan belum-sync di modal, plus **fix tanggal lokal UTC-vs-pagi-buta** (`toLocalDateKey` di queueNumber/transactionStore/cloudSync); **18.4** batasan reserve split per-device terdokumentasi + warning UI; **18.5** KDS aman (review, tanpa fix wajib); **18.6** banner **"Laporan belum final — N transaksi belum sinkron"** (`SyncFreshnessBanner` di Laporan & Dashboard, reuse badge O-5); **18.7** promo race → superseded E7; **18.8** temuan A **SELURUHNYA TUNTAS (A1–A13)** + **E7 TUNTAS** (A5 LWW `updatedAt` + Migration 29; A10 `kitchenTicketPrintedAt` + Migration 30; A11 warning bahan hilang; A12 alert negatif presisi; A13 jalur pembuatan Demo; E7 `reservePromoUsage` + ledger usageKeys + replay guard + merge UNION). **WAJIB jalankan SQL Migration 27–30 sekali** di Supabase SQL Editor. Test **588/588** (56 file; +6 dari 582). **Prioritas 18 TUNTAS.**
+17. **Prioritas 22 (Promo Bundling & Diskon Per Menu)**: **22.2 ✅ SELESAI** (diskon per menu: `itemDiscount` di CartItem + UI tombol Tag + struk + 11 test); **22.1** promo bundling (tipe baru `'bundle'`, deteksi otomatis di POS) + **22.3** verifikasi loyalty toggle (tanpa kode baru) + **22.4** struk & laporan untuk bundle. Angka test **613/613** (58 file).
+
+---
+
+## 🟡 PRIORITAS 22 — PROMO BUNDLING & DISKON PER MENU (Analisa, v4.7)
+
+> **Sumber analisa**: `ANALYSE.md` section I — audit fitur promo, loyalty, & diskon per menu.
+
+### 22.1 (🟠 SEDANG) — Promo Bundling: Tipe Promo Baru "Beli Item A+B = Diskon"
+
+- **Masalah**: Saat ini promo hanya mendukung `percentage`, `fixed`, `bogo`. Tidak ada cara membuat promo "Beli Nasi + Ayam = Diskon Rp 5.000" atau "Beli 2 minuman = Diskon 10%". Bundle MENU sudah ada (`Menu.isBundle`) tapi tidak fleksibel untuk promo sesaat.
+- **Solusi**: Tambah tipe promo baru `'bundle'` dengan:
+  - `bundleItems: Array<{menuId: string; quantity: number}>` — item yang harus ada di keranjang
+  - `bundleDiscountType: 'fixed' | 'percent'` — tipe diskon
+  - `bundleDiscountValue: number` — nilai diskon (Rp atau %)
+  - Deteksi otomatis di POS: jika keranjang mengandung SEMUA item bundle, diskon diterapkan
+  - Simpan di field `meta` JSON yang sudah ada di tabel `promos` (tanpa migrasi)
+- **File terdampak**: `types/index.ts`, `promoValidation.ts`, `discountEngine.ts`, `Promos.tsx`, `POS.tsx`
+- **Dampak**: +1 tipe promo, +~15 test, +form UI di Promos.tsx
+
+### 22.2 (🟠 SEDANG) — Diskon Per Menu di POS — ✅ SELESAI (v4.7)
+
+- **Fix diterapkan**:
+  - **CartItem type**: `itemDiscount?: number` ditambahkan di `types/index.ts`
+  - **cartStore**: `setItemDiscount(lineId, discount)` — update subtotal = `max(0, unitPrice * qty - disc)`
+  - **UI POS**: Tombol `Tag` di samping item → input inline diskon Rp dengan tombol OK/Hapus; badge amber saat diskon aktif; coret harga lama
+  - **Struk termal**: Baris "Diskon item -Rp X" per item (warna amber)
+  - **Struk digital**: Baris "Diskon item -Rp X" per item
+  - **Test**: 11 test `itemDiscount.test.ts` (setType, setItemDiscount, clamp, merge, addons, quantity, getSubtotal)
+- **Status**: ✅ SELESAI — tsc 0 error, 613/613 test (58 file)
+
+### 22.3 (🟢 MINOR) — Validasi End-to-End Loyalty Points Toggle
+
+- **Temuan**: Toggle `loyaltySettings.enabled` sudah ada di `Promos.tsx` (baris 267) dan berfungsi — earn & redeem hanya jalan jika enabled.
+- **Tindakan**: Verifikasi manual bahwa:
+  - Toggle OFF → tidak ada input redeem di POS, poin tidak di-earn saat checkout
+  - Toggle ON → redeem muncul, poin di-earn
+  - Sinkronisasi cloud (`syncLoyaltySettings`) tetap jalan
+- **Tidak perlu perubahan kode** — hanya verifikasi manual.
+
+### 22.4 (🟡 SEDANG) — Promo Bundling: Struk & Laporan
+
+- **Masalah**: Jika 22.1 dieksekusi, struk perlu menampilkan "Promo Bundle: -Rp 5.000" secara terpisah dari diskon lain.
+- **Solusi**: Tampilkan promo bundle di struk sebagai baris terpisah (sudah didukung oleh format struk saat ini yang menampilkan promo per-baris).
+- **Laporan**: Tambah filter "Promo Bundle" di laporan performa promo (sudah ada field `promoName`/`promoAmount` di transaksi).
 
 ---
 

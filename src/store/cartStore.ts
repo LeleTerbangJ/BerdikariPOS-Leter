@@ -20,6 +20,8 @@ interface CartState {
   addBundleItem: (parentItem: CartItem, childItems: CartItem[]) => void;
   removeItem: (lineId: string) => void;
   updateQuantity: (lineId: string, qty: number) => void;
+  // v4.7 TO DO 22.2: set diskon per item (Rp)
+  setItemDiscount: (lineId: string, discount: number) => void;
   setDiscount: (amount: number) => void;
   setResumeContext: (ctx: ResumeContext | null) => void;
   clearCart: () => void;
@@ -50,10 +52,11 @@ export const useCartStore = create<CartState>()(
           const existing = updated[existingIdx];
           const newQty = existing.quantity + item.quantity;
           const unitPrice = existing.basePrice + existing.addons.reduce((a, b) => a + b.price, 0);
+          const disc = existing.itemDiscount || 0;
           updated[existingIdx] = {
             ...existing,
             quantity: newQty,
-            subtotal: unitPrice * newQty,
+            subtotal: Math.max(0, unitPrice * newQty - disc),
           };
           return { items: updated };
         }
@@ -88,7 +91,8 @@ export const useCartStore = create<CartState>()(
             items: s.items.map((i) => {
               if (i.lineId === lineId) {
                 const unitPrice = i.basePrice + i.addons.reduce((a, b) => a + b.price, 0);
-                return { ...i, quantity: qty, subtotal: unitPrice * qty };
+                const disc = i.itemDiscount || 0;
+                return { ...i, quantity: qty, subtotal: Math.max(0, unitPrice * qty - disc) };
               }
               // Scale child items linked to parent bundle
               if (i.parentLineId === lineId) {
@@ -99,6 +103,17 @@ export const useCartStore = create<CartState>()(
             }),
           };
         }),
+
+      // v4.7 TO DO 22.2: set diskon per item (Rp) — update subtotal otomatis
+      setItemDiscount: (lineId, discount) =>
+        set((s) => ({
+          items: s.items.map((i) => {
+            if (i.lineId !== lineId) return i;
+            const unitPrice = i.basePrice + i.addons.reduce((a, b) => a + b.price, 0);
+            const safeDisc = Math.max(0, Math.floor(discount || 0));
+            return { ...i, itemDiscount: safeDisc, subtotal: Math.max(0, unitPrice * i.quantity - safeDisc) };
+          }),
+        })),
 
       setDiscount: (amount) => set({ discount: amount }),
 

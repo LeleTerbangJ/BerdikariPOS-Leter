@@ -89,6 +89,11 @@ function itemLine(item: ReceiptData['items'][number]): string[] {
   if (detailStr) lines.push(`  ${detailStr}`);
   const unitPrice = item.basePrice + item.addons.reduce((a, b) => a + b.price, 0);
   lines.push(padLeftRight(`  ${item.quantity}x ${formatRupiah(unitPrice)}`, formatRupiah(item.subtotal), 32));
+  // v4.7 TO DO 22.2: tampilkan diskon per item di struk digital
+  const itemDisc = item.itemDiscount || 0;
+  if (itemDisc > 0) {
+    lines.push(padLeftRight('  Diskon item', `-${formatRupiah(itemDisc)}`, 32));
+  }
   return lines;
 }
 
