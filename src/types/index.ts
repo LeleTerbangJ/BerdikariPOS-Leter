@@ -380,6 +380,8 @@ export interface AppSettings {
   // v4.7 TO DO 11.2 (P0.4): struk digital — kirim otomatis struk ke WhatsApp pelanggan
   // setelah checkout berhasil (hanya jika transaksi punya pelanggan dengan nomor HP valid).
   autoSendDigitalReceipt?: boolean;
+  // v4.8: Pencetakan Pesanan Gantung / Pending (dapur_only | ask | dapur_and_cashier | none)
+  pendingPrintOption?: 'dapur_only' | 'ask' | 'dapur_and_cashier' | 'none';
 }
 
 // Cash Movement (Rekap Kas: Kas Masuk & Kas Keluar)
