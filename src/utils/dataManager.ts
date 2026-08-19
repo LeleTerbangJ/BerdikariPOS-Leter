@@ -196,9 +196,9 @@ export async function clearOperationalData(actor?: ResetActor) {
       // data lama dari cloud. Biarkan data lokal utuh agar user bisa coba lagi.
       const msg = 'Gagal menghapus data dari cloud. Data lokal dipertahankan.\n' +
         'Coba lagi setelah koneksi stabil, atau jalankan manual dari Supabase SQL Editor:\n' +
-        'DELETE FROM cash_movements WHERE id != \'\';\n' +
-        'DELETE FROM shifts WHERE id != \'\';\n' +
-        'DELETE FROM transactions WHERE id != \'\';';
+        'DELETE FROM cash_movements WHERE id IS NOT NULL;\n' +
+        'DELETE FROM shifts WHERE id IS NOT NULL;\n' +
+        'DELETE FROM transactions WHERE id IS NOT NULL;';
       console.error('[DataManager] Cloud clear gagal — data lokal dipertahankan:', msg);
       alert(msg);
       return; // ← TIDAK reload, data lokal tetap ada
@@ -248,16 +248,20 @@ export async function factoryReset(actor?: ResetActor) {
 // Cloud helpers
 // ============================================================
 
-/** Tabel operasional yang di-wipe saat Bersihkan Data Transaksi (master data tetap). */
+/**
+ * Tabel operasional yang di-wipe saat Bersihkan Data Transaksi (master data tetap).
+ * Hapus tabel anak (child tables) TERLEBIH DAHULU sebelum tabel induk (parent tables)
+ * agar tidak melanggar Foreign Key constraint di PostgreSQL.
+ */
 export const OPERATIONAL_WIPE_TABLES = [
-  'transactions',
-  'shifts',
-  'customers',
-  'audit_logs',
-  'stock_logs',
-  'promos',
-  'stock_opnames',
-  'cash_movements', // v4.7 fix 12.1.2: Rekap Kas ikut bersih
+  'stock_logs',       // anak dari inventory & transactions
+  'cash_movements',   // anak dari shifts
+  'stock_opnames',    // anak dari users & inventory
+  'audit_logs',       // log audit
+  'transactions',     // anak dari shifts & customers
+  'shifts',           // induk dari cash_movements & transactions
+  'customers',        // induk dari transactions
+  'promos',           // promo
 ];
 
 /** Semua tabel yang di-wipe saat reset penuh (Reset ke Default / Factory Reset). */
@@ -272,21 +276,20 @@ export const FULL_WIPE_TABLES = [
 
 /**
  * Hapus semua baris dari tabel cloud (kecuali settings id=0).
- * v4.8 FIX: Cek error response Supabase — sebelumnya error ditelan diam-diam
- * sehingga cloud delete gagal tanpa diketahui, lalu loadFromCloud mengambil
- * data lama → data "bangkit lagi" setelah Bersihkan Data Transaksi.
+ * v4.8 FIX: Pakai .not('id', 'is', null) untuk mendukung kolom UUID maupun TEXT/INT.
+ * Sebelumnya .neq('id', '') memicu PostgreSQL syntax error: invalid input syntax for type uuid: "".
  * @returns true jika SEMUA tabel berhasil dihapus, false jika ada yang gagal.
  */
 async function clearCloudTables(tables: string[]): Promise<boolean> {
   let allOk = true;
   for (const table of tables) {
     try {
-      // settings memakai id=0 sebagai penanda khusus, sisanya id=''
-      const filter = table === 'settings' ? { column: 'id', value: 0 } : { column: 'id', value: '' };
-      const { error } = await supabase
-        .from(table)
-        .delete()
-        .neq(filter.column, filter.value);
+      // settings memakai id=0 sebagai penanda khusus, sisanya filter .not('id', 'is', null) yang valid untuk UUID/TEXT
+      const isSettings = table === 'settings';
+      const query = supabase.from(table).delete();
+      const { error } = isSettings
+        ? await query.neq('id', 0)
+        : await query.not('id', 'is', null);
 
       if (error) {
         console.error(`[DataManager] Gagal hapus tabel cloud "${table}":`, error.message);

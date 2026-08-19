@@ -157,6 +157,17 @@ describe('cloud wipe tables (12.1.4 / 12.1.2)', () => {
     expect(new Set(FULL_WIPE_TABLES).size).toBe(FULL_WIPE_TABLES.length);
     expect(new Set(OPERATIONAL_WIPE_TABLES).size).toBe(OPERATIONAL_WIPE_TABLES.length);
   });
+
+  it('OPERATIONAL_WIPE_TABLES menghapus tabel anak sebelum tabel induk (mencegah FK constraint error)', () => {
+    const stockLogsIdx = OPERATIONAL_WIPE_TABLES.indexOf('stock_logs');
+    const cashMovementsIdx = OPERATIONAL_WIPE_TABLES.indexOf('cash_movements');
+    const txIdx = OPERATIONAL_WIPE_TABLES.indexOf('transactions');
+    const shiftsIdx = OPERATIONAL_WIPE_TABLES.indexOf('shifts');
+
+    expect(stockLogsIdx).toBeLessThan(txIdx);
+    expect(cashMovementsIdx).toBeLessThan(shiftsIdx);
+    expect(txIdx).toBeLessThan(shiftsIdx);
+  });
 });
 
 describe('splitClearPlan (klasifikasi adapter)', () => {
