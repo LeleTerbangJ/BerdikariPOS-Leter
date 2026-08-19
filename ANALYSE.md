@@ -572,8 +572,82 @@ Dalam model multi-outlet, `stock` adalah kolom per outlet (per cabang). Maka ske
 
 Rincian eksekusi: `TO DO.md` Prioritas 21.
 
-Baseline: **602/602 test hijau** (57 file), tsc 0 error. (+4 test `kitchenTicketPrint` — filtering deltaKitchenItems)
+Baseline: **613/613 test hijau** (58 file), tsc 0 error. (+11 test `itemDiscount` — TO DO 22.2 diskon per menu)
 
 ---
 
-*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**).*
+---
+
+## I — Audit Fitur Promo, Loyalty, & Diskon Per Menu (v4.7)
+
+**Ringkasan**: 3 area yang perlu peningkatan — (1) Loyalty Points sudah punya toggle tapi butuh validasi end-to-end, (2) Promo Bundling belum ada (hanya bundle menu), (3) Diskon Per Menu belum ada di POS.
+
+### I.1 — Loyalty Points: Toggle Enabled Sudah Ada, Validasi End-to-End
+
+**Temuan:**
+
+- **Toggle `loyaltySettings.enabled`** sudah ada di `Promos.tsx` (baris 267) — ON/OFF poin earn + redeem.
+- **Earn**: `calculateEarnedPoints(totalAmount, loyaltySettings)` di `loyaltyPoints.ts` — `pointsPerTransaction + floor(total/pointsPerRupiah)`. Dipanggil saat checkout成功 via `customerStore.recordVisit`.
+- **Redeem**: Input "Tukar poin" di POS (keranjang mobile + modal Bayar) hanya muncul jika `loyaltySettings.enabled = true`. `calculateMaxRedeemablePoints` membatasi poin yang ditukar (tidak melebihi saldo & headroom diskon).
+- **Clawback**: `revertVisit` di cancelPendingTransaction / void — poin dikembalikan simetris.
+- **Cloud sync**: `syncLoyaltySettings` + `fetchLoyaltySettingsFromCloud` sudah ada.
+
+**Kesimpulan**: Fitur loyalty earn & redeem sudah fungsional dengan toggle ON/OFF. **Tidak ada bug yang ditemukan.** Cukup pastikan klien tahu cara mengaktifkan/menonaktifkan di menu Promo → tab Pelanggan & Loyalitas.
+
+### I.2 — Promo Bundling: BELUM ADA (Hanya Bundle Menu)
+
+**Temuan:**
+
+- **Bundle MENU** (`Menu.isBundle = true`, `MenuComponent[]`) sudah ada — ini adalah menu yang dikemas dari beberapa komponen (mis. "Paket Lele + Es Teh" = komponen dari 2 menu). Harga bundle diatur manual di form Edit Menu.
+- **Promo Bundling sebagai tipe diskon** belum ada — yaitu "beli item A + item B bersamaan = diskon X%". Saat ini, promo hanya mendukung: `percentage`, `fixed`, `bogo`.
+
+**Dampak**:
+- Klien tidak bisa membuat promo "Beli Nasi + Ayam = Diskon Rp 5.000" atau "Beli 2 minuman = Diskon 10%"
+- Satu-satunya cara adalah membuat bundle menu (tidak fleksibel untuk promo sesaat)
+
+**Solusi yang Direkomendasikan:**
+
+Tambah tipe promo baru `'bundle'` dengan:
+- `bundleItems: Array<{menuId: string; quantity: number}>` — item yang harus ada di keranjang
+- `bundleDiscountType: 'fixed' | 'percent'` — tipe diskon
+- `bundleDiscountValue: number` — nilai diskon (Rp atau %)
+- Deteksi otomatis di POS: jika keranjang mengandung SEMUA item bundle, diskon diterapkan
+- **Tidak perlu Migration** — simpan di field `meta` JSON yang sudah ada di tabel `promos`
+
+**File yang terdampak:**
+- `src/types/index.ts` — tambah tipe `'bundle'` di `PromoType` + field bundle di `Promo`
+- `src/utils/promoValidation.ts` — validasi field bundle saat simpan promo
+- `src/utils/discountEngine.ts` — deteksi bundle + hitung diskon bundle
+- `src/pages/Promos.tsx` — form bundle (pilih item + qty + diskon)
+- `src/pages/POS.tsx` — deteksi bundle saat cart berubah
+
+### I.3 — Diskon Per Menu di POS: ✅ SELESAI (TO DO 22.2)
+
+**Temuan:**
+
+- **Diskon manual** saat ini hanya di CART level (`discountInput` + `discountType` di POS.tsx) — kasir memasukkan diskon Rp atau % dari subtotal keseluruhan.
+- **CartItem** tidak punya field `itemDiscount` — tidak ada cara memberi diskon per item.
+- **Dampak ke struk**: Struk hanya menampilkan total diskon, bukan per item.
+- **Dampak ke laporan**: Revenue sudah dari `subtotal` yang sudah dipotong diskon — tidak ada perubahan signifikan.
+
+**Solusi yang Direkomendasikan:**
+
+Tambah field `itemDiscount?: number` di `CartItem` + UI kecil di keranjang POS:
+
+1. **CartItem type**: Tambah `itemDiscount?: number` (default 0)
+2. **UI**: Tombol ikon `Tag` kecil di samping setiap item di keranjang → when diklik, muncul input inline (Rp atau %) — cukup 1 input sederhana
+3. **Kalkulasi**: `itemSubtotal = (basePrice + sumAddons) * qty - itemDiscount` (clamp ≥ 0)
+4. **Cart subtotal**: `Σ itemSubtotal` (sudah benar karena `cart.getSubtotal()` pakai `item.subtotal`)
+5. **Struk**: Tampilkan diskon per item (contoh: `Es Teh x2 = Rp 12.000 - Rp 2.000 = Rp 10.000`)
+6. **Laporan**: Tidak perlu perubahan — revenue sudah dari subtotal yang benar
+
+**File yang terdampak:**
+- `src/types/index.ts` — tambah `itemDiscount?: number` di `CartItem`
+- `src/pages/POS.tsx` — UI input diskon per item + update subtotal saat diskon berubah
+- `src/store/cartStore.ts` — update subtotal calculation
+- `src/utils/printer.ts` — tampilkan diskon per item di struk
+- `src/utils/digitalReceipt.ts` — tampilkan diskon per item di struk digital
+
+---
+
+*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**; **I = audit promo/loyalty/diskon per menu, rincian eksekusi di `TO DO.md` Prioritas 22**).*

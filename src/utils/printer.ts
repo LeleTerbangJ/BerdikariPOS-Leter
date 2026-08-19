@@ -694,6 +694,8 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
     const tempStr = item.showTemperature !== false ? item.temperature : '';
     const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
     const unitPrice = item.basePrice + item.addons.reduce((a, b) => a + b.price, 0);
+    const itemDisc = item.itemDiscount || 0;
+    const originalTotal = unitPrice * item.quantity;
 
     return `
       <div class="item-row">
@@ -703,6 +705,7 @@ export function printReceiptBrowser(data: ReceiptData, width: '58mm' | '80mm', p
           <span style="padding-left: 4px;">${item.quantity}x ${formatRupiah(unitPrice)}</span>
           <span class="font-bold">${formatRupiah(item.subtotal)}</span>
         </div>
+        ${itemDisc > 0 ? `<div class="flex-between" style="font-size: 85%; color: #b45309;"><span style="padding-left: 4px;">Diskon item</span><span>-${formatRupiah(itemDisc)}</span></div>` : ''}
       </div>
     `;
   }).join('');

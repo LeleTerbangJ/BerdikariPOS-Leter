@@ -57,6 +57,7 @@ import {
   FileText,
   UserPlus,
   FlaskConical,
+  Tag,
 } from 'lucide-react';
 
 // v4.7 UX: pemilih pelanggan yang bisa dicari (nama / HP / email) — hemat waktu kasir
@@ -495,6 +496,9 @@ export default function POS() {
   const [skipKitchenPrint, setSkipKitchenPrint] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
   const [discountType, setDiscountType] = useState<'rp' | 'percent'>('rp');
+  // v4.7 TO DO 22.2: state untuk input diskon per item
+  const [editingItemDiscount, setEditingItemDiscount] = useState<string | null>(null);
+  const [itemDiscountInput, setItemDiscountInput] = useState('');
 
   const getManualDiscountValue = useCallback(() => {
     const val = parseInt(discountInput) || 0;
@@ -1288,10 +1292,73 @@ export default function POS() {
                         {item.addons.length > 0 && ` • +${item.addons.map((a) => a.name).join(', ')}`}
                       </p>
                     </div>
-                    <button onClick={() => cart.removeItem(item.lineId)} className="p-1 text-red-400 hover:text-red-500 transition">
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {/* v4.7 TO DO 22.2: Tombol diskon per item */}
+                      <button
+                        onClick={() => {
+                          if (editingItemDiscount === item.lineId) {
+                            setEditingItemDiscount(null);
+                          } else {
+                            setEditingItemDiscount(item.lineId);
+                            setItemDiscountInput(item.itemDiscount ? String(item.itemDiscount) : '');
+                          }
+                        }}
+                        className={`p-1 transition ${
+                          (item.itemDiscount || 0) > 0
+                            ? 'text-amber-500 hover:text-amber-600'
+                            : editingItemDiscount === item.lineId
+                              ? 'text-amber-500'
+                              : 'text-slate-400 hover:text-slate-500'
+                        }`}
+                        title="Diskon item"
+                      >
+                        <Tag size={14} />
+                      </button>
+                      <button onClick={() => cart.removeItem(item.lineId)} className="p-1 text-red-400 hover:text-red-500 transition">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
+                  {/* Input diskon per item — inline */}
+                  {editingItemDiscount === item.lineId && (
+                    <div className="flex items-center gap-2 mt-1 mb-2 p-2 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-900/30">
+                      <Tag size={12} className="text-amber-500 shrink-0" />
+                      <input
+                        type="number"
+                        value={itemDiscountInput}
+                        onChange={(e) => setItemDiscountInput(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            cart.setItemDiscount(item.lineId, parseInt(itemDiscountInput) || 0);
+                            setEditingItemDiscount(null);
+                          }
+                        }}
+                        placeholder="Diskon Rp"
+                        className="input text-xs flex-1 h-7"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => {
+                          cart.setItemDiscount(item.lineId, parseInt(itemDiscountInput) || 0);
+                          setEditingItemDiscount(null);
+                        }}
+                        className="text-xs text-amber-600 dark:text-amber-400 font-medium hover:underline"
+                      >
+                        OK
+                      </button>
+                      {(item.itemDiscount || 0) > 0 && (
+                        <button
+                          onClick={() => {
+                            cart.setItemDiscount(item.lineId, 0);
+                            setEditingItemDiscount(null);
+                          }}
+                          className="text-xs text-red-500 hover:underline"
+                        >
+                          Hapus
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between mt-2">
                     <div className="flex items-center gap-2">
                       <button
@@ -1308,7 +1375,12 @@ export default function POS() {
                         <Plus size={12} />
                       </button>
                     </div>
-                    <p className="font-semibold text-sm text-brand-700 dark:text-brand-400">{formatRupiah(item.subtotal)}</p>
+                    <div className="text-right">
+                      {(item.itemDiscount || 0) > 0 && (
+                        <p className="text-[10px] text-amber-500 line-through">{formatRupiah((item.basePrice + item.addons.reduce((a, b) => a + b.price, 0)) * item.quantity)}</p>
+                      )}
+                      <p className="font-semibold text-sm text-brand-700 dark:text-brand-400">{formatRupiah(item.subtotal)}</p>
+                    </div>
                   </div>
                 </div>
               ))}
