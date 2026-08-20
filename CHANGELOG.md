@@ -342,12 +342,19 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 > **Catatan**: aplikasi otomatis mendeteksi kolom yang kurang saat dibuka dan mencetak SQL perbaikannya di console browser (Migration 19 — opname, Migration 20 — refund, Migration 21 — struk digital, Migration 22–26 — fitur promo & loyalty, **Migration 27 — RPC `adjust_inventory_stock` (proteksi stok), Migration 28 — tabel `queue_counters` + RPC `allocate_queue_number` (proteksi nomor antrean), Migration 29 — `updated_at` inventory, Migration 30 — `kitchen_ticket_printed_at` transaksi**) — jadi tidak ada langkah yang bisa terlewat tanpa disadari.
 
+### 🔧 Perbaikan Bug (v4.8.1 — Fix 24.1–24.5)
+
+- **24.1 (KRITIS)**: Sync `kitchenItemStatus` per-item ke cloud — `syncTransactionMeta` kini memproses field `items` (JSONB) → status item sinkron lintas device.
+- **24.2**: Tombol "Selesai Semua" di KDS hanya menandai item `processing` (bukan `new`) sebagai done.
+- **24.3 + 24.4**: `mergeKitchenItemStatus` cek quantity/specs/addons berubah → status `new` untuk item yang berubah. `calculateDeltaKitchenItems` mempertahankan logika delta.
+- **24.5**: Filter KDS menampilkan transaksi di SEMUA kolom yang relevan (Waiting jika ada `new`, Processing jika ada `processing`). Filter items sesuai kolom.
+
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
 - `npx vitest run` → **632/632 test lolos** (61 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test**; **Prioritas 21 (21.1): +4 test**; **Prioritas 23 (23.1–23.7): +30 test** — per-item kitchen status, KDS filter, tombol per-item, sync cloud, logging)
-- `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
+- `npm run build` → **sukses** (9.76s, 50 chunks, PWA v1.3.0)
 
 ---
 
-*Changelog ini disusun untuk rilis v4.8.0. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*
+*Changelog ini disusun untuk rilis v4.8.1. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*

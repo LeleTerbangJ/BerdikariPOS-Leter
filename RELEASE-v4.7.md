@@ -227,10 +227,17 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ---
 
+## 🔧 Perbaikan Bug (v4.8.1 — Fix 24.1–24.5)
+
+- **24.1 (KRITIS)**: Sync `kitchenItemStatus` per-item ke cloud → status item sinkron lintas device.
+- **24.2**: Tombol "Selesai Semua" hanya menandai item `processing` (bukan `new`) sebagai done.
+- **24.3 + 24.4**: `mergeKitchenItemStatus` cek perubahan qty/specs/addons → status `new` untuk item berubah.
+- **24.5**: Filter KDS menampilkan transaksi di SEMUA kolom yang relevan (mixed status).
+
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **632/632 test lolos** (61 file — Prioritas 20: +10 test; **Prioritas 21: +4 test**; **Prioritas 23: +30 test** — per-item kitchen status, KDS filter, tombol per-item, sync cloud, logging)
-- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026, setelah seluruh Prioritas 23 tuntas)**: `✓ built in 19.14s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.50 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.8 final terverifikasi**.
+- `npx vitest run` → **632/632 test lolos** (61 file — Prioritas 20: +10 test; **Prioritas 21: +4 test**; **Prioritas 23: +30 test**)
+- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026)**: `✓ built in 9.76s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.83 KiB)**. Build produksi **v4.8.1 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---
