@@ -1495,17 +1495,16 @@
 - [x] Shortcut 'Proses Semua' di kolom Waiting (batch new → processing) — ✅ `Kitchen.tsx`
 - [x] Shortcut 'Selesai Semua' di kolom Processing (batch processing → done) — ✅ `Kitchen.tsx`
 
-### 23.6 (🟡 SEDANG) — Sync kitchenItemStatus ke cloud
+### 23.6 (🟡 SEDANG) — Sync kitchenItemStatus ke cloud ✅ SELESAI (v4.8)
 
-- **Temuan**: Field baru perlu di-sync ke Supabase. Gunakan field `kitchen_item_status` di tabel `transactions.items` (JSON) atau field terpisah.
-- **Solusi**: Pastikan `syncTransaction` + `loadFromCloud` memetakan field baru. Gunakan `updateTxMeta` untuk update item-level status.
-- **File**: `cloudSync.ts`, `transactionStore.ts`
+- [x] Tambah `kitchenItemStatus` ke `migrationNeeded` — ✅ `cloudSync.ts`
+- [x] `syncTransactionMeta` sync `items` (JSON) ke cloud — ✅ `cloudSync.ts`
+- [x] `updateItemKitchenStatus` panggil `syncTransactionMeta({ items })` — ✅ `transactionStore.ts`
 
-### 23.7 (🟡 SEDANG) — Logging sync kitchenTicketPrintedAt
+### 23.7 (🟡 SEDANG) — Logging sync kitchenTicketPrintedAt ✅ SELESAI (v4.8)
 
-- **Temuan**: Bug 1 (KDS Acaraki tidak melihat pending) kemungkinan karena `kitchenTicketPrintedAt` tidak sync ke cloud. Perlu verifikasi.
-- **Solusi**: Tambah `console.log` di engine saat stamp `kitchenTicketPrintedAt` + pastikan `updateTxMeta` sync field ke cloud. Jika `didKitchenPrintSucceed` return false (printer gagal), log warning.
-- **File**: `atomicTransactionEngine.ts`
+- [x] `console.log` saat `kitchenTicketPrintedAt` di-stamp — ✅ `atomicTransactionEngine.ts`
+- [x] `console.warn` saat kitchen print GAGAL (tidak di-stamp) — ✅ `atomicTransactionEngine.ts`
 
 ---
 

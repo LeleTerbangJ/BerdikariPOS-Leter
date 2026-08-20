@@ -346,10 +346,15 @@ export class AtomicTransactionEngine {
               ? { ...receiptData, items: params.deltaKitchenItems, isAdditionalPrint: true }
               : receiptData;
             const kitchenResults = await printReceipt(kitchenReceiptData, params.settings, 'kitchen');
+            // v4.8 TO DO 23.7: logging kitchenTicketPrintedAt untuk debugging
             if (didKitchenPrintSucceed(kitchenResults)) {
+              const printedAt = new Date().toISOString();
+              console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt}`);
               useTransactionStore
                 .getState()
-                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: new Date().toISOString() });
+                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
+            } else {
+              console.warn(`[AtomicEngine] Kitchen print FAILED for Tx #${tx.id} — kitchenTicketPrintedAt NOT stamped`);
             }
           }
         }

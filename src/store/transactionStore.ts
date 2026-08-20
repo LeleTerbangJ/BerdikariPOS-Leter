@@ -134,6 +134,7 @@ export const useTransactionStore = create<TransactionState>()(
 
       // v4.8 TO DO 23.5: update kitchenItemStatus per-item di transaksi
       updateItemKitchenStatus: (txId, lineId, status) => {
+        let updatedTx: Transaction | undefined;
         set((s) => ({
           transactions: s.transactions.map((t) => {
             if (t.id !== txId) return t;
@@ -148,11 +149,15 @@ export const useTransactionStore = create<TransactionState>()(
             if (allDone) newKitchenStatus = 'Done';
             else if (hasNew) newKitchenStatus = 'Waiting';
             else if (hasProcessing) newKitchenStatus = 'Processing';
-            return { ...t, items: updatedItems, kitchenStatus: newKitchenStatus, updatedAt: new Date().toISOString() };
+            updatedTx = { ...t, items: updatedItems, kitchenStatus: newKitchenStatus, updatedAt: new Date().toISOString() };
+            return updatedTx;
           }),
         }));
-        // Sync ke cloud
-        syncTransactionStatus(txId, status === 'done' ? 'Done' : status === 'processing' ? 'Processing' : 'Waiting');
+        // v4.8 TO DO 23.6: sync ke cloud — kitchenStatus + items (dengan kitchenItemStatus)
+        if (updatedTx) {
+          syncTransactionStatus(txId, updatedTx.kitchenStatus);
+          syncTransactionMeta(txId, { items: updatedTx.items } as any);
+        }
       },
 
       updateTxStatus: (id, status) => {
