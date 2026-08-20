@@ -10,7 +10,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePrinterCrossTab } from '../hooks/usePrinterCrossTab';
 import type { KitchenStatus } from '../types';
-import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw, Sparkles, Plus } from 'lucide-react';
+import { Clock, Flame, CheckCircle2, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw, Sparkles, Plus } from 'lucide-react';
 
 const columns: { status: KitchenStatus; label: string; color: string; icon: any }[] = [
   { status: 'Waiting', label: 'Antrean Menunggu', color: 'border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-600/50', icon: Clock },
@@ -156,12 +156,6 @@ export default function Kitchen() {
     }, 30000);
     return () => clearInterval(interval);
   }, [overdueCount, isMuted]);
-
-  const getNextStatus = (current: KitchenStatus): KitchenStatus | null => {
-    if (current === 'Waiting') return 'Processing';
-    if (current === 'Processing') return 'Done';
-    return null;
-  };
 
   return (
     <div className="h-full flex flex-col">
@@ -340,19 +334,6 @@ export default function Kitchen() {
                             <span className="text-xs text-blue-400">{waitMins} mnt (sejak update)</span>
                           )}
                         </div>
-                        {getNextStatus(status) && (
-                          <button
-                            onClick={() =>
-                              updateKitchenStatus(order.id, getNextStatus(status)!)
-                            }
-                            className={`btn-primary text-xs py-1.5 px-3 ${
-                              overdue ? 'animate-bounce' : ''
-                            }`}
-                          >
-                            <ArrowRight size={14} />
-                            {status === 'Waiting' ? 'Proses' : 'Selesai'}
-                          </button>
-                        )}
                       </div>
 
                       {/* Shift/Cashier info */}

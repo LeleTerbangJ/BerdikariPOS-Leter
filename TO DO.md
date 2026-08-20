@@ -1564,17 +1564,11 @@
 
 ## 🔴 TEMUAN AUDIT PASCA-FIX 25 (Bug KRITIS)
 
-### 26.1 (🔴 KRITIS) — Tombol per-order "Proses"/"Selesai" tidak update kitchenItemStatus
+### 26.1 (🔴 KRITIS) — Tombol per-order "Proses"/"Selesai" tidak update kitchenItemStatus ✅ SELESAI (v4.8)
 
-- **Temuan**: Tombol per-order di KDS memanggil `updateKitchenStatus(id, status)` yang HANYA update `kitchenStatus` di transaksi. Tapi KDS filter sekarang menggunakan `kitchenItemStatus` (per-item) untuk menentukan kolom. Akibatnya:
-  1. User klik "Proses" di kolom Waiting
-  2. `kitchenStatus` berubah ke 'Processing'
-  3. Tapi `kitchenItemStatus` tetap 'new' untuk semua item
-  4. KDS filter hitung `effectiveStatus = 'Waiting'` (karena masih ada 'new')
-  5. Transaksi TETAP di kolom Waiting — tombol "Proses" TIDAK BERFUNGSI!
-- **Dampak**: Tombol per-order "Proses" dan "Selesai" di KDS tidak berfungsi sama sekali. User harus pakai tombol per-item atau "Proses Semua"/"Selesai Semua".
-- **File**: `transactionStore.ts` (updateKitchenStatus), `Kitchen.tsx` (tombol per-order)
-- **Fix**: Hapus tombol per-order (karena sudah ada tombol per-item + shortcut batch), ATAU update `updateKitchenStatus` untuk juga update `kitchenItemStatus` semua item.
+- [x] Hapus tombol per-order "Proses"/"Selesai" (sudah ada tombol per-item + shortcut batch) — ✅ `Kitchen.tsx`
+- [x] Hapus fungsi `getNextStatus` yang tidak terpakai — ✅ `Kitchen.tsx`
+- [x] Hapus import `ArrowRight` yang tidak terpakai — ✅ `Kitchen.tsx`
 
 ---
 
