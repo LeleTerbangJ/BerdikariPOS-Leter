@@ -1014,7 +1014,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 24.4 Validasi & Status (Prioritas 20)
 
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file; +30 dari 602) — rantai terkini di §9.6.
-- **TO DO.md**: Prioritas 20 **TUNTAS (20.1–20.4)** + Prioritas 21 **TUNTAS (21.1–21.5)** + Prioritas 23 **TUNTAS (23.1–23.7)**; ANALYSE.md Bagian G ✅ + Bagian H ✅ + Bagian M ✅. **Prioritas 19 (Multi Outlet) tetap BELUM dieksekusi** (analisa F.1–F.10 di ANALYSE.md, daftar 19.1–19.14 di TO DO.md).
+- **TO DO.md**: Prioritas 20 **TUNTAS (20.1–20.4)** + Prioritas 21 **TUNTAS (21.1–21.5)** + Prioritas 23 **TUNTAS (23.1–23.7)** + Fix 24.x **TUNTAS (24.1–24.5)**; ANALYSE.md Bagian G ✅ + Bagian H ✅ + Bagian M ✅. **Prioritas 19 (Multi Outlet) tetap BELUM dieksekusi** (analisa F.1–F.10 di ANALYSE.md, daftar 19.1–19.14 di TO DO.md).
 - **CHANGELOG.md**: 5 bullet Perbaikan Bug (20.1–20.4 + 21) + validasi 632/632. **RELEASE-v4.7.md**: 5 bullet Perbaikan Utama + 632/632 (intro + validasi). **DEPLOYMENT.md**: §2 + §7 checklist Prioritas 20 & 21 + §8 diperbarui ke 632/632. **TESTING-PRADEPLOY.md**: tahap F (Prioritas 20) + tabel ringkasan.
 - **SQL**: Prioritas 20 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
 - **`npm run build` ✅ BERHASIL** (18 Agt 2026): build pertama setelah 20.1–20.3 → `✓ built in 7.71s`; **build final setelah 20.4 lengkap + sinkronisasi dokumen → `✓ built in 6.78s`**, tanpa error TypeScript/rollup; PWA v1.3.0 `generateSW` → **50 precache entries (3623.95 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, dikenal, bukan regresi). Perubahan `shiftStats`, UI toast/dialog (20.2–20.3), dan `buildCustomDateRange`/Reports/Transactions (20.4) **lolos build produksi**.
@@ -1120,6 +1120,41 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - **TO DO.md**: Prioritas 23 **TUNTAS (23.1 + 23.2 + 23.3 + 23.4 + 23.5 + 23.6 + 23.7)**; ANALYSE.md Bagian M ✅.
 - **CHANGELOG.md**: 3 bullet (Per-item kitchen status, Header TAMBAHAN, Tombol per-item KDS) + validasi 632/632. **RELEASE-v4.7.md**: 3 bullet Perbaikan Utama (23) + 632/632. **DEPLOYMENT.md**: §7 checklist Prioritas 23 + validasi 632/632.
 - **SQL**: Prioritas 23 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
+
+---
+
+## 28. Riwayat Pengerjaan v4.8 — Audit Pasca-Rilis 23 & Fix 24.1–24.5 (semua ✅)
+
+### 28.1 24.1 — syncTransactionMeta tidak sync items ke cloud (FIX KRITIS)
+
+- **Akar masalah**: `updateItemKitchenStatus` memanggil `syncTransactionMeta(txId, { items })` tapi `syncTransactionMeta` tidak memproses field `items` (hanya paymentMethod, refunded, kitchenTicketPrintedAt) → kitchenItemStatus tidak tersync ke cloud → device lain tidak melihat perubahan status item.
+- **Fix**: Hapus guard `!migrationNeeded.kitchenItemStatus` yang tidak perlu. Field `items` (JSONB) langsung di-sync ke cloud via `smartUpdate`. Hapus `as any` cast di `transactionStore.ts`.
+- **File**: `src/lib/cloudSync.ts`, `src/store/transactionStore.ts`.
+
+### 28.2 24.2 — Tombol "Selesai Semua" bisa menandai item 'new' sebagai done (FIX)
+
+- **Akar masalah**: Filter `kitchenItemStatus !== 'done'` → item 'new' (belum diproses) juga ikut ditandai done.
+- **Fix**: Ubah filter ke `kitchenItemStatus === 'processing'` — hanya item yang sedang diproses yang ditandai selesai.
+- **File**: `src/pages/Kitchen.tsx`.
+
+### 28.3 24.3 + 24.4 — Delta & merge kitchen status (FIX)
+
+- **Akar masalah 24.3**: `calculateDeltaKitchenItems` mengembalikan semua item delta dengan status 'new' → item yang sedang diproses di-reset ke 'new'.
+- **Akar masalah 24.4**: `mergeKitchenItemStatus` tidak mengecek quantity/specs berubah → qty tambahan tidak mendapat badge 'Baru'.
+- **Fix**: `mergeKitchenItemStatus` mengecek quantity/specs/addons berubah → status 'new'. `calculateDeltaKitchenItems` mempertahankan logika lama (delta qty = selisih 'new', specs = seluruh item 'new').
+- **File**: `src/utils/kitchenTicket.ts`.
+
+### 28.4 24.5 — Filter KDS mixed status (FIX)
+
+- **Akar masalah**: Filter lama menghitung `effectiveStatus` satu status dominan → transaksi dengan item 'new' + 'processing' hanya muncul di satu kolom.
+- **Fix**: Filter orders tampilkan di kolom JIKA ada item dengan status kolom tersebut. Filter items tampilkan item sesuai kolom (new→Waiting, processing→Processing, all→Done).
+- **File**: `src/pages/Kitchen.tsx`.
+
+### 28.5 Validasi & Status (Fix 24.1–24.5)
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file).
+- `npm run build` → **✅ BERHASIL** (9.76s, 50 chunks, PWA v1.3.0).
+- **TO DO.md**: 24.1 ✅ + 24.2 ✅ + 24.3 ✅ + 24.4 ✅ + 24.5 ✅ (semua selesai).
 
 ---
 
