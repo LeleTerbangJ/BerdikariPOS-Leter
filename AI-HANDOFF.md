@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.7
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.8
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -1013,8 +1013,8 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 ### 24.4 Validasi & Status (Prioritas 20)
 
-- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **602/602 test lolos** (57 file; +4 dari 598) — rantai terkini di §9.6.
-- **TO DO.md**: Prioritas 20 **TUNTAS (20.1–20.4)** + Prioritas 21 **TUNTAS (21.1–21.5)**; ANALYSE.md Bagian G ✅ + Bagian H ✅. **Prioritas 19 (Multi Outlet) tetap BELUM dieksekusi** (analisa F.1–F.10 di ANALYSE.md, daftar 19.1–19.14 di TO DO.md).
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file; +30 dari 602) — rantai terkini di §9.6.
+- **TO DO.md**: Prioritas 20 **TUNTAS (20.1–20.4)** + Prioritas 21 **TUNTAS (21.1–21.5)** + Prioritas 23 **TUNTAS (23.1–23.7)**; ANALYSE.md Bagian G ✅ + Bagian H ✅ + Bagian M ✅. **Prioritas 19 (Multi Outlet) tetap BELUM dieksekusi** (analisa F.1–F.10 di ANALYSE.md, daftar 19.1–19.14 di TO DO.md).
 - **CHANGELOG.md**: 5 bullet Perbaikan Bug (20.1–20.4 + 21) + validasi 602/602. **RELEASE-v4.7.md**: 5 bullet Perbaikan Utama + 602/602 (intro + validasi). **DEPLOYMENT.md**: §2 + §7 checklist Prioritas 20 & 21 + §8 diperbarui ke 602/602. **TESTING-PRADEPLOY.md**: tahap F (Prioritas 20) + tabel ringkasan.
 - **SQL**: Prioritas 20 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
 - **`npm run build` ✅ BERHASIL** (18 Agt 2026): build pertama setelah 20.1–20.3 → `✓ built in 7.71s`; **build final setelah 20.4 lengkap + sinkronisasi dokumen → `✓ built in 6.78s`**, tanpa error TypeScript/rollup; PWA v1.3.0 `generateSW` → **50 precache entries (3623.95 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, dikenal, bukan regresi). Perubahan `shiftStats`, UI toast/dialog (20.2–20.3), dan `buildCustomDateRange`/Reports/Transactions (20.4) **lolos build produksi**.
@@ -1056,9 +1056,9 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 ### 25.6 Validasi & Status (Prioritas 21)
 
-- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **602/602 test lolos** (57 file; +4 dari 598) — rantai terkini di §9.6.
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file; +30 dari 602) — rantai terkini di §9.6.
 - **TO DO.md**: Prioritas 21 **TUNTAS (21.1 + 21.2 + 21.3 + 21.4 + 21.5)**; ANALYSE.md Bagian H → 21.1 ✅ 21.2 ✅ 21.3 ✅ 21.4 ✅ 21.5 ✅.
-- **CHANGELOG.md**: 1 bullet Prioritas 21 (5 fix: tiket dapur delta, skipSplitKitchen, guard reconciled, badge pending, badge KDS) + validasi 602/602. **RELEASE-v4.7.md**: 1 bullet Perbaikan Utama (21) + 602/602 (intro + validasi). **DEPLOYMENT.md**: §7 checklist Prioritas 21 (21.1 s.d. 21.5) + validasi 602/602.
+- **CHANGELOG.md**: 1 bullet Prioritas 21 (5 fix: tiket dapur delta, skipSplitKitchen, guard reconciled, badge pending, badge KDS) + validasi 632/632. **RELEASE-v4.7.md**: 1 bullet Perbaikan Utama (21) + 632/632 (intro + validasi). **DEPLOYMENT.md**: §7 checklist Prioritas 21 (21.1 s.d. 21.5) + validasi 632/632.
 - **SQL**: Prioritas 21 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
 
 ---
@@ -1070,6 +1070,56 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - **Perubahan**: Tambah baris Jam Mulai/Jam Tutup shift, Total Item Terjual, daftar **Penjualan Menu per item** (Nama Menu + Qty x Harga = Jumlah, diurutkan terlaris di atas via `menuSalesMap`), dan rumusan formula expected cash dihapus.
 - **File**: `src/components/Layout.tsx` (`handleCloseShift` — baris `menuSalesMap` + format struk).
 - **Validasi**: tsc 0 error, 602/602 test (57 file).
+
+---
+
+## 27. Riwayat Pengerjaan v4.8 — Per-item Kitchen Status & KDS (23.1 ✅ + 23.2 ✅ + 23.3 ✅ + 23.4 ✅ + 23.5 ✅ + 23.6 ✅ + 23.7 ✅)
+
+### 27.1 23.1 — Per-item kitchen status di CartItem (FITUR BARU)
+
+- **Fitur**: Tambah field `kitchenItemStatus?: 'new' | 'processing' | 'done'` di `CartItem` agar KDS bisa membedakan item baru vs lama saat pending di-update.
+- **File**: `src/types/index.ts`, `src/utils/kitchenTicket.ts` (helper `mergeKitchenItemStatus`, `hasNewStatusItems`, `calculateDeltaKitchenItems`).
+
+### 27.2 23.2 — Fix overrideKitchenStatus agar item lama tidak reset ke Waiting (FIX)
+
+- **Akar masalah**: Saat update pending dengan item baru, `overrideKitchenStatus = 'Waiting'` diterapkan ke seluruh transaksi → item lama yang sudah Done ikut ter-reset.
+- **Fix**: `mergeKitchenItemStatus()` pertahankan status item lama, set 'new' untuk item baru. `overrideKitchenStatus` hanya 'Waiting' jika ADA item dengan status 'new'.
+- **File**: `src/pages/POS.tsx` (handleSavePending).
+
+### 27.3 23.3 — Header 'TAMBAHAN' di tiket dapur cetak (FITUR BARU)
+
+- **Fitur**: Tambah header `========== ==========` + `TAMBAHAN` di tiket dapur saat cetak delta items (update pending). Field `isAdditionalPrint` di `ReceiptData`.
+- **File**: `src/utils/printer.ts` (browser print + Bluetooth ESC/POS), `src/lib/atomicTransactionEngine.ts`.
+
+### 27.4 23.4 — KDS filter per-item (FITUR BARU)
+
+- **Fitur**: Filter KDS berdasarkan `kitchenItemStatus` per-item:
+  - Ada item 'new' → kolom Waiting
+  - Ada item 'processing' (tanpa 'new') → kolom Processing
+  - Semua item 'done' → kolom Done
+- **File**: `src/pages/Kitchen.tsx`.
+
+### 27.5 23.5 — Tombol per-item di KDS + shortcut batch (FITUR BARU)
+
+- **Fitur**: Tombol per-item: 'Proses' (item 'new') / 'Selesai' (item 'processing'). Shortcut 'Proses Semua' di kolom Waiting, 'Selesai Semua' di kolom Processing.
+- **File**: `src/pages/Kitchen.tsx`, `src/store/transactionStore.ts` (`updateItemKitchenStatus`).
+
+### 27.6 23.6 — Sync kitchenItemStatus ke cloud (FITUR BARU)
+
+- **Fitur**: `syncTransactionMeta` sync `items` (JSON) ke cloud. `updateItemKitchenStatus` panggil `syncTransactionMeta({ items })`.
+- **File**: `src/lib/cloudSync.ts`, `src/store/transactionStore.ts`.
+
+### 27.7 23.7 — Logging kitchenTicketPrintedAt (FITUR BARU)
+
+- **Fitur**: `console.log` saat `kitchenTicketPrintedAt` di-stamp, `console.warn` saat kitchen print GAGAL.
+- **File**: `src/lib/atomicTransactionEngine.ts`.
+
+### 27.8 Validasi & Status (Prioritas 23)
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file; +30 dari 602) — rantai terkini di §9.6.
+- **TO DO.md**: Prioritas 23 **TUNTAS (23.1 + 23.2 + 23.3 + 23.4 + 23.5 + 23.6 + 23.7)**; ANALYSE.md Bagian M ✅.
+- **CHANGELOG.md**: 3 bullet (Per-item kitchen status, Header TAMBAHAN, Tombol per-item KDS) + validasi 632/632. **RELEASE-v4.7.md**: 3 bullet Perbaikan Utama (23) + 632/632. **DEPLOYMENT.md**: §7 checklist Prioritas 23 + validasi 632/632.
+- **SQL**: Prioritas 23 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
 
 ---
 
