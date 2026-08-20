@@ -1534,4 +1534,43 @@
 
 ---
 
+## 🟠 TEMUAN AUDIT PASCA-FIX 24 (Bug Baru / Logic Flaw)
+
+### 25.1 (🟠 TINGGI) — mergeKitchenItemStatus salah handle quantity TURUN
+
+- **Temuan**: `mergeKitchenItemStatus` mengecek `quantityChanged = c.quantity !== p.quantity`. Saat quantity TURUN (misal 3→2), `quantityChanged = true` → status item di-reset ke 'new' → item muncul kembali di kolom Waiting dengan badge "Baru". Padahal item yang quantity-nya turun tidak perlu dimasak ulang.
+- **Dampak**: Item yang sudah diproses muncul kembali di Waiting saat quantity dikurangi.
+- **File**: `kitchenTicket.ts` (mergeKitchenItemStatus)
+- **Fix**: Ubah ke `c.quantity > p.quantity` (hanya quantity NAIK yang dianggap berubah).
+
+### 25.2 (🟡 SEDANG) — updateItemKitchenStatus sync tanpa await
+
+- **Temuan**: `syncTransactionStatus` dan `syncTransactionMeta` dipanggil tanpa await di `updateItemKitchenStatus`. Jika sync gagal, tidak ada error handling atau retry → perubahan status tidak tersync ke cloud tanpa notifikasi.
+- **Dampak**: Status item tidak sinkron lintas device tanpa user sadar.
+- **File**: `transactionStore.ts` (updateItemKitchenStatus)
+- **Fix**: Tambah await + try/catch + console.warn jika sync gagal.
+
+### 25.3 (🟡 SEDANG) — Transaksi mixed status muncul di 2 kolom sekaligus
+
+- **Temuan**: Filter KDS FIX 24.5 menampilkan transaksi di SEMUA kolom yang relevan. Jika transaksi punya item 'new' + 'processing', transaksi muncul di Waiting DAN Processing. User mungkin bingung karena melihat transaksi yang sama di dua kolom.
+- **Dampak**: User bingung melihat transaksi #5 di kolom Waiting (Nasi Putih) DAN Processing (PH Lele) secara bersamaan.
+- **File**: `Kitchen.tsx` (filter activeOrders)
+- **Fix**: Pertimbangkan untuk menampilkan transaksi hanya di kolom "dominan" (ada item 'new' → Waiting, jika tidak ada 'new' tapi ada 'processing' → Processing). Atau tampilkan semua item di kolom Waiting dengan badge status berbeda.
+
+### 25.4 (🟡 SEDANG) — Tombol "Proses Semua" tidak handle item 'processing'
+
+- **Temuan**: Tombol "Proses Semua" di kolom Waiting hanya memproses item 'new'. Jika ada item 'processing' (sudah diproses tapi belum selesai), item tersebut tidak ditampilkan di Waiting karena filter hanya menampilkan 'new'. User tidak bisa melihat item 'processing' di kolom Waiting.
+- **Dampak**: User tidak bisa melihat progress item yang sedang diproses di kolom Waiting.
+- **File**: `Kitchen.tsx` (filter items + tombol Proses Semua)
+- **Fix**: Tampilkan item 'processing' di kolom Waiting dengan badge "Diproses" (atau tampilkan transaksi di kedua kolom dengan item berbeda).
+
+### 25.5 (🟡 SEDANG) — calculateDeltaKitchenItems tidak kirim item yang quantity TURUN
+
+- **Temuan**: `calculateDeltaKitchenItems` hanya memproses item baru, specs berubah, atau quantity NAIK. Item yang quantity TURUN (misal 3→2) tidak masuk delta → tiket dapur tidak mencetak item yang dihapus.
+- **Dampak**: Dapur tidak tahu item mana yang sudah tidak perlu diproses (tidak signifikan, tapi bisa membingungkan).
+- **File**: `kitchenTicket.ts` (calculateDeltaKitchenItems)
+- **Catatan**: Ini sebenarnya benar (item dihapus tidak perlu dicetak), tapi bisa ditambahkan notifikasi ke dapur jika diperlukan.
+
+---
+
 *Dokumen dibuat berdasarkan analisa statis kode — belum ada perubahan yang diterapkan.*
