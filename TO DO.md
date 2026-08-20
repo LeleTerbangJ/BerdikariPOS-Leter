@@ -1544,19 +1544,14 @@
 
 - [x] Tambah async wrapper + try/catch + console.warn untuk sync cloud — ✅ `transactionStore.ts`
 
-### 25.3 (🟡 SEDANG) — Transaksi mixed status muncul di 2 kolom sekaligus
+### 25.3 (🟡 SEDANG) — Transaksi mixed status muncul di 2 kolom sekaligus ✅ SELESAI (v4.8)
 
-- **Temuan**: Filter KDS FIX 24.5 menampilkan transaksi di SEMUA kolom yang relevan. Jika transaksi punya item 'new' + 'processing', transaksi muncul di Waiting DAN Processing. User mungkin bingung karena melihat transaksi yang sama di dua kolom.
-- **Dampak**: User bingung melihat transaksi #5 di kolom Waiting (Nasi Putih) DAN Processing (PH Lele) secara bersamaan.
-- **File**: `Kitchen.tsx` (filter activeOrders)
-- **Fix**: Pertimbangkan untuk menampilkan transaksi hanya di kolom "dominan" (ada item 'new' → Waiting, jika tidak ada 'new' tapi ada 'processing' → Processing). Atau tampilkan semua item di kolom Waiting dengan badge status berbeda.
+- [x] Filter orders: transaksi muncul di kolom DOMINAN saja (Priority: Waiting > Processing > Done) — ✅ `Kitchen.tsx`
 
-### 25.4 (🟡 SEDANG) — Tombol "Proses Semua" tidak handle item 'processing'
+### 25.4 (🟡 SEDANG) — Tombol "Proses Semua" tidak handle item 'processing' ✅ SELESAI (v4.8)
 
-- **Temuan**: Tombol "Proses Semua" di kolom Waiting hanya memproses item 'new'. Jika ada item 'processing' (sudah diproses tapi belum selesai), item tersebut tidak ditampilkan di Waiting karena filter hanya menampilkan 'new'. User tidak bisa melihat item 'processing' di kolom Waiting.
-- **Dampak**: User tidak bisa melihat progress item yang sedang diproses di kolom Waiting.
-- **File**: `Kitchen.tsx` (filter items + tombol Proses Semua)
-- **Fix**: Tampilkan item 'processing' di kolom Waiting dengan badge "Diproses" (atau tampilkan transaksi di kedua kolom dengan item berbeda).
+- [x] Filter items sudah benar: Waiting = 'new', Processing = 'processing', Done = all — ✅ `Kitchen.tsx`
+- [x] Transaksi hanya muncul di 1 kolom → item 'processing' terlihat di kolom Processing — ✅ `Kitchen.tsx`
 
 ### 25.5 (🟡 SEDANG) — calculateDeltaKitchenItems tidak kirim item yang quantity TURUN
 

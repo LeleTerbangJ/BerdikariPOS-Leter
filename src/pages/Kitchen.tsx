@@ -237,7 +237,8 @@ export default function Kitchen() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
           // v4.8 TO DO 23.4 + FIX 24.5: filter orders berdasarkan kitchenItemStatus per-item
-          // Transaksi bisa muncul di SEMUA kolom yang relevan (jika ada item dengan status tersebut)
+          // v4.8 FIX 25.3: transaksi muncul di kolom DOMINAN saja (tidak muncul di 2 kolom)
+          // Priority: Waiting (ada 'new') > Processing (ada 'processing') > Done (semua 'done')
           const orders = activeOrders
             .filter((t) => {
               const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
@@ -247,21 +248,18 @@ export default function Kitchen() {
                 return t.kitchenStatus === status;
               }
               
-              // v4.8 FIX 24.5: tampilkan di kolom JIKA ada item dengan status tersebut
-              if (status === 'Done') {
-                // Kolom Done: hanya tampilkan jika SEMUA item done
-                const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-                return allDone;
-              }
-              if (status === 'Waiting') {
-                // Kolom Waiting: tampilkan jika ADA item 'new'
-                return t.items.some((i) => i.kitchenItemStatus === 'new');
-              }
-              if (status === 'Processing') {
-                // Kolom Processing: tampilkan jika ADA item 'processing'
-                return t.items.some((i) => i.kitchenItemStatus === 'processing');
-              }
-              return false;
+              const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
+              const hasNew = t.items.some((i) => i.kitchenItemStatus === 'new');
+              const hasProcessing = t.items.some((i) => i.kitchenItemStatus === 'processing');
+              
+              // Tentukan status dominan (hanya 1 kolom)
+              let effectiveStatus: 'Waiting' | 'Processing' | 'Done';
+              if (allDone) effectiveStatus = 'Done';
+              else if (hasNew) effectiveStatus = 'Waiting';
+              else if (hasProcessing) effectiveStatus = 'Processing';
+              else effectiveStatus = 'Done'; // fallback
+              
+              return effectiveStatus === status;
             })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
