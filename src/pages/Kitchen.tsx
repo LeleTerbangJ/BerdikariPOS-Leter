@@ -90,6 +90,9 @@ export default function Kitchen() {
 
   const activeOrders = transactions.filter((t) => {
     if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
+    // v4.8: Pesanan pending yang disimpan dengan "Simpan Tanpa Cetak" (kitchenTicketPrintedAt belum terisi)
+    // TIDAK boleh muncul di KDS. KDS hanya menampilkan pesanan pending yang dicetak ke dapur ("Cetak Dapur Saja" / "Cetak Struk Sekarang").
+    if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false;
     // v4.5 TO DO 5.10 (lanjutan 4.2): Abaikan SEMUA sub-bill split — anak (splitParentId) maupun
     // sub-bill split FRESH (splitIndex terisi tanpa parent, membawa semua item cart dengan kitchenStatus
     // 'Waiting') agar tidak memicu duplikasi antrean di dapur. Tiket dapur split fresh sudah dicetak
