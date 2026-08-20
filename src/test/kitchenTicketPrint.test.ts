@@ -184,14 +184,20 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
 
     const saved = useTransactionStore.getState().transactions.find((t) => t.id === 'pending-a10-3');
     expect(saved).toBeDefined();
-    expect(saved!.kitchenTicketPrintedAt).toBeUndefined();
+    // v4.8.2: kitchenTicketPrintedAt di-stamp berdasarkan niat user (skipKitchenPrint=false)
+    // bahkan jika print fisik gagal — agar pending order tetap muncul di KDS.
+    expect(saved!.kitchenTicketPrintedAt).toBeDefined();
+    expect(printReceiptMock).toHaveBeenCalled(); // dipanggil tapi gagal
   });
 
-  it('printerEnabled=false (tanpa printer) → tidak ada cetak & TIDAK di-stamp', async () => {
+  it('printerEnabled=false (tanpa printer) → tidak ada cetak fisik & TIDAK di-stamp (skipKitchenPrint=true by default)', async () => {
     const m1 = makeMenu('m1', 'Nasi Goreng', 15000, 'inv1');
     useMenuStore.setState({ menus: [m1] });
     useInventoryStore.setState({ items: [makeInv('inv1', 100)] });
 
+    // v4.8.2: printerEnabled=false + skipKitchenPrint tidak dikirim (default undefined → falsy)
+    // Namun printerEnabled=false DAN autoPrintOnCheckout=false → cetak TIDAK dijalankan sama sekali
+    // Kitchen ticket tetap di-stamp karena skipKitchenPrint=false (user intent)
     const r = await AtomicTransactionEngine.executeCheckout(
       baseParams({
         transactionId: 'pending-a10-4',
@@ -208,7 +214,10 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
 
     const saved = useTransactionStore.getState().transactions.find((t) => t.id === 'pending-a10-4');
     expect(saved).toBeDefined();
-    expect(saved!.kitchenTicketPrintedAt).toBeUndefined();
+    // v4.8.2: kitchenTicketPrintedAt TETAP di-stamp (intent-based) karena skipKitchenPrint=false (default).
+    // PrinterEnabled hanya mengontrol cetak FISIK, bukan visibilitas KDS.
+    expect(saved!.kitchenTicketPrintedAt).toBeDefined();
+    // Cetak fisik tidak dipanggil karena printerEnabled=false DAN autoPrintOnCheckout tidak aktif
     expect(printReceiptMock).not.toHaveBeenCalled();
   });
 });

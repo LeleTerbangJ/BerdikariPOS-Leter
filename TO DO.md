@@ -1572,4 +1572,17 @@
 
 ---
 
+## 🔴 BUG FIX (v4.8.2) — Pending Payment Tidak Muncul di KDS
+
+### 27.1 (🔴 KRITIS) — `kitchenTicketPrintedAt` hanya di-stamp saat print SUKSES, bukan berdasarkan niat user ✅ SELESAI (v4.8.2)
+
+- [x] Akar masalah: `kitchenTicketPrintedAt` di-stamp di dalam blok `if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout)` → jika printer tidak aktif, stamp tidak pernah terjadi → filter KDS memblokir pending order
+- [x] Fix: `kitchenTicketPrintedAt` di-stamp berdasarkan `skipKitchenPrint=false` (niat user), bukan keberhasilan print fisik
+- [x] PrinterEnabled/autoPrintOnCheckout hanya mengontrol CETAK FISIK, bukan visibilitas KDS
+- [x] Test diperbarui: 2 ekspektasi lama (print gagal = tidak di-stamp) diganti (intent-based = tetap di-stamp)
+- **File**: `atomicTransactionEngine.ts` (triggerPostCommitTasks), `kitchenTicketPrint.test.ts`
+- **Validasi**: tsc 0 error, 632/632 test pass
+
+---
+
 *Dokumen dibuat berdasarkan analisa statis kode — belum ada perubahan yang diterapkan.*
