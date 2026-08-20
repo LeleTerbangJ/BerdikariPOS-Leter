@@ -324,7 +324,20 @@ export class AtomicTransactionEngine {
     // v4.7 TO DO 15.3: dua toggle independen — skipReceiptPrint (struk kasir dilewati, tiket dapur
     // tetap bisa keluar) & skipKitchenPrint (tiket dapur dilewati — anti tiket DOBEL saat resume
     // pending yang tiket dapurnya sudah tercetak saat Simpan Pending). Keduanya false → normal.
+    // v4.8.2 FIX BUG: kitchenTicketPrintedAt di-stamp berdasarkan NIAT user (skipKitchenPrint=false),
+    // bukan berdasarkan keberhasilan print fisik. Jika tidak di-stamp, pending order TIDAK muncul
+    // di KDS (filter Kitchen.tsx: `if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false`).
+    // PrinterEnabled/autoPrintOnCheckout hanya mengontrol CETAK FISIK, bukan visibilitas di KDS.
     if (!params.suppressAutoPrint) {
+      // Stamp kitchenTicketPrintedAt segera jika user menginginkan tiket dapur (skipKitchenPrint=false).
+      // Ini memastikan pending order muncul di KDS meskipun printer tidak aktif/gagal.
+      if (!params.skipKitchenPrint) {
+        const printedAt = new Date().toISOString();
+        useTransactionStore
+          .getState()
+          .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
+        console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt} (intent-based)`);
+      }
       try {
         if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
           const receiptData = buildReceiptFromTransaction(tx, params.settings);
@@ -333,28 +346,19 @@ export class AtomicTransactionEngine {
             printReceipt(receiptData, params.settings, 'cashier', params.preOpenedPrintWindow || undefined);
           }
           // 2. Tiket dapur — dilewati bila skipKitchenPrint
-          // v4.7 TO DO 18.8 (A10): tiket yang BENAR-BENAR sukses dicetak di-stamp ke
-          // `kitchenTicketPrintedAt` (sync lintas device). Resume pending memakai stamp ini
-          // (bukan asumsi "selalu sudah tercetak") — printer gagal saat Simpan Pending →
-          // tiket tidak hilang diam-diam, resume akan mencetak ulang.
           // v4.7 TO DO 21.1: saat finalisasi pending yang diedit (deltaKitchenItems ada),
           // cetak tiket HANYA untuk item BARU (bukan semua item) → anti tiket dobel
           // untuk item lama yang sudah diproses/diantar dapur.
           // v4.8 TO DO 23.3: tandai tiket delta sebagai 'TAMBAHAN' agar dapur tahu ini pesanan tambahan.
+          // v4.8.2: kitchenTicketPrintedAt sudah di-stamp di atas (intent-based),
+          // print fisik berikut hanya best-effort — gagal print TIDAK membatalkan stamp.
           if (!params.skipKitchenPrint) {
             const kitchenReceiptData = params.deltaKitchenItems && params.deltaKitchenItems.length > 0
               ? { ...receiptData, items: params.deltaKitchenItems, isAdditionalPrint: true }
               : receiptData;
             const kitchenResults = await printReceipt(kitchenReceiptData, params.settings, 'kitchen');
-            // v4.8 TO DO 23.7: logging kitchenTicketPrintedAt untuk debugging
-            if (didKitchenPrintSucceed(kitchenResults)) {
-              const printedAt = new Date().toISOString();
-              console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt}`);
-              useTransactionStore
-                .getState()
-                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
-            } else {
-              console.warn(`[AtomicEngine] Kitchen print FAILED for Tx #${tx.id} — kitchenTicketPrintedAt NOT stamped`);
+            if (!didKitchenPrintSucceed(kitchenResults)) {
+              console.warn(`[AtomicEngine] Kitchen print FAILED for Tx #${tx.id} — but kitchenTicketPrintedAt already stamped (intent-based)`);
             }
           }
         }
