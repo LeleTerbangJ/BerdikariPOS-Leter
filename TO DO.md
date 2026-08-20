@@ -1527,12 +1527,10 @@
 
 - [x] Cek quantity berubah, specs berubah, atau addons berubah → status 'new' — ✅ `kitchenTicket.ts`
 
-### 24.5 (🟡 SEDANG) — Filter KDS bisa sembunyikan transaksi dengan mixed status
+### 24.5 (🟡 SEDANG) — Filter KDS bisa sembunyikan transaksi dengan mixed status ✅ SELESAI (v4.8)
 
-- **Temuan**: Filter KDS menghitung `effectiveStatus` berdasarkan item dominan. Jika ada item 'new' DAN 'processing', transaksi masuk kolom Waiting. Tapi jika user klik "Proses" pada satu item, transaksi pindah ke Processing → item 'new' lainnya tidak terlihat di Waiting.
-- **Dampak**: Item 'new' yang belum diproses tidak terlihat di kolom Waiting setelah satu item diproses.
-- **File**: `Kitchen.tsx` (filter activeOrders)
-- **Fix**: Pertimbangkan untuk menampilkan transaksi di SEMUA kolom yang relevan (Waiting JIKA ada item 'new', Processing JIKA ada item 'processing').
+- [x] Filter orders: tampilkan di kolom JIKA ada item dengan status kolom tersebut — ✅ `Kitchen.tsx`
+- [x] Filter items: tampilkan item sesuai kolom (new→Waiting, processing→Processing, all→Done) — ✅ `Kitchen.tsx`
 
 ---
 

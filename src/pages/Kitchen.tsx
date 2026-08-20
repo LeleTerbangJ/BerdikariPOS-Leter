@@ -236,24 +236,32 @@ export default function Kitchen() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
-          // v4.8 TO DO 23.4: filter orders berdasarkan kitchenItemStatus per-item
+          // v4.8 TO DO 23.4 + FIX 24.5: filter orders berdasarkan kitchenItemStatus per-item
+          // Transaksi bisa muncul di SEMUA kolom yang relevan (jika ada item dengan status tersebut)
           const orders = activeOrders
             .filter((t) => {
-              // Hitung status dominan berdasarkan item
               const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
-              let effectiveStatus = t.kitchenStatus;
               
-              if (hasKitchenItemStatus) {
-                const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-                const hasNew = t.items.some((i) => i.kitchenItemStatus === 'new');
-                const hasProcessing = t.items.some((i) => i.kitchenItemStatus === 'processing');
-                
-                if (allDone) effectiveStatus = 'Done';
-                else if (hasNew) effectiveStatus = 'Waiting';
-                else if (hasProcessing) effectiveStatus = 'Processing';
+              if (!hasKitchenItemStatus) {
+                // Legacy order tanpa kitchenItemStatus → pakai kitchenStatus transaksi
+                return t.kitchenStatus === status;
               }
               
-              return effectiveStatus === status;
+              // v4.8 FIX 24.5: tampilkan di kolom JIKA ada item dengan status tersebut
+              if (status === 'Done') {
+                // Kolom Done: hanya tampilkan jika SEMUA item done
+                const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
+                return allDone;
+              }
+              if (status === 'Waiting') {
+                // Kolom Waiting: tampilkan jika ADA item 'new'
+                return t.items.some((i) => i.kitchenItemStatus === 'new');
+              }
+              if (status === 'Processing') {
+                // Kolom Processing: tampilkan jika ADA item 'processing'
+                return t.items.some((i) => i.kitchenItemStatus === 'processing');
+              }
+              return false;
             })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
@@ -364,7 +372,17 @@ export default function Kitchen() {
                       </p>
 
                       <div className="space-y-2">
-                        {order.items.filter((item) => !item.isBundle).map((item) => {
+                        {/* v4.8 FIX 24.5: filter item berdasarkan kolom saat ini */}
+                        {order.items.filter((item) => {
+                          if (item.isBundle) return false;
+                          const itemStatus = item.kitchenItemStatus || 'new';
+                          // Di kolom Waiting: hanya tampilkan item 'new'
+                          if (status === 'Waiting') return itemStatus === 'new';
+                          // Di kolom Processing: hanya tampilkan item 'processing'
+                          if (status === 'Processing') return itemStatus === 'processing';
+                          // Di kolom Done: tampilkan SEMUA item (termasuk yang done)
+                          return true;
+                        }).map((item) => {
                           // v4.8 TO DO 23.1: badge per-item berdasarkan kitchenItemStatus
                           const itemStatus = item.kitchenItemStatus || 'new';
                           const isDone = itemStatus === 'done';
