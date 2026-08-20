@@ -127,6 +127,9 @@ export interface CartItem {
   hpp?: number;  // Alias untuk cogs
   totalCogs?: number; // Alias untuk total hpp
 
+  // v4.8 TO DO 23.1: Status dapur per item (bukan per transaksi)
+  kitchenItemStatus?: 'new' | 'processing' | 'done'; // status item di KDS
+
   // BUNDLE SUPPORT
   isBundle?: boolean;       // true = Parent Bundle Menu
   isBundleChild?: boolean;  // true = Child item generated from Bundle

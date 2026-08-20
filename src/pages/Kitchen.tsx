@@ -10,7 +10,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePrinterCrossTab } from '../hooks/usePrinterCrossTab';
 import type { KitchenStatus } from '../types';
-import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw } from 'lucide-react';
+import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw, Sparkles, Plus } from 'lucide-react';
 
 const columns: { status: KitchenStatus; label: string; color: string; icon: any }[] = [
   { status: 'Waiting', label: 'Antrean Menunggu', color: 'border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-600/50', icon: Clock },
@@ -236,8 +236,22 @@ export default function Kitchen() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
+          // v4.8 TO DO 23.2: filter orders — transaksi dengan SEMUA item 'done' tidak masuk Waiting
+          // (kecuali transaksi belum punya kitchenItemStatus = legacy order)
           const orders = activeOrders
-            .filter((t) => t.kitchenStatus === status)
+            .filter((t) => {
+              if (t.kitchenStatus !== status) return false;
+              // Kolom 'Done': hanya tampilkan transaksi yang kitchenStatus = Done
+              if (status === 'Done') return true;
+              // Kolom 'Waiting'/'Processing': filter transaksi yang punya item baru/diproses
+              // Jika SEMUA item sudah 'done' → skip dari kolom ini (sudah masuk Done)
+              const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
+              if (hasKitchenItemStatus) {
+                const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
+                if (allDone) return false;
+              }
+              return true;
+            })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
             <div key={status} className={`rounded-2xl border-2 ${color} flex flex-col min-h-0`}>
@@ -317,19 +331,54 @@ export default function Kitchen() {
                       </p>
 
                       <div className="space-y-2">
-                        {order.items.filter((item) => !item.isBundle).map((item) => (
-                          <div key={item.lineId} className="border-l-4 border-brand-300 dark:border-brand-600 pl-3">
-                            <p className="font-bold text-base dark:text-slate-100">{item.name}</p>
-                            <p className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
-                              {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}{(item.showTemperature !== false || item.showSugarLevel !== false) ? ' • ' : ''}x{item.quantity}
-                            </p>
-                            {item.addons.length > 0 && (
-                              <p className="text-xs text-slate-500">
-                                + {item.addons.map((a) => a.name).join(', ')}
+                        {order.items.filter((item) => !item.isBundle).map((item) => {
+                          // v4.8 TO DO 23.1: badge per-item berdasarkan kitchenItemStatus
+                          const itemStatus = item.kitchenItemStatus || 'new';
+                          const isDone = itemStatus === 'done';
+                          const isNew = itemStatus === 'new';
+                          return (
+                            <div
+                              key={item.lineId}
+                              className={`border-l-4 pl-3 py-1 rounded-r-lg transition-all ${
+                                isDone
+                                  ? 'border-green-400 dark:border-green-600 bg-green-50/50 dark:bg-green-950/20 opacity-70'
+                                  : isNew
+                                    ? 'border-amber-400 dark:border-amber-600 bg-amber-50/50 dark:bg-amber-950/20'
+                                    : 'border-blue-400 dark:border-blue-600 bg-blue-50/50 dark:bg-blue-950/20'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <p className={`font-bold text-base dark:text-slate-100 ${isDone ? 'line-through text-slate-500 dark:text-slate-400' : ''}`}>
+                                  {item.name}
+                                </p>
+                                {/* v4.8: badge status per-item */}
+                                {isDone && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400">
+                                    <CheckCircle2 size={10} /> Selesai
+                                  </span>
+                                )}
+                                {isNew && status === 'Waiting' && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-400">
+                                    <Plus size={10} /> Baru
+                                  </span>
+                                )}
+                                {!isDone && !isNew && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400">
+                                    <Flame size={10} /> Diproses
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
+                                {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}{(item.showTemperature !== false || item.showSugarLevel !== false) ? ' • ' : ''}x{item.quantity}
                               </p>
-                            )}
-                          </div>
-                        ))}
+                              {item.addons.length > 0 && (
+                                <p className="text-xs text-slate-500">
+                                  + {item.addons.map((a) => a.name).join(', ')}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {/* v4.7 TO DO 21.5: catatan untuk pesanan yang di-update */}

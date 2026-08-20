@@ -1442,7 +1442,7 @@
 - **Temuan**: Toggle `loyaltySettings.enabled` sudah ada di `Promos.tsx` (baris 267) dan berfungsi — earn & redeem hanya jalan jika enabled.
 - **Tindakan**: Verifikasi manual bahwa:
   - Toggle OFF → tidak ada input redeem di POS, poin tidak di-earn saat checkout
-  - Toggle ON → redeem muncul, poin di-earn
+  - Toggle ON → redeem muncul, poin di-earn
   - Sinkronisasi cloud (`syncLoyaltySettings`) tetap jalan
 - **Tidak perlu perubahan kode** — hanya verifikasi manual.
 
@@ -1451,6 +1451,62 @@
 - **Masalah**: Jika 22.1 dieksekusi, struk perlu menampilkan "Promo Bundle: -Rp 5.000" secara terpisah dari diskon lain.
 - **Solusi**: Tampilkan promo bundle di struk sebagai baris terpisah (sudah didukung oleh format struk saat ini yang menampilkan promo per-baris).
 - **Laporan**: Tambah filter "Promo Bundle" di laporan performa promo (sudah ada field `promoName`/`promoAmount` di transaksi).
+
+---
+
+---
+
+## 🔴 PRIORITAS 23 — TIKET DAPUR & KDS PER-ITEM STATUS (Analisa, v4.8)
+
+> **Sumber audit**: `ANALYSE.md` section M. Audit flow tiket dapur + Kitchen Display System per-item status.
+> **Baseline**: 632/632 test hijau (61 file), tsc 0 error.
+
+### 23.1 (🔴 KRITIS) — Per-item kitchen status di CartItem ✅ SELESAI (v4.8)
+
+- [x] Tambah field `kitchenItemStatus?: 'new' \| 'processing' \| 'done'` di `CartItem` — ✅ `types/index.ts`
+- [x] Tambah helper `hasNewStatusItems()`, `mergeKitchenItemStatus()`, `calculateDeltaKitchenItems()` — ✅ `kitchenTicket.ts`
+- [x] Render badge per-item di KDS (🆕 Baru / 👨‍🍳 Diproses / ✅ Selesai) — ✅ `Kitchen.tsx`
+- [x] Filter KDS: transaksi dengan semua item 'done' tidak masuk kolom Waiting/Processing — ✅ `Kitchen.tsx`
+
+### 23.2 (🔴 KRITIS) — Fix overrideKitchenStatus agar item lama tidak reset ke Waiting ✅ SELESAI (v4.8)
+
+- [x] Pertahankan `kitchenItemStatus` item lama saat commit pending update — ✅ `kitchenTicket.ts` (mergeKitchenItemStatus)
+- [x] Set `overrideKitchenStatus` hanya jika ADA item dengan status 'new' — ✅ `POS.tsx` (handleSavePending)
+- [x] HandleSavePending menggunakan `mergeKitchenItemStatus` untuk merge status item lama + baru — ✅ `POS.tsx`
+
+### 23.3 (🟠 TINGGI) — Badge "TAMBAHAN" di tiket dapur saat update pending
+
+- **Temuan**: Tiket dapur saat update pending mencetak item delta tanpa konteks. Dapur tidak tahu ini pesanan TAMBAHAN dari nomor antrean yang sudah selesai.
+- **Solusi**: Tambah header "=== TAMBAHAN ===" atau prefix "[TAMBAHAN]" di tiket cetak untuk item delta. Hanya berlaku saat `currentPendingTx` ada dan `deltaKitchenItems.length > 0`.
+- **File**: `kitchenTicket.ts`, `printer.ts`
+
+### 23.4 (🟠 TINGGI) — KDS filter per-item (tampilkan transaksi jika ADA item 'new'/'processing')
+
+- **Temuan**: KDS filter saat ini hanya cek `Transaction.kitchenStatus`. Perlu diperbarui agar:
+  - Transaksi muncul di "Menunggu" jika ADA item `kitchenItemStatus = 'new'`
+  - Transaksi muncul di "Diproses" jika ADA item `kitchenItemStatus = 'processing'` (dan tidak ada 'new')
+  - Transaksi muncul di "Selesai" jika SEMUA item `kitchenItemStatus = 'done'`
+  - Transaksi disembunyikan jika semua item 'done' + sudah di-clear
+- **Solusi**: Ubah filter `activeOrders` + `waitingOrders` di `Kitchen.tsx` untuk cek per-item status.
+- **File**: `Kitchen.tsx`
+
+### 23.5 (🟠 TINGGI) — Tombol Proses/Selesai per-item di KDS
+
+- **Temuan**: Saat ini tombol "Proses" & "Selesai" hanya ada di level transaksi. Dapur perlu bisa menandai item per-item.
+- **Solusi**: Tambah tombol per-item (ikon kecil) untuk transisi `new → processing → done`. Tombol transaksi level tetap ada sebagai shortcut "Proses Semua" / "Selesai Semua".
+- **File**: `Kitchen.tsx`, `transactionStore.ts` (updateItemKitchenStatus)
+
+### 23.6 (🟡 SEDANG) — Sync kitchenItemStatus ke cloud
+
+- **Temuan**: Field baru perlu di-sync ke Supabase. Gunakan field `kitchen_item_status` di tabel `transactions.items` (JSON) atau field terpisah.
+- **Solusi**: Pastikan `syncTransaction` + `loadFromCloud` memetakan field baru. Gunakan `updateTxMeta` untuk update item-level status.
+- **File**: `cloudSync.ts`, `transactionStore.ts`
+
+### 23.7 (🟡 SEDANG) — Logging sync kitchenTicketPrintedAt
+
+- **Temuan**: Bug 1 (KDS Acaraki tidak melihat pending) kemungkinan karena `kitchenTicketPrintedAt` tidak sync ke cloud. Perlu verifikasi.
+- **Solusi**: Tambah `console.log` di engine saat stamp `kitchenTicketPrintedAt` + pastikan `updateTxMeta` sync field ke cloud. Jika `didKitchenPrintSucceed` return false (printer gagal), log warning.
+- **File**: `atomicTransactionEngine.ts`
 
 ---
 

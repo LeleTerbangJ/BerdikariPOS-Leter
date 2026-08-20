@@ -19,7 +19,7 @@ import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
 // v4.7 TO DO 18.8 (A10): keputusan skip tiket dapur saat resume berbasis fakta (kitchenTicketPrintedAt)
-import { shouldSkipKitchenPrintAtResume, hasNewKitchenItems, calculateDeltaKitchenItems } from '../utils/kitchenTicket';
+import { shouldSkipKitchenPrintAtResume, hasNewKitchenItems, calculateDeltaKitchenItems, mergeKitchenItemStatus, hasNewStatusItems } from '../utils/kitchenTicket';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (Settings)
@@ -284,10 +284,15 @@ export default function POS() {
       addToast('Sesi Split Bill yang belum selesai dibatalkan — sisa stok reserve dikembalikan.', 'info');
     }
 
+    // v4.8 TO DO 23.1 & 23.2: merge kitchenItemStatus — pertahankan status item lama, set 'new' untuk item baru
+    const cartItemsWithKitchenStatus = currentPendingTx
+      ? mergeKitchenItemStatus(cart.items, currentPendingTx.items)
+      : cart.items.map((item) => ({ ...item, kitchenItemStatus: 'new' as const }));
+
     const result = await AtomicTransactionEngine.executeCheckout({
       transactionId: currentPendingTx ? currentPendingTx.id : checkoutTxId,
       overrideQueueNumber: currentPendingTx ? currentPendingTx.queueNumber : undefined,
-      cartItems: cart.items,
+      cartItems: cartItemsWithKitchenStatus,
       subtotal,
       discount: totalDiscount,
       taxAmount,
@@ -310,10 +315,11 @@ export default function POS() {
       promoName: appliedPromo?.name,
       promoAmount: appliedPromoId ? discountCalc.promoApplied : undefined,
       bypassIdempotency: !!currentPendingTx,
+      // v4.8 TO DO 23.2: kitchenStatus hanya 'Waiting' jika ADA item dengan status 'new'
       overrideKitchenStatus:
         skipKitchenPrint
           ? (currentPendingTx ? currentPendingTx.kitchenStatus : 'Waiting')
-          : (currentPendingTx && !hasNewKitchenItems(cart.items, currentPendingTx.items)
+          : (currentPendingTx && !hasNewStatusItems(cartItemsWithKitchenStatus)
               ? currentPendingTx.kitchenStatus
               : 'Waiting'),
       reservedDeductions: currentPendingTx

@@ -650,7 +650,7 @@ Tambah field `itemDiscount?: number` di `CartItem` + UI kecil di keranjang POS:
 
 ---
 
-*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**; **I = audit promo/loyalty/diskon per menu, rincian eksekusi di `TO DO.md` Prioritas 22**).*
+*Dokumen ini adalah hasil analisa statis + penelusuran kode pada v4.7 (branch `main`). Belum ada perubahan kode yang diterapkan — temuan siap dieksekusi bertahap sesuai prioritas (A + E di atas; **F = analisa kesiapan Multi Outlet, rincian eksekusi di `TO DO.md` Prioritas 19**; **G = audit fitur eksisting, rincian eksekusi di `TO DO.md` Prioritas 20**; **H = audit flow pending+tambah+split, rincian eksekusi di `TO DO.md` Prioritas 21**; **I = audit promo/loyalty/diskon per menu, rincian eksekusi di `TO DO.md` Prioritas 22**; **M = audit tiket dapur + KDS per-item, rincian eksekusi di `TO DO.md` Prioritas 23**).*
 
 ---
 
@@ -782,6 +782,140 @@ Setelah dilakukan penelusuran kode pada `src/utils/dataManager.ts` dan struktur 
 - **Lokasi**: `src/utils/printer.ts` (`printHtmlInIframe`).
 - **Masalah**: Fungsi `printHtmlInIframe` mencari iframe menggunakan ID global tunggal `'thermal-print-iframe'`. Saat pesanan gantung dicetak menggunakan "Cetak Struk (Dapur) Saja", sistem memproses cetak ke printer makanan dan minuman secara bersamaan (secara asinkron via `Promise.all`). Cetak kedua langsung menulis ke iframe yang sama sebelum dialog cetak pertama dipicu (karena ada `setTimeout` 250ms), sehingga isi tiket printer pertama tertimpa oleh tiket printer kedua. Akibatnya, printer kedua mencetak tiketnya sebanyak 2 kali sedangkan printer pertama tidak mencetak sama sekali.
 - **Solusi**: Ubah `printHtmlInIframe` agar selalu membuat iframe baru dengan ID unik (menggunakan UUID/random string) untuk setiap proses pencetakan, dan bersihkan iframe tersebut dari DOM setelah selesai (misalnya setelah 60 detik).
+
+---
+
+## 🔴 M. Analisis Tiket Dapur & Kitchen Display System (KDS) Per-Item Status (v4.8)
+
+### M.1 — Masalah Inti: Tidak Ada Status Per-Item di KDS
+
+**Temuan**: Saat ini `kitchenStatus` hanya ada di level **transaksi** (`Transaction.kitchenStatus`), bukan per-item (`CartItem`). Akibatnya:
+
+1. **KDS menampilkan SEMUA item** dari transaksi — tidak ada cara membedakan mana yang sudah diproses, mana yang baru.
+2. **Saat pending di-update** (kasir tambah menu), `overrideKitchenStatus = 'Waiting'` diterapkan ke **seluruh transaksi** → semua item muncul kembali di kolom "Menunggu" di KDS, termasuk yang sudah selesai.
+3. **Dapur bingung**: melihat pesanan yang sudah dihidangkan muncul kembali di antrean.
+
+### M.2 — Flow Cetak Tiket Dapur (Printer Level) — Sudah Benar (Delta-Only)
+
+**Simpan Pending BARU** (`currentPendingTx = null`):
+```
+handleSavePending → engine.executeCheckout → printReceipt(data, settings, 'kitchen')
+→ SEMUA item dicetak ke printer dapur ✅ (pesanan baru)
+→ kitchenTicketPrintedAt stamped
+```
+
+**Update Pending** (`currentPendingTx` ada):
+```
+handleSavePending → calculateDeltaKitchenItems(cart.items, currentPendingTx.items)
+→ HANYA item baru/tambahan yang dicetak ke printer dapur ✅
+```
+
+Delta detection di `kitchenTicket.ts` sudah benar:
+- Item baru (belum ada di pending) → masuk delta
+- Item yang qty-nya naik → delta = selisih qty
+- Item yang spesifikasi berubah (suhu/gula/addons) → masuk delta
+- Item yang dikurangi/dihapus → TIDAK masuk delta
+
+### M.3 — Masalah di KDS (Display Level)
+
+**Root cause**: KDS filter & render di `Kitchen.tsx`:
+
+```tsx
+// Filter transaksi level — tampilkan jika Selesai/Pending + kitchenTicketPrintedAt terisi
+const activeOrders = transactions.filter((t) => {
+  if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
+  if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false;
+  // ... filter lain
+  return true;
+});
+
+// Render SEMUA item tanpa status per-item
+{order.items.filter((item) => !item.isBundle).map((item) => (
+  <div key={item.lineId}>
+    <p>{item.name}</p>  // ← SEMUA item, tidak ada badge
+    <p>x{item.quantity}</p>
+  </div>
+))}
+```
+
+**Alur bug saat pending di-update:**
+1. Kasir tambah menu ke pending yang sudah `Done` di KDS
+2. `handleSavePending` → `overrideKitchenStatus = 'Waiting'` (seluruh transaksi)
+3. Transaksi di-sync ulang ke cloud dengan `kitchenStatus = 'Waiting'`
+4. KDS realtime: transaksi pindah dari kolom "Selesai" → "Menunggu"
+5. KDS render: **SEMUA item** muncul di "Menunggu" — termasuk yang sudah dihidangkan
+6. Dapur: "Ini sudah selesai, kenapa muncul lagi?"
+
+### M.4 — Masalah Kedua: Tidak Ada Badge "Tambahan" di Tiket Cetak
+
+Saat update pending, tiket dapur hanya mencetak item delta tanpa konteks:
+```
+=== TIKET PESANAN ===
+#5 - Meja 3
+Nasi Putih x1     ← item baru, tapi tidak ada label "TAMBAHAN"
+Es Teh x1         ← item baru, tapi tidak ada label "TAMBAHAN"
+```
+
+Dapur tidak tahu ini adalah pesanan TAMBAHAN dari #5 yang sudah selesai, bukan pesanan baru yang terpisah.
+
+### M.5 — Solusi yang Direkomendasikan
+
+**Konsep: Per-Item Kitchen Status**
+
+```
+CartItem.kitchenItemStatus: 'new' | 'processing' | 'done'
+
+Saat Simpan Pending BARU:
+  → Semua item: kitchenItemStatus = 'new'
+
+Saat Update Pending (tambah menu):
+  → Item LAMA yang sudah 'done': PERTAHANKAN status 'done'
+  → Item BARU / qty tambahan: kitchenItemStatus = 'new'
+  → Item yang spesifikasi berubah: kitchenItemStatus = 'new'
+
+Saat Dapur klik "Proses" per-item:
+  → Item 'new' → 'processing'
+
+Saat Dapur klik "Selesai" per-item:
+  → Item 'processing' → 'done'
+```
+
+**Di KDS:**
+```tsx
+{order.items.filter(item => !item.isBundle).map(item => (
+  <div className={item.kitchenItemStatus === 'done' ? 'opacity-50 line-through' : ''}>
+    <p>{item.name}</p>
+    {item.kitchenItemStatus === 'done' && <span className="badge green">✅ Selesai</span>}
+    {item.kitchenItemStatus === 'new' && <span className="badge amber">🆕 Tambahan</span>}
+    {item.kitchenItemStatus === 'processing' && <span className="badge blue">👨‍🍳 Diproses</span>}
+  </div>
+))}
+```
+
+**Di Tiket Dapur:**
+- Tambah header "=== TAMBAHAN ===" untuk item delta saat update pending
+- Atau tambah prefix "[TAMBAHAN]" di nama item
+
+**Di KDS Filter:**
+- Transaksi tetap ditampilkan jika ADA item dengan status 'new' atau 'processing'
+- Jika semua item 'done', transaksi bisa dipindah ke kolom "Selesai" atau disembunyikan
+
+### M.6 — Estimasi Dampak
+
+| File | Perubahan |
+|------|----------|
+| `types/index.ts` | Tambah `kitchenItemStatus?: 'new' \| 'processing' \| 'done'` di `CartItem` |
+| `kitchenTicket.ts` | Set `kitchenItemStatus` saat delta detection + tambah header "TAMBAHAN" di tiket |
+| `atomicTransactionEngine.ts` | Pertahankan status item lama saat commit pending update |
+| `Kitchen.tsx` | Render badge per-item + filter per-item status + tombol Proses/Selesai per-item |
+| `POS.tsx` | Set `kitchenItemStatus = 'new'` untuk item baru di cart |
+| `cartStore.ts` | Sync field baru |
+
+### M.7 — Keterkaitan dengan Temuan Sebelumnya
+
+- **K.1** (`kitchenTicketPrintedAt` tidak di-sync) → menyebabkan Bug 1 (KDS Acaraki tidak melihat pending). Perlu diperbaiki bersamaan.
+- **K.2** (Status reset ke Waiting saat kurang menu) → sudah diperbaiki di Prioritas 21.2 (`hasNewKitchenItems`), tapi masih mempengaruhi seluruh transaksi level.
+- **L.2** (Tiket ter-overwrite saat cetak simultan) → masalah cetak fisik, terpisah dari masalah display KDS.
 
 
 
