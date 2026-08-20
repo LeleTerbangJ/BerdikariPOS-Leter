@@ -550,13 +550,25 @@ export async function runMigrations() {
         // Probe gagal karena offline/network — jangan salah diagnosa.
       }
     }
+
+    try {
+      const ppoProbe = await supabase.from('settings').select('pending_print_option').eq('id', 1).single();
+      if (ppoProbe.error && ppoProbe.error.message?.includes('pending_print_option')) {
+        console.warn('[Migration] Kolom "pending_print_option" belum ada di tabel settings (v4.8).');
+        console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+        console.warn('  ALTER TABLE settings ADD COLUMN IF NOT EXISTS pending_print_option TEXT DEFAULT \'dapur_only\';');
+        migrationNeeded.pendingPrintOption = true;
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
   } catch (e) {
     console.warn('[Migration] Could not verify schema:', e);
   }
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -1252,6 +1264,9 @@ export async function syncSettings(settings: AppSettings) {
   if (!migrationNeeded.autoSendDigitalReceipt) {
     data.auto_send_digital_receipt = settings.autoSendDigitalReceipt ?? false;
   }
+  if (!migrationNeeded.pendingPrintOption) {
+    data.pending_print_option = settings.pendingPrintOption || 'dapur_only';
+  }
   await smartUpsert('settings', data);
 }
 
@@ -1284,6 +1299,7 @@ export async function fetchSettingsFromCloud(): Promise<AppSettings | null> {
       receiptAsciiOnly: data.receipt_ascii_only || false,
       autoPrintReceipt: data.auto_print_receipt || false,
       autoSendDigitalReceipt: data.auto_send_digital_receipt || false,
+      pendingPrintOption: data.pending_print_option || 'dapur_only',
     };
   } catch (e) {
     console.warn('[CloudSync] Fetch settings failed:', e);

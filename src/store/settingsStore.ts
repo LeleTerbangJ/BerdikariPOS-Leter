@@ -76,7 +76,6 @@ export const useSettingsStore = create<SettingsState>()(
               'autoPrintReceipt',
               'autoPrintKitchen',
               'showLogoOnReceipt',
-              'pendingPrintOption',
             ];
             Object.keys(cloudSettings).forEach((k) => {
               const key = k as keyof AppSettings;
