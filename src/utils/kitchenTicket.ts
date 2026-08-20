@@ -91,14 +91,15 @@ export function mergeKitchenItemStatus(
       // Item baru ditambahkan → status 'new'
       return { ...c, kitchenItemStatus: 'new' as const };
     }
-    // v4.8 FIX 24.4: Cek apakah quantity naik atau spesifikasi berubah
-    const quantityChanged = c.quantity !== p.quantity;
+    // v4.8 FIX 25.1: Cek apakah quantity NAIK atau spesifikasi berubah
+    // Catatan: quantity TURUN tidak dianggap berubah (item yang dikurangi tidak perlu dimasak ulang)
+    const quantityIncreased = c.quantity > p.quantity;
     const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar;
     const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
     const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
     const addonsChanged = cAddons !== pAddons;
     
-    if (quantityChanged || specsChanged || addonsChanged) {
+    if (quantityIncreased || specsChanged || addonsChanged) {
       // Qty naik atau spesifikasi berubah → status 'new' (ada item tambahan yang perlu dimasak)
       return { ...c, kitchenItemStatus: 'new' as const };
     }

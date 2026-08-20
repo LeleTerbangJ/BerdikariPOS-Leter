@@ -1536,12 +1536,9 @@
 
 ## 🟠 TEMUAN AUDIT PASCA-FIX 24 (Bug Baru / Logic Flaw)
 
-### 25.1 (🟠 TINGGI) — mergeKitchenItemStatus salah handle quantity TURUN
+### 25.1 (🟠 TINGGI) — mergeKitchenItemStatus salah handle quantity TURUN ✅ SELESAI (v4.8)
 
-- **Temuan**: `mergeKitchenItemStatus` mengecek `quantityChanged = c.quantity !== p.quantity`. Saat quantity TURUN (misal 3→2), `quantityChanged = true` → status item di-reset ke 'new' → item muncul kembali di kolom Waiting dengan badge "Baru". Padahal item yang quantity-nya turun tidak perlu dimasak ulang.
-- **Dampak**: Item yang sudah diproses muncul kembali di Waiting saat quantity dikurangi.
-- **File**: `kitchenTicket.ts` (mergeKitchenItemStatus)
-- **Fix**: Ubah ke `c.quantity > p.quantity` (hanya quantity NAIK yang dianggap berubah).
+- [x] Ubah `quantityChanged = c.quantity !== p.quantity` ke `quantityIncreased = c.quantity > p.quantity` — ✅ `kitchenTicket.ts`
 
 ### 25.2 (🟡 SEDANG) — updateItemKitchenStatus sync tanpa await
 
