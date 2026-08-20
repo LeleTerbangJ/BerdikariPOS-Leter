@@ -1540,12 +1540,9 @@
 
 - [x] Ubah `quantityChanged = c.quantity !== p.quantity` ke `quantityIncreased = c.quantity > p.quantity` — ✅ `kitchenTicket.ts`
 
-### 25.2 (🟡 SEDANG) — updateItemKitchenStatus sync tanpa await
+### 25.2 (🟡 SEDANG) — updateItemKitchenStatus sync tanpa await ✅ SELESAI (v4.8)
 
-- **Temuan**: `syncTransactionStatus` dan `syncTransactionMeta` dipanggil tanpa await di `updateItemKitchenStatus`. Jika sync gagal, tidak ada error handling atau retry → perubahan status tidak tersync ke cloud tanpa notifikasi.
-- **Dampak**: Status item tidak sinkron lintas device tanpa user sadar.
-- **File**: `transactionStore.ts` (updateItemKitchenStatus)
-- **Fix**: Tambah await + try/catch + console.warn jika sync gagal.
+- [x] Tambah async wrapper + try/catch + console.warn untuk sync cloud — ✅ `transactionStore.ts`
 
 ### 25.3 (🟡 SEDANG) — Transaksi mixed status muncul di 2 kolom sekaligus
 

@@ -154,9 +154,17 @@ export const useTransactionStore = create<TransactionState>()(
           }),
         }));
         // v4.8 TO DO 23.6: sync ke cloud — kitchenStatus + items (dengan kitchenItemStatus)
+        // v4.8 FIX 25.2: tambah await + try/catch agar sync error tidak hilang diam-diam
         if (updatedTx) {
-          syncTransactionStatus(txId, updatedTx.kitchenStatus);
-          syncTransactionMeta(txId, { items: updatedTx.items });
+          const syncKitchen = async () => {
+            try {
+              await syncTransactionStatus(txId, updatedTx!.kitchenStatus);
+              await syncTransactionMeta(txId, { items: updatedTx!.items });
+            } catch (err) {
+              console.warn('[TransactionStore] Failed to sync kitchenItemStatus to cloud:', err);
+            }
+          };
+          syncKitchen(); // Fire-and-forget (tidak block UI)
         }
       },
 
