@@ -1158,4 +1158,39 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 ---
 
+## 29. Riwayat Pengerjaan v4.8 — Audit Pasca-Fix 24 & Fix 25.1–25.4 + 26.1 (semua ✅)
+
+### 29.1 25.1 — mergeKitchenItemStatus hanya quantity NAIK yang dianggap berubah (FIX)
+
+- **Akar masalah**: `quantityChanged = c.quantity !== p.quantity` → quantity TURUN (3→2) dianggap berubah → status item di-reset ke 'new'.
+- **Fix**: Ubah ke `quantityIncreased = c.quantity > p.quantity`.
+- **File**: `src/utils/kitchenTicket.ts`.
+
+### 29.2 25.2 — updateItemKitchenStatus sync cloud dengan await + try/catch (FIX)
+
+- **Akar masalah**: `syncTransactionStatus` dan `syncTransactionMeta` dipanggil tanpa await → error sync hilang diam-diam.
+- **Fix**: Tambah async wrapper + try/catch + console.warn.
+- **File**: `src/store/transactionStore.ts`.
+
+### 29.3 25.3 + 25.4 — Filter KDS kolom dominan + items sesuai kolom (FIX)
+
+- **Akar masalah 25.3**: Transaksi mixed status muncul di 2 kolom sekaligus.
+- **Akar masalah 25.4**: Item 'processing' tidak terlihat di kolom Waiting.
+- **Fix**: Filter orders pakai status dominan (Priority: Waiting > Processing > Done). Filter items sesuai kolom.
+- **File**: `src/pages/Kitchen.tsx`.
+
+### 29.4 26.1 — Hapus tombol per-order 'Proses'/'Selesai' di KDS (FIX KRITIS)
+
+- **Akar masalah**: Tombol per-order panggil `updateKitchenStatus` yang HANYA update `kitchenStatus`. Tapi KDS filter pakai `kitchenItemStatus` → tombol tidak berfungsi.
+- **Fix**: Hapus tombol per-order (sudah ada tombol per-item + shortcut batch). Hapus fungsi `getNextStatus` dan import `ArrowRight` yang tidak terpakai.
+- **File**: `src/pages/Kitchen.tsx`.
+
+### 29.5 Validasi & Status (Fix 25.1–25.4 + 26.1)
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file).
+- `npm run build` → **✅ BERHASIL** (7.33s, 50 chunks, PWA v1.3.0).
+- **TO DO.md**: 25.1 ✅ + 25.2 ✅ + 25.3 ✅ + 25.4 ✅ + 26.1 ✅ (semua selesai).
+
+---
+
 *Dokumen ini dibuat agar AI developer manapun bisa melanjutkan pengembangan tanpa kehilangan konteks.*
