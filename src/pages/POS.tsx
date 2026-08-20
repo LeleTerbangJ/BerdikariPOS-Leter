@@ -19,7 +19,7 @@ import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
 // v4.7 TO DO 18.8 (A10): keputusan skip tiket dapur saat resume berbasis fakta (kitchenTicketPrintedAt)
-import { shouldSkipKitchenPrintAtResume } from '../utils/kitchenTicket';
+import { shouldSkipKitchenPrintAtResume, hasNewKitchenItems, calculateDeltaKitchenItems } from '../utils/kitchenTicket';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (Settings)
@@ -65,11 +65,15 @@ import {
 function CustomerPicker({
   customers,
   value,
+  customName,
   onSelect,
+  onSelectCustom,
 }: {
   customers: Customer[];
   value: string | null;
+  customName: string;
   onSelect: (id: string | null) => void;
+  onSelectCustom: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -93,10 +97,17 @@ function CustomerPicker({
     setOpen(false);
   };
 
+  const handleSelectCustom = (name: string) => {
+    onSelectCustom(name);
+    onSelect(null);
+    setQuery('');
+    setOpen(false);
+  };
+
   return (
     <div className="flex-1 relative">
       <input
-        value={open ? query : selected?.name || ''}
+        value={open ? query : (selected?.name || customName || '')}
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
@@ -105,7 +116,11 @@ function CustomerPicker({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && open) {
             e.preventDefault();
-            if (filtered.length > 0) handleSelect(filtered[0].id);
+            if (filtered.length > 0) {
+              handleSelect(filtered[0].id);
+            } else if (query.trim()) {
+              handleSelectCustom(query.trim());
+            }
           } else if (e.key === 'Escape') {
             setOpen(false);
           }
@@ -114,14 +129,30 @@ function CustomerPicker({
         className="input text-sm w-full"
       />
       {open && (
-        <div className="mt-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 shadow-lg max-h-52 overflow-y-auto z-20">
+        <div className="mt-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 shadow-lg max-h-52 overflow-y-auto z-20 absolute left-0 right-0">
           <button
             type="button"
-            onClick={() => handleSelect(null)}
-            className="w-full text-left px-3 py-2 text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+            onClick={() => {
+              onSelectCustom('');
+              handleSelect(null);
+            }}
+            className="w-full text-left px-3 py-2 text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 border-b border-slate-100 dark:border-slate-800"
           >
-            {value ? '✕ Lepaskan pelanggan' : '— Tanpa pelanggan —'}
+            {value || customName ? '✕ Lepaskan pelanggan' : '— Tanpa pelanggan —'}
           </button>
+          
+          {query.trim() && (
+            <button
+              type="button"
+              onClick={() => handleSelectCustom(query.trim())}
+              className="w-full text-left px-3 py-2 text-sm font-medium text-brand-600 dark:text-brand-400 hover:bg-slate-50 dark:hover:bg-slate-700 border-b border-slate-100 dark:border-slate-800 flex items-center gap-1.5"
+            >
+              <span>✨ Gunakan nama:</span>
+              <span className="underline font-semibold">{query.trim()}</span>
+              <span className="text-xs text-slate-400 font-normal ml-auto">(Non-Pelanggan)</span>
+            </button>
+          )}
+
           {filtered.length === 0 ? (
             <p className="px-3 py-2 text-xs text-slate-400">Tidak ada pelanggan cocok</p>
           ) : (
@@ -265,7 +296,7 @@ export default function POS() {
       orderType,
       tableNumber: orderType === 'Dine In' && settings.tableFeaturesEnabled ? tableNumber : undefined,
       selectedCustomerId: selectedCustomerId || undefined,
-      selectedCustomerName: selectedCustomer?.name || undefined,
+      selectedCustomerName: selectedCustomer ? selectedCustomer.name : (customCustomerName || undefined),
       currentUser,
       settings,
       overrideTxStatus: 'Pending',
@@ -278,12 +309,13 @@ export default function POS() {
       // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo (laporan performa promo)
       promoName: appliedPromo?.name,
       promoAmount: appliedPromoId ? discountCalc.promoApplied : undefined,
-      // v4.1 FIX (TO DO 1.3 & 1.4): izinkan update ulang dengan ID sama (bypass idempotency),
-      // deduksi stok DELTA (hanya item baru yang dipotong, item dihapus dikembalikan).
-      // Status KDS: item berubah → reset ke 'Waiting' agar dapur melihat ulang; item sama → pertahankan.
       bypassIdempotency: !!currentPendingTx,
       overrideKitchenStatus:
-        currentPendingTx && !pendingItemsChanged ? currentPendingTx.kitchenStatus : 'Waiting',
+        skipKitchenPrint
+          ? (currentPendingTx ? currentPendingTx.kitchenStatus : 'Waiting')
+          : (currentPendingTx && !hasNewKitchenItems(cart.items, currentPendingTx.items)
+              ? currentPendingTx.kitchenStatus
+              : 'Waiting'),
       reservedDeductions: currentPendingTx
         ? calculateItemDeductions(currentPendingTx.items, menus)
         : undefined,
@@ -299,6 +331,7 @@ export default function POS() {
       setCashReceived('');
       setRedeemPointsInput('');
       setSelectedCustomerId(null);
+      setCustomCustomerName('');
       setTableNumber('');
       setCheckoutTxId(uuid());
       setCurrentPendingTx(null);
@@ -323,7 +356,13 @@ export default function POS() {
     tx.items.forEach((item) => cart.addItem(item));
     setOrderType(tx.orderType || 'Dine In'); // Restore tipe pesanan (Take Away tidak boleh jadi Dine In)
     setTableNumber(tx.tableName || tx.tableNumber || '');
-    if (tx.customerId) setSelectedCustomerId(tx.customerId);
+    if (tx.customerId) {
+      setSelectedCustomerId(tx.customerId);
+      setCustomCustomerName('');
+    } else {
+      setSelectedCustomerId(null);
+      setCustomCustomerName(tx.customerName || '');
+    }
     // v4.5 TO DO 5.5: restore promo/voucher yang tersimpan di pending → total yang dihitung ulang
     // konsisten dengan nominal saat disimpan (lintas restart / device). Jika pending tanpa promo,
     // bersihkan promo stale agar tidak bocor ke pesanan yang di-resume.
@@ -503,6 +542,7 @@ export default function POS() {
 
   // Customer selection
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customCustomerName, setCustomCustomerName] = useState<string>('');
   // v4.7 shortcut: tambah pelanggan langsung dari keranjang POS (hemat waktu kasir)
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [custName, setCustName] = useState('');
@@ -850,16 +890,19 @@ export default function POS() {
 
     // v4.1 FIX (TO DO 1.3 & 1.4): finalisasi pesanan gantung — re-commit dengan ID sama,
     // pertahankan nomor antrean & status dapur, deduksi stok delta (item baru dipotong, item dihapus dikembalikan)
-    // v4.7 TO DO 21.1: hitung deltaKitchenItems (hanya item baru yang tidak ada di parentTx)
-    // agar tiket dapur HANYA mencetak item baru (bukan semua item → anti tiket dobel).
-    const deltaKitchenItems = currentPendingTx && pendingItemsChanged
-      ? cart.items.filter((ci) => !currentPendingTx.items.some((pi) => pi.lineId === ci.lineId))
+    // v4.7 TO DO 21.1 & v4.8: hitung deltaKitchenItems (hanya item baru/tambahan porsi/spesifikasi baru)
+    // agar tiket dapur HANYA mencetak item baru/tambahan (bukan semua item → anti tiket dobel).
+    const deltaKitchenItems = currentPendingTx
+      ? calculateDeltaKitchenItems(cart.items, currentPendingTx.items)
       : undefined;
     const pendingFinalizeParams: Partial<AtomicCheckoutParams> = currentPendingTx
       ? {
           overrideQueueNumber: currentPendingTx.queueNumber,
           overrideTxStatus: 'Selesai',
-          overrideKitchenStatus: pendingItemsChanged ? 'Waiting' : currentPendingTx.kitchenStatus,
+          overrideKitchenStatus:
+            currentPendingTx && !hasNewKitchenItems(cart.items, currentPendingTx.items)
+              ? currentPendingTx.kitchenStatus
+              : 'Waiting',
           bypassIdempotency: true,
           // v4.7 TO DO 21.3: jika SplitBillModal sudah merekonsiliasi stok pending (pendingSplitReconciled),
           // skip reservedDeductions — stok sudah disesuaikan, jangan double-adjust.
@@ -883,7 +926,7 @@ export default function POS() {
       orderType,
       tableNumber: orderType === 'Dine In' && settings.tableFeaturesEnabled ? tableNumber : undefined,
       selectedCustomerId: selectedCustomerId || undefined,
-      selectedCustomerName: selectedCustomer?.name || undefined,
+      selectedCustomerName: selectedCustomer ? selectedCustomer.name : (customCustomerName || undefined),
       currentUser,
       settings,
       preOpenedPrintWindow,
@@ -956,6 +999,7 @@ export default function POS() {
     setCashReceived('');
     setRedeemPointsInput('');
     setSelectedCustomerId(null);
+    setCustomCustomerName('');
     setTableNumber('');
     setCheckoutTxId(uuid());
     // v4.7 TO DO 17.3: identity pending TIDAK boleh bocor ke order berikutnya — tanpa ini,
@@ -1040,6 +1084,7 @@ export default function POS() {
     setCashReceived('');
     setRedeemPointsInput('');
     setSelectedCustomerId(null);
+    setCustomCustomerName('');
     setTableNumber('');
     setCheckoutTxId(uuid());
     setCurrentPendingTx(null);
@@ -1259,7 +1304,12 @@ export default function POS() {
                 <CustomerPicker
                   customers={customers}
                   value={selectedCustomerId}
-                  onSelect={setSelectedCustomerId}
+                  customName={customCustomerName}
+                  onSelect={(id) => {
+                    setSelectedCustomerId(id);
+                    if (id) setCustomCustomerName('');
+                  }}
+                  onSelectCustom={setCustomCustomerName}
                 />
                 <button
                   type="button"
@@ -1609,7 +1659,12 @@ export default function POS() {
             <CustomerPicker
               customers={customers}
               value={selectedCustomerId}
-              onSelect={setSelectedCustomerId}
+              customName={customCustomerName}
+              onSelect={(id) => {
+                setSelectedCustomerId(id);
+                if (id) setCustomCustomerName('');
+              }}
+              onSelectCustom={setCustomCustomerName}
             />
             <button
               type="button"
@@ -2106,8 +2161,10 @@ export default function POS() {
               </p>
             )}
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Antrean #{queuePreview}</p>
-            {selectedCustomer && (
-              <p className="text-xs text-brand-600 dark:text-brand-400 mt-1">Pelanggan: {selectedCustomer.name}</p>
+            {(selectedCustomer || customCustomerName) && (
+              <p className="text-xs text-brand-600 dark:text-brand-400 mt-1">
+                Pelanggan: {selectedCustomer ? selectedCustomer.name : `${customCustomerName} (Non-Pelanggan)`}
+              </p>
             )}
           </div>
 
@@ -2424,7 +2481,7 @@ export default function POS() {
         tableNumber={tableNumber}
         parentTx={currentPendingTx}
         selectedCustomerId={selectedCustomerId}
-        selectedCustomerName={selectedCustomer?.name}
+        selectedCustomerName={selectedCustomer ? selectedCustomer.name : (customCustomerName || undefined)}
         appliedPromoId={appliedPromoId}
         onCompleteSplit={() => {
           cart.clearCart();
@@ -2434,6 +2491,7 @@ export default function POS() {
           setVoucherCode('');
           setCashReceived('');
           setSelectedCustomerId(null);
+          setCustomCustomerName('');
           setTableNumber('');
           setCheckoutTxId(uuid());
           setCurrentPendingTx(null);

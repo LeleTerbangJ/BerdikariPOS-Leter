@@ -1,4 +1,4 @@
-import type { Transaction } from '../types';
+import type { Transaction, CartItem } from '../types';
 import type { PrintJobResult } from './printer';
 
 /**
@@ -31,4 +31,58 @@ export function shouldSkipKitchenPrintAtResume(
   if (!pendingTx) return false;
   if (itemsChanged) return false;
   return !!pendingTx.kitchenTicketPrintedAt;
+}
+
+/**
+ * v4.8: Cek apakah ada item dapur baru, kuantitas bertambah, atau spesifikasi berubah.
+ * Pengurangan item atau kuantitas berkurang tidak dianggap "item baru yang perlu dimasak".
+ */
+export function hasNewKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): boolean {
+  for (const c of cartItems) {
+    const p = pendingItems.find((item) => item.lineId === c.lineId);
+    if (!p) {
+      return true; // Item baru ditambahkan
+    }
+    if (c.quantity > p.quantity) {
+      return true; // Kuantitas bertambah
+    }
+    if (c.temperature !== p.temperature || c.sugar !== p.sugar) {
+      return true; // Spesifikasi suhu/gula berubah
+    }
+    // Cek perbedaan addons
+    const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+    const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+    if (cAddons !== pAddons) {
+      return true; // Addon berubah
+    }
+  }
+  return false;
+}
+
+/**
+ * v4.8: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur.
+ * Item baru, kuantitas bertambah (selisih kuantitas), dan spesifikasi berubah dikirim.
+ */
+export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): CartItem[] {
+  const delta: CartItem[] = [];
+  for (const c of cartItems) {
+    const p = pendingItems.find((item) => item.lineId === c.lineId);
+    if (!p) {
+      delta.push(c);
+    } else {
+      const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+      const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+      const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar || cAddons !== pAddons;
+
+      if (specsChanged) {
+        delta.push(c);
+      } else if (c.quantity > p.quantity) {
+        delta.push({
+          ...c,
+          quantity: c.quantity - p.quantity,
+        });
+      }
+    }
+  }
+  return delta;
 }

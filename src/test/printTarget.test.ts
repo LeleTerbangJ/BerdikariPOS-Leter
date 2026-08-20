@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { AppSettings, CartItem } from '../types';
 
 // ============================================================================
 // TO DO 15.3 — opsi "cetak tanpa struk" per-transaksi: engine memanggil
@@ -58,7 +59,7 @@ function installFakeDom() {
   return { doc, createdIframes };
 }
 
-function makeBaseSettings(overrides: Record<string, any> = {}) {
+function makeBaseSettings(overrides: Record<string, any> = {}): AppSettings {
   return {
     managerPin: '1234',
     storeName: 'Test Store',
@@ -71,7 +72,7 @@ function makeBaseSettings(overrides: Record<string, any> = {}) {
     demoMode: false,
     kitchenPrinters: [],
     ...overrides,
-  };
+  } as AppSettings;
 }
 
 function makeKitchenPrinter(overrides: Record<string, any> = {}) {
@@ -100,14 +101,14 @@ function makeReceiptData(items: any[] = []) {
   };
 }
 
-function makeFoodItem() {
+function makeFoodItem(): CartItem {
   return {
     lineId: 'l1',
     menuId: 'm1',
     name: 'Nasi Goreng',
     basePrice: 10000,
     quantity: 1,
-    temperature: 'Panas',
+    temperature: 'Hangat',
     sugar: 'Normal',
     addons: [],
     subtotal: 10000,
@@ -329,5 +330,19 @@ describe('15.3 — target print all vs kitchen (skipReceiptPrint)', () => {
     expect(results.find((r: any) => r.printer === 'Dapur Minuman')?.status).toBe('success'); // tanpa item = sukses no-op
     // Hanya printer Makanan yang benar-benar membuat iframe (1 cetakan)
     expect(createdIframes.length).toBe(1);
+  });
+
+  it('printHtmlInIframe creates unique iframe IDs for concurrent prints to prevent overwrites', async () => {
+    const { createdIframes } = installFakeDom();
+    const mod = await loadPrinterModule();
+    
+    // Trigger printHtmlInIframe twice
+    mod.printHtmlInIframe('<h1>Job 1</h1>');
+    mod.printHtmlInIframe('<h1>Job 2</h1>');
+    
+    expect(createdIframes).toHaveLength(2);
+    expect(createdIframes[0].id).not.toBe(createdIframes[1].id);
+    expect(createdIframes[0].id).toMatch(/^thermal-print-iframe-/);
+    expect(createdIframes[1].id).toMatch(/^thermal-print-iframe-/);
   });
 });

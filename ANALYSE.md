@@ -742,3 +742,46 @@ Setelah dilakukan penelusuran kode pada `src/utils/dataManager.ts` dan struktur 
    DELETE FROM shifts WHERE id IS NOT NULL;
    ```
 
+---
+
+## 🔴 K. Temuan v4.8: KDS & Pembaruan Pesanan Pending
+
+### K.1 — Pemetaan `kitchenTicketPrintedAt` Terlewat pada `fetchTransactionsFromCloud` (Tinggi)
+- **Lokasi**: `src/lib/cloudSync.ts` (`fetchTransactionsFromCloud`).
+- **Masalah**: Kolom database `kitchen_ticket_printed_at` tidak dipetakan ke properti `kitchenTicketPrintedAt` pada objek transaksi frontend saat mengambil data dari cloud. Akibatnya, setiap kali sinkronisasi real-time atau fetch manual terjadi, properti `kitchenTicketPrintedAt` pada lokal diset kembali menjadi `undefined`. Hal ini menyebabkan filter KDS `t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt` menganggap transaksi pending tersebut belum dicetak dan menyembunyikannya dari KDS secara salah. Di sisi lain, jika data lokal belum ditimpa, pesanan yang disimpan lewat "Simpan Tanpa Cetak" bisa masuk ke KDS secara salah.
+- **Solusi**: Tambahkan pemetaan `kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined` pada data mapper `fetchTransactionsFromCloud`.
+
+### K.2 — Status KDS Reset Menjadi 'Waiting' pada Pengurangan/Penghapusan Menu Pending (Sedang)
+- **Lokasi**: `src/pages/POS.tsx` (`pendingItemsChanged` & `overrideKitchenStatus`).
+- **Masalah**: Saat ini, jika kasir mengedit pesanan pending dan mengubah isinya (baik menambah maupun **mengurangi** menu), `pendingItemsChanged` mendeteksi perbedaan signature dan me-reset status KDS (`kitchenStatus`) menjadi `'Waiting'`. Akibatnya, pesanan pending yang sebenarnya sudah selesai dimasak oleh dapur (`'Done'`) akan muncul kembali di KDS sebagai antrean baru meskipun kasir hanya menghapus/mengurangi menu (tidak ada menu baru yang perlu dimasak).
+- **Solusi**:
+  1. Buat helper `hasNewKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): boolean` untuk memeriksa apakah ada item baru yang ditambahkan, kuantitas item yang meningkat, atau perubahan spesifikasi item (suhu, level gula, addons). Jika hanya terjadi pengurangan/penghapusan item, fungsi mengembalikan `false`.
+  2. Gunakan helper ini untuk menetapkan `overrideKitchenStatus` di POS: status hanya di-reset ke `'Waiting'` jika ada item baru/tambahan yang perlu dimasak. Jika tidak, pertahankan status dapur saat ini (`currentPendingTx.kitchenStatus`).
+
+### K.3 — Sinkronisasi KDS saat Simpan Pending Tanpa Cetak (Sedang)
+- **Masalah**: Jika kasir mengedit pesanan pending dan memilih **"Simpan Tanpa Cetak"**, status dapur saat ini tidak boleh di-reset ke `'Waiting'` (karena belum dikirim/dicetak ke dapur).
+- **Solusi**: Pada `handleSavePending` di `POS.tsx`, jika `skipKitchenPrint` bernilai `true`, pertahankan status dapur saat ini `currentPendingTx.kitchenStatus` alih-alih me-reset ke `'Waiting'`.
+
+### K.4 — Peningkatan Kuantitas pada Cetak Tiket Dapur Delta (Sedang)
+- **Masalah**: Fungsi cetak tiket dapur delta saat ini hanya membandingkan `lineId` yang belum pernah ada. Jika kasir meningkatkan kuantitas item yang sama (mis. "Pecel Lele x1" menjadi "Pecel Lele x3"), item tersebut dilewati dari pencetakan delta tiket dapur karena `lineId`-nya sudah ada, sehingga dapur tidak tahu ada penambahan porsi.
+- **Solusi**: Buat helper `calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): CartItem[]` untuk menghitung delta kuantitas item yang meningkat serta perubahan spesifikasi sebagai item delta yang akan dicetak di dapur.
+
+---
+
+## 🔴 L. Temuan v4.9: Custom Non-Pelanggan & Isu Overwrite Tiket Dapur Simultan
+
+### L.1 — Kebutuhan Memasukkan Nama Pelanggan Tanpa Menyimpan ke Database (Rendah/Fitur)
+- **Masalah**: Beberapa pelanggan tidak ingin mendaftar sebagai anggota (pelanggan tetap), namun kasir tetap perlu mencatat nama mereka di keranjang transaksi untuk keperluan antrean/panggilan dan struk. POS saat ini hanya mendukung pemilihan pelanggan dari database atau menambahkan pelanggan baru secara permanen.
+- **Solusi**:
+  1. Tambahkan state `customCustomerName` di POS.
+  2. Perbarui komponen pembantu `CustomerPicker` agar menyediakan opsi *"✨ Gunakan nama: [Input] (Non-Pelanggan)"* saat kasir mengetik nama yang tidak terdaftar.
+  3. Jika dipilih, set `selectedCustomerId = null` dan simpan nama tersebut ke `customCustomerName`.
+  4. Kirim nama manual ini sebagai `selectedCustomerName` ke `AtomicTransactionEngine.executeCheckout` saat simpan pending maupun finalisasi pembayaran.
+
+### L.2 — Tiket Dapur Ter-overwrite saat Cetak Simultan ke Banyak Printer (Tinggi)
+- **Lokasi**: `src/utils/printer.ts` (`printHtmlInIframe`).
+- **Masalah**: Fungsi `printHtmlInIframe` mencari iframe menggunakan ID global tunggal `'thermal-print-iframe'`. Saat pesanan gantung dicetak menggunakan "Cetak Struk (Dapur) Saja", sistem memproses cetak ke printer makanan dan minuman secara bersamaan (secara asinkron via `Promise.all`). Cetak kedua langsung menulis ke iframe yang sama sebelum dialog cetak pertama dipicu (karena ada `setTimeout` 250ms), sehingga isi tiket printer pertama tertimpa oleh tiket printer kedua. Akibatnya, printer kedua mencetak tiketnya sebanyak 2 kali sedangkan printer pertama tidak mencetak sama sekali.
+- **Solusi**: Ubah `printHtmlInIframe` agar selalu membuat iframe baru dengan ID unik (menggunakan UUID/random string) untuk setiap proses pencetakan, dan bersihkan iframe tersebut dari DOM setelah selesai (misalnya setelah 60 detik).
+
+
+

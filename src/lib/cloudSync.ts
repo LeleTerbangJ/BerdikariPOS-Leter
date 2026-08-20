@@ -807,6 +807,7 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       voucherCode: row.voucher_code || undefined,
       promoName: row.promo_name || undefined,
       promoAmount: row.promo_amount || undefined,
+      kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined,
     })) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);
