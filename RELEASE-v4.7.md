@@ -4,11 +4,11 @@ Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, la
 
 ---
 
-## 📢 Ringkasan Rilis v4.7 (untuk dibagikan ke klien/tim)
+## 📢 Ringkasan Rilis v4.8 (untuk dibagikan ke klien/tim)
 
 > Versi singkat — salin & kirim ke klien. Detail lengkap di bagian bawah dokumen ini & `CHANGELOG.md`.
 
-**Versi 4.7 menghadirkan:**
+**Versi 4.8 menghadirkan:**
 
 1. **Promo & Loyalty lengkap** 🏷️ — promo per menu/kategori, BOGO (beli N gratis M), syarat minimal qty/belanja, batas pemakaian per pelanggan, promo bisa digabung atau dipilih otomatis yang terbaik, nama promo tampil di struk, dan **poin loyalty** (pelanggan mengumpulkan poin & menukarnya). Laporan performa promo siap membantu evaluasi penjualan.
 2. **Laporan PPN bulanan** 🧾 — ringkasan pajak per bulan (DPP, PPN, total) + ekspor CSV/PDF, memudahkan pelaporan.
@@ -20,6 +20,7 @@ Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, la
 8. **Printer thermal & dapur andal** 🖨️ — koneksi Bluetooth tidak putus saat refresh (auto re-pair), ada opsi cetak per transaksi (struk saja / tiket dapur saja / tanpa cetak), antrean cetak & indikator status di halaman Dapur.
 9. **Skenario 2 kasir & offline** 👥 — dua kasir tidak bisa menjual stok melebihi fisik (proteksi otomatis), nomor antrean tidak dobel, satu shift aktif per toko, expected cash tutup shift akurat dari semua kasir, tombol **"Catat sebagai Demo"** untuk uji coba tanpa memotong stok.
 10. **Perbaikan ketelitian & kenyamanan** ✅ — ringkasan tutup shift **tidak lagi salah hitung saat ada refund** (angka penjualan bersih + keterangan Refund Tunai); semua notifikasi kini tampil rapi (toast) & semua konfirmasi memakai dialog seragam — **tidak ada popup browser lama**.
+11. **Per-item Kitchen Status di KDS** 🍳 — dapur bisa melihat status per-item (Baru/Diproses/Selesai), bukan hanya per-transaksi. Saat pelanggan tambah menu saat pesanan sedang diproses, item baru ditandai "TAMBAHAN" dan tidak mengganggu item yang sedang dimasak.
 
 > ⚠️ **Untuk database lama, wajib menjalankan langkah SQL sekali** (lihat bagian "Langkah yang Wajib Dijalankan" di bawah — tim teknis akan membantu).
 
