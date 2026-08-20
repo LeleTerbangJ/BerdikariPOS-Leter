@@ -1474,21 +1474,19 @@
 - [x] Set `overrideKitchenStatus` hanya jika ADA item dengan status 'new' — ✅ `POS.tsx` (handleSavePending)
 - [x] HandleSavePending menggunakan `mergeKitchenItemStatus` untuk merge status item lama + baru — ✅ `POS.tsx`
 
-### 23.3 (🟠 TINGGI) — Badge "TAMBAHAN" di tiket dapur saat update pending
+### 23.3 (🟠 TINGGI) — Badge "TAMBAHAN" di tiket dapur saat update pending ✅ SELESAI (v4.8)
 
-- **Temuan**: Tiket dapur saat update pending mencetak item delta tanpa konteks. Dapur tidak tahu ini pesanan TAMBAHAN dari nomor antrean yang sudah selesai.
-- **Solusi**: Tambah header "=== TAMBAHAN ===" atau prefix "[TAMBAHAN]" di tiket cetak untuk item delta. Hanya berlaku saat `currentPendingTx` ada dan `deltaKitchenItems.length > 0`.
-- **File**: `kitchenTicket.ts`, `printer.ts`
+- [x] Tambah field `isAdditionalPrint?: boolean` di `ReceiptData` — ✅ `printer.ts`
+- [x] Header 'TAMBAHAN' di tiket dapur browser print — ✅ `printer.ts` (printKitchenReceiptBrowser)
+- [x] Header 'TAMBAHAN' di tiket dapur Bluetooth ESC/POS — ✅ `printer.ts` (buildKitchenESCPOS)
+- [x] Engine tandai `isAdditionalPrint: true` saat cetak delta items — ✅ `atomicTransactionEngine.ts`
 
-### 23.4 (🟠 TINGGI) — KDS filter per-item (tampilkan transaksi jika ADA item 'new'/'processing')
+### 23.4 (🟠 TINGGI) — KDS filter per-item (tampilkan transaksi jika ADA item 'new'/'processing') ✅ SELESAI (v4.8)
 
-- **Temuan**: KDS filter saat ini hanya cek `Transaction.kitchenStatus`. Perlu diperbarui agar:
-  - Transaksi muncul di "Menunggu" jika ADA item `kitchenItemStatus = 'new'`
-  - Transaksi muncul di "Diproses" jika ADA item `kitchenItemStatus = 'processing'` (dan tidak ada 'new')
-  - Transaksi muncul di "Selesai" jika SEMUA item `kitchenItemStatus = 'done'`
-  - Transaksi disembunyikan jika semua item 'done' + sudah di-clear
-- **Solusi**: Ubah filter `activeOrders` + `waitingOrders` di `Kitchen.tsx` untuk cek per-item status.
-- **File**: `Kitchen.tsx`
+- [x] Hitung effectiveStatus berdasarkan kitchenItemStatus per-item — ✅ `Kitchen.tsx`
+- [x] Filter Waiting: tampilkan jika ada item 'new' — ✅ `Kitchen.tsx`
+- [x] Filter Processing: tampilkan jika ada item 'processing' (tanpa 'new') — ✅ `Kitchen.tsx`
+- [x] Filter Done: tampilkan jika semua item 'done' — ✅ `Kitchen.tsx`
 
 ### 23.5 (🟠 TINGGI) — Tombol Proses/Selesai per-item di KDS
 

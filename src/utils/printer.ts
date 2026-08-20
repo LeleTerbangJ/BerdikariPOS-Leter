@@ -66,6 +66,9 @@ export interface ReceiptData {
   promoName?: string;
   promoCode?: string;
   promoAmount?: number;
+  // v4.8 TO DO 23.3: tanda tiket TAMBAHAN (delta items saat update pending) — header '=== TAMBAHAN ==='
+  // ditampilkan di tiket dapur agar dapur tahu ini pesanan tambahan dari nomor antrean yang sudah ada.
+  isAdditionalPrint?: boolean;
 }
 
 export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettings, isReprint: boolean = false): ReceiptData {
@@ -1009,6 +1012,12 @@ export function printKitchenReceiptBrowser(data: ReceiptData, items: CartItem[],
   let lines: string[] = [];
 
   // Header
+  // v4.8 TO DO 23.3: header TAMBAHAN untuk tiket delta items (update pending)
+  if (data.isAdditionalPrint) {
+    lines.push(center('========== ==========', kp.width));
+    lines.push(center('TAMBAHAN', kp.width));
+    lines.push(center('========== ==========', kp.width));
+  }
   lines.push(center(`TIKET DAPUR - #${data.queueNumber}`, kp.width));
   lines.push(center(kp.name.toUpperCase(), kp.width));
   if (data.isReprint) {
@@ -1081,6 +1090,19 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   commands.push(ESC, 0x61, 0x01);
 
   // 1. Header (Scoped bold and explicit CRLF line feeds to prevent buffer overlap)
+  // v4.8 TO DO 23.3: header TAMBAHAN untuk tiket delta items (update pending)
+  if (data.isAdditionalPrint) {
+    commands.push(ESC, 0x45, 0x01);
+    commands.push(...encoder.encode('========== ==========`\r\n'));
+    commands.push(ESC, 0x45, 0x00);
+    commands.push(ESC, 0x45, 0x01);
+    commands.push(...encoder.encode('TAMBAHAN\r\n'));
+    commands.push(ESC, 0x45, 0x00);
+    commands.push(ESC, 0x45, 0x01);
+    commands.push(...encoder.encode('========== ==========`\r\n'));
+    commands.push(ESC, 0x45, 0x00);
+  }
+
   commands.push(ESC, 0x45, 0x01);
   commands.push(...encoder.encode(`TIKET DAPUR - #${data.queueNumber}\r\n`));
   commands.push(ESC, 0x45, 0x00);

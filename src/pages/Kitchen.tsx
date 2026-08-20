@@ -236,21 +236,24 @@ export default function Kitchen() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
-          // v4.8 TO DO 23.2: filter orders — transaksi dengan SEMUA item 'done' tidak masuk Waiting
-          // (kecuali transaksi belum punya kitchenItemStatus = legacy order)
+          // v4.8 TO DO 23.4: filter orders berdasarkan kitchenItemStatus per-item
           const orders = activeOrders
             .filter((t) => {
-              if (t.kitchenStatus !== status) return false;
-              // Kolom 'Done': hanya tampilkan transaksi yang kitchenStatus = Done
-              if (status === 'Done') return true;
-              // Kolom 'Waiting'/'Processing': filter transaksi yang punya item baru/diproses
-              // Jika SEMUA item sudah 'done' → skip dari kolom ini (sudah masuk Done)
+              // Hitung status dominan berdasarkan item
               const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
+              let effectiveStatus = t.kitchenStatus;
+              
               if (hasKitchenItemStatus) {
                 const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-                if (allDone) return false;
+                const hasNew = t.items.some((i) => i.kitchenItemStatus === 'new');
+                const hasProcessing = t.items.some((i) => i.kitchenItemStatus === 'processing');
+                
+                if (allDone) effectiveStatus = 'Done';
+                else if (hasNew) effectiveStatus = 'Waiting';
+                else if (hasProcessing) effectiveStatus = 'Processing';
               }
-              return true;
+              
+              return effectiveStatus === status;
             })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
