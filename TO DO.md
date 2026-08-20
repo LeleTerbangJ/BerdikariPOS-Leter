@@ -1519,19 +1519,13 @@
 
 - [x] Ubah filter dari `!== 'done'` ke `=== 'processing'` — ✅ `Kitchen.tsx`
 
-### 24.3 (🟠 TINGGI) — calculateDeltaKitchenItems reset status item 'processing' ke 'new'
+### 24.3 (🟠 TINGGI) — calculateDeltaKitchenItems reset status item 'processing' ke 'new' ✅ SELESAI (v4.8)
 
-- **Temuan**: `calculateDeltaKitchenItems` mengembalikan item delta dengan `kitchenItemStatus: 'new'` untuk semua item (termasuk item yang quantity naik). Jika item sudah dalam status 'processing', statusnya di-reset ke 'new' → KDS menampilkan item yang sedang diproses sebagai "Baru".
-- **Dampak**: Item yang sedang dimasak muncul kembali di kolom "Menunggu" dengan badge "Baru".
-- **File**: `kitchenTicket.ts` (calculateDeltaKitchenItems)
-- **Fix**: Pertahankan status lama dari `pendingItems` untuk item yang sudah ada, set 'new' hanya untuk item benar-benar baru.
+- [x] Delta kitchen items hanya kirim item benar-benar baru (bukan reset status item lama) — ✅ `kitchenTicket.ts`
 
-### 24.4 (🟡 SEDANG) — mergeKitchenItemStatus tidak handle quantity berubah
+### 24.4 (🟡 SEDANG) — mergeKitchenItemStatus tidak handle quantity berubah ✅ SELESAI (v4.8)
 
-- **Temuan**: Saat quantity item naik (misal 2→3), `mergeKitchenItemStatus` mempertahankan status lama. Seharusnya qty tambahan dianggap "item baru" untuk KDS (dapur perlu tahu ada pesanan tambahan).
-- **Dampak**: Qty tambahan tidak mendapat badge "Baru" di KDS.
-- **File**: `kitchenTicket.ts` (mergeKitchenItemStatus)
-- **Fix**: Jika `c.quantity > p.quantity`, set status 'new' untuk item tersebut.
+- [x] Cek quantity berubah, specs berubah, atau addons berubah → status 'new' — ✅ `kitchenTicket.ts`
 
 ### 24.5 (🟡 SEDANG) — Filter KDS bisa sembunyikan transaksi dengan mixed status
 

@@ -79,6 +79,7 @@ export function setAllItemsKitchenStatus(
 /**
  * v4.8 TO DO 23.2: Hitung item dengan status baru + pertahankan status item lama.
  * Item lama yang sudah 'done' tetap 'done', item baru/delta di-set 'new'.
+ * v4.8 FIX 24.4: Jika quantity naik atau spesifikasi berubah, status 'new' untuk item yang berubah.
  */
 export function mergeKitchenItemStatus(
   cartItems: CartItem[],
@@ -90,7 +91,18 @@ export function mergeKitchenItemStatus(
       // Item baru ditambahkan → status 'new'
       return { ...c, kitchenItemStatus: 'new' as const };
     }
-    // Item sudah ada → pertahankan status lama
+    // v4.8 FIX 24.4: Cek apakah quantity naik atau spesifikasi berubah
+    const quantityChanged = c.quantity !== p.quantity;
+    const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar;
+    const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+    const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
+    const addonsChanged = cAddons !== pAddons;
+    
+    if (quantityChanged || specsChanged || addonsChanged) {
+      // Qty naik atau spesifikasi berubah → status 'new' (ada item tambahan yang perlu dimasak)
+      return { ...c, kitchenItemStatus: 'new' as const };
+    }
+    // Item sama → pertahankan status lama
     return { ...c, kitchenItemStatus: p.kitchenItemStatus || 'new' };
   });
 }
@@ -98,6 +110,7 @@ export function mergeKitchenItemStatus(
 /**
  * v4.8: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur.
  * Item baru, kuantitas bertambah (selisih kuantitas), dan spesifikasi berubah dikirim.
+ * v4.8 FIX 24.3: Pertahankan status lama dari pendingItems untuk item yang sudah ada.
  */
 export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): CartItem[] {
   const delta: CartItem[] = [];
@@ -112,10 +125,11 @@ export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: 
       const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar || cAddons !== pAddons;
 
       if (specsChanged) {
-        // Spesifikasi berubah → status 'new'
+        // Spesifikasi berubah → status 'new' (item perlu dimasak ulang)
         delta.push({ ...c, kitchenItemStatus: 'new' });
       } else if (c.quantity > p.quantity) {
         // Kuantitas bertambah → selisih dengan status 'new'
+        // Pertahankan status asli dari pendingItems untuk item yang sudah ada
         delta.push({
           ...c,
           quantity: c.quantity - p.quantity,
