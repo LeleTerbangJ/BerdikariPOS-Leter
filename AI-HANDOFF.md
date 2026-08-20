@@ -1015,7 +1015,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file; +30 dari 602) — rantai terkini di §9.6.
 - **TO DO.md**: Prioritas 20 **TUNTAS (20.1–20.4)** + Prioritas 21 **TUNTAS (21.1–21.5)** + Prioritas 23 **TUNTAS (23.1–23.7)**; ANALYSE.md Bagian G ✅ + Bagian H ✅ + Bagian M ✅. **Prioritas 19 (Multi Outlet) tetap BELUM dieksekusi** (analisa F.1–F.10 di ANALYSE.md, daftar 19.1–19.14 di TO DO.md).
-- **CHANGELOG.md**: 5 bullet Perbaikan Bug (20.1–20.4 + 21) + validasi 602/602. **RELEASE-v4.7.md**: 5 bullet Perbaikan Utama + 602/602 (intro + validasi). **DEPLOYMENT.md**: §2 + §7 checklist Prioritas 20 & 21 + §8 diperbarui ke 602/602. **TESTING-PRADEPLOY.md**: tahap F (Prioritas 20) + tabel ringkasan.
+- **CHANGELOG.md**: 5 bullet Perbaikan Bug (20.1–20.4 + 21) + validasi 632/632. **RELEASE-v4.7.md**: 5 bullet Perbaikan Utama + 632/632 (intro + validasi). **DEPLOYMENT.md**: §2 + §7 checklist Prioritas 20 & 21 + §8 diperbarui ke 632/632. **TESTING-PRADEPLOY.md**: tahap F (Prioritas 20) + tabel ringkasan.
 - **SQL**: Prioritas 20 **tanpa perubahan database** (pure logic + UI) — tidak ada migration baru.
 - **`npm run build` ✅ BERHASIL** (18 Agt 2026): build pertama setelah 20.1–20.3 → `✓ built in 7.71s`; **build final setelah 20.4 lengkap + sinkronisasi dokumen → `✓ built in 6.78s`**, tanpa error TypeScript/rollup; PWA v1.3.0 `generateSW` → **50 precache entries (3623.95 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, dikenal, bukan regresi). Perubahan `shiftStats`, UI toast/dialog (20.2–20.3), dan `buildCustomDateRange`/Reports/Transactions (20.4) **lolos build produksi**.
 - **COMMIT**: seluruh perubahan sesi Prioritas 18 + 20 (kode, keempat dokumen rilis, ANALYSE/TO DO, TESTING-PRADEPLOY) di-commit ke branch `develop` pada sesi ini (menunggu konfirmasi hash di §24.4/§9.6 bila perlu).
@@ -1069,7 +1069,7 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 
 - **Perubahan**: Tambah baris Jam Mulai/Jam Tutup shift, Total Item Terjual, daftar **Penjualan Menu per item** (Nama Menu + Qty x Harga = Jumlah, diurutkan terlaris di atas via `menuSalesMap`), dan rumusan formula expected cash dihapus.
 - **File**: `src/components/Layout.tsx` (`handleCloseShift` — baris `menuSalesMap` + format struk).
-- **Validasi**: tsc 0 error, 602/602 test (57 file).
+- **Validasi**: tsc 0 error, 632/632 test (61 file).
 
 ---
 

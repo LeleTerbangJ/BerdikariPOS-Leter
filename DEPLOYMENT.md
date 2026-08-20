@@ -1,4 +1,4 @@
-# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS v4.7
+# 🚀 Panduan Deployment & Komersialisasi — BerdikariPOS v4.8
 
 ## Status: ✅ PRODUCTION LIVE
 - **Hosting**: Vercel (auto-deploy)
