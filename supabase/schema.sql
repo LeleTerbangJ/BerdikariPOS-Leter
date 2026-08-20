@@ -287,11 +287,13 @@ CREATE TABLE IF NOT EXISTS settings (
   table_features JSONB DEFAULT '{"enabled": false, "tables": ["Meja 1", "Meja 2", "Meja 3", "Meja 4", "Meja 5"]}',
   receipt_header TEXT,
   receipt_footer TEXT,
-  receipt_ascii_only BOOLEAN DEFAULT false,
-  auto_print_receipt BOOLEAN DEFAULT false,
-  -- v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim struk ke WhatsApp pelanggan setelah checkout
-  auto_send_digital_receipt BOOLEAN DEFAULT false
+  -- v4.8: Pencetakan pesanan pending (dapur_only | ask | dapur_and_cashier | none)
+  auto_send_digital_receipt BOOLEAN DEFAULT false,
+  pending_print_option TEXT DEFAULT 'dapur_only'
 );
+
+-- Safe migration: kolom pending_print_option (v4.8)
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS pending_print_option TEXT DEFAULT 'dapur_only';
 
 -- Insert default settings row
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
