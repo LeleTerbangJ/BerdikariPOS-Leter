@@ -227,7 +227,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ---
 
-## 🔧 Perbaikan Bug (v4.8.1 — Fix 24.1–24.5 + Fix 25.1–25.4)
+## 🔧 Perbaikan Bug (v4.8.1 — Fix 24.1–24.5 + Fix 25.1–25.4 + Fix 26.1)
 
 - **24.1 (KRITIS)**: Sync `kitchenItemStatus` per-item ke cloud → status item sinkron lintas device.
 - **24.2**: Tombol "Selesai Semua" hanya menandai item `processing` (bukan `new`) sebagai done.
@@ -237,11 +237,12 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 - **25.2**: `updateItemKitchenStatus` sync cloud dengan await + try/catch.
 - **25.3**: Filter KDS transaksi muncul di kolom DOMINAN saja.
 - **25.4**: Filter items sesuai kolom: Waiting = 'new', Processing = 'processing', Done = all.
+- **26.1 (KRITIS)**: Hapus tombol per-order "Proses"/"Selesai" di KDS — tombol tidak berfungsi. Sudah ada tombol per-item + shortcut batch.
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
 - `npx vitest run` → **632/632 test lolos** (61 file)
-- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026)**: `✓ built in 18.70s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.99 KiB)**. Build produksi **v4.8.1 final terverifikasi**.
+- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026)**: `✓ built in 7.33s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.53 KiB)**. Build produksi **v4.8.1 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---
