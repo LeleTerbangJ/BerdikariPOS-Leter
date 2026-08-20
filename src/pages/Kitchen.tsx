@@ -10,7 +10,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePrinterCrossTab } from '../hooks/usePrinterCrossTab';
 import type { KitchenStatus } from '../types';
-import { Clock, Flame, CheckCircle2, ArrowRight, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw } from 'lucide-react';
+import { Clock, Flame, CheckCircle2, AlertTriangle, Volume2, VolumeX, Printer, RefreshCw, Sparkles, Plus } from 'lucide-react';
 
 const columns: { status: KitchenStatus; label: string; color: string; icon: any }[] = [
   { status: 'Waiting', label: 'Antrean Menunggu', color: 'border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-600/50', icon: Clock },
@@ -21,7 +21,7 @@ const columns: { status: KitchenStatus; label: string; color: string; icon: any 
 const ALERT_THRESHOLD_MS = 5 * 60 * 1000; // 5 menit
 
 export default function Kitchen() {
-  const { transactions, updateKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
+  const { transactions, updateKitchenStatus, updateItemKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
   const { shifts } = useShiftStore();
   const { currentUser } = useAuthStore();
   const { settings } = useSettingsStore();
@@ -157,12 +157,6 @@ export default function Kitchen() {
     return () => clearInterval(interval);
   }, [overdueCount, isMuted]);
 
-  const getNextStatus = (current: KitchenStatus): KitchenStatus | null => {
-    if (current === 'Waiting') return 'Processing';
-    if (current === 'Processing') return 'Done';
-    return null;
-  };
-
   return (
     <div className="h-full flex flex-col">
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4">
@@ -236,8 +230,31 @@ export default function Kitchen() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
+          // v4.8 TO DO 23.4 + FIX 24.5: filter orders berdasarkan kitchenItemStatus per-item
+          // v4.8 FIX 25.3: transaksi muncul di kolom DOMINAN saja (tidak muncul di 2 kolom)
+          // Priority: Waiting (ada 'new') > Processing (ada 'processing') > Done (semua 'done')
           const orders = activeOrders
-            .filter((t) => t.kitchenStatus === status)
+            .filter((t) => {
+              const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
+              
+              if (!hasKitchenItemStatus) {
+                // Legacy order tanpa kitchenItemStatus → pakai kitchenStatus transaksi
+                return t.kitchenStatus === status;
+              }
+              
+              const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
+              const hasNew = t.items.some((i) => i.kitchenItemStatus === 'new');
+              const hasProcessing = t.items.some((i) => i.kitchenItemStatus === 'processing');
+              
+              // Tentukan status dominan (hanya 1 kolom)
+              let effectiveStatus: 'Waiting' | 'Processing' | 'Done';
+              if (allDone) effectiveStatus = 'Done';
+              else if (hasNew) effectiveStatus = 'Waiting';
+              else if (hasProcessing) effectiveStatus = 'Processing';
+              else effectiveStatus = 'Done'; // fallback
+              
+              return effectiveStatus === status;
+            })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
             <div key={status} className={`rounded-2xl border-2 ${color} flex flex-col min-h-0`}>
@@ -245,6 +262,36 @@ export default function Kitchen() {
                 <Icon size={20} />
                 <h2 className="font-bold text-lg">{label}</h2>
                 <span className="badge bg-white/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 ml-auto">{orders.length}</span>
+                {/* v4.8 TO DO 23.5: shortcut 'Proses Semua' / 'Selesai Semua' */}
+                {status === 'Waiting' && orders.length > 0 && (
+                  <button
+                    onClick={() => {
+                      orders.forEach((o) => {
+                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'new').forEach((i) => {
+                          updateItemKitchenStatus(o.id, i.lineId, 'processing');
+                        });
+                      });
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800 transition font-semibold"
+                  >
+                    <Flame size={10} className="inline mr-0.5" />Proses Semua
+                  </button>
+                )}
+                {status === 'Processing' && orders.length > 0 && (
+                  <button
+                    onClick={() => {
+                      orders.forEach((o) => {
+                        // v4.8 FIX 24.2: hanya tandai item 'processing' (bukan 'new') sebagai done
+                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'processing').forEach((i) => {
+                          updateItemKitchenStatus(o.id, i.lineId, 'done');
+                        });
+                      });
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800 transition font-semibold"
+                  >
+                    <CheckCircle2 size={10} className="inline mr-0.5" />Selesai Semua
+                  </button>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -287,19 +334,6 @@ export default function Kitchen() {
                             <span className="text-xs text-blue-400">{waitMins} mnt (sejak update)</span>
                           )}
                         </div>
-                        {getNextStatus(status) && (
-                          <button
-                            onClick={() =>
-                              updateKitchenStatus(order.id, getNextStatus(status)!)
-                            }
-                            className={`btn-primary text-xs py-1.5 px-3 ${
-                              overdue ? 'animate-bounce' : ''
-                            }`}
-                          >
-                            <ArrowRight size={14} />
-                            {status === 'Waiting' ? 'Proses' : 'Selesai'}
-                          </button>
-                        )}
                       </div>
 
                       {/* Shift/Cashier info */}
@@ -317,19 +351,85 @@ export default function Kitchen() {
                       </p>
 
                       <div className="space-y-2">
-                        {order.items.filter((item) => !item.isBundle).map((item) => (
-                          <div key={item.lineId} className="border-l-4 border-brand-300 dark:border-brand-600 pl-3">
-                            <p className="font-bold text-base dark:text-slate-100">{item.name}</p>
-                            <p className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
-                              {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}{(item.showTemperature !== false || item.showSugarLevel !== false) ? ' • ' : ''}x{item.quantity}
-                            </p>
-                            {item.addons.length > 0 && (
-                              <p className="text-xs text-slate-500">
-                                + {item.addons.map((a) => a.name).join(', ')}
+                        {/* v4.8 FIX 24.5: filter item berdasarkan kolom saat ini */}
+                        {order.items.filter((item) => {
+                          if (item.isBundle) return false;
+                          const itemStatus = item.kitchenItemStatus || 'new';
+                          // Di kolom Waiting: hanya tampilkan item 'new'
+                          if (status === 'Waiting') return itemStatus === 'new';
+                          // Di kolom Processing: hanya tampilkan item 'processing'
+                          if (status === 'Processing') return itemStatus === 'processing';
+                          // Di kolom Done: tampilkan SEMUA item (termasuk yang done)
+                          return true;
+                        }).map((item) => {
+                          // v4.8 TO DO 23.1: badge per-item berdasarkan kitchenItemStatus
+                          const itemStatus = item.kitchenItemStatus || 'new';
+                          const isDone = itemStatus === 'done';
+                          const isNew = itemStatus === 'new';
+                          return (
+                            <div
+                              key={item.lineId}
+                              className={`border-l-4 pl-3 py-1 rounded-r-lg transition-all ${
+                                isDone
+                                  ? 'border-green-400 dark:border-green-600 bg-green-50/50 dark:bg-green-950/20 opacity-70'
+                                  : isNew
+                                    ? 'border-amber-400 dark:border-amber-600 bg-amber-50/50 dark:bg-amber-950/20'
+                                    : 'border-blue-400 dark:border-blue-600 bg-blue-50/50 dark:bg-blue-950/20'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <p className={`font-bold text-base dark:text-slate-100 ${isDone ? 'line-through text-slate-500 dark:text-slate-400' : ''}`}>
+                                  {item.name}
+                                </p>
+                                {/* v4.8: badge status per-item */}
+                                {isDone && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400">
+                                    <CheckCircle2 size={10} /> Selesai
+                                  </span>
+                                )}
+                                {isNew && status === 'Waiting' && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-400">
+                                    <Plus size={10} /> Baru
+                                  </span>
+                                )}
+                                {!isDone && !isNew && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400">
+                                    <Flame size={10} /> Diproses
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-slate-600 dark:text-slate-400 font-semibold">
+                                {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}{(item.showTemperature !== false || item.showSugarLevel !== false) ? ' • ' : ''}x{item.quantity}
                               </p>
-                            )}
-                          </div>
-                        ))}
+                              {item.addons.length > 0 && (
+                                <p className="text-xs text-slate-500">
+                                  + {item.addons.map((a) => a.name).join(', ')}
+                                </p>
+                              )}
+                              {/* v4.8 TO DO 23.5: tombol per-item untuk transisi status */}
+                              {!isDone && (
+                                <div className="flex gap-1 mt-1">
+                                  {isNew && (
+                                    <button
+                                      onClick={() => updateItemKitchenStatus(order.id, item.lineId, 'processing')}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800 transition"
+                                    >
+                                      <Flame size={10} className="inline mr-0.5" />Proses
+                                    </button>
+                                  )}
+                                  {!isNew && (
+                                    <button
+                                      onClick={() => updateItemKitchenStatus(order.id, item.lineId, 'done')}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800 transition"
+                                    >
+                                      <CheckCircle2 size={10} className="inline mr-0.5" />Selesai
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {/* v4.7 TO DO 21.5: catatan untuk pesanan yang di-update */}

@@ -33,6 +33,8 @@ interface TransactionState {
   markTransactionConfirmed: (id: string) => void;
   addTransaction: (tx: Transaction) => void;
   updateKitchenStatus: (id: string, status: KitchenStatus) => void;
+  // v4.8 TO DO 23.5: update kitchenItemStatus per-item di transaksi
+  updateItemKitchenStatus: (txId: string, lineId: string, status: 'new' | 'processing' | 'done') => void;
   updateTxStatus: (id: string, status: TxStatus) => void;
   // v4.1 TO DO 2.8: perbarui metadata transaksi (mis. paymentMethod parent split) tanpa menyentuh status/cloud
   updateTxMeta: (id: string, partial: Partial<Transaction>) => void;
@@ -128,6 +130,42 @@ export const useTransactionStore = create<TransactionState>()(
             t.id === id ? { ...t, kitchenStatus: status, updatedAt: new Date().toISOString() } : t
           ),
         }));
+      },
+
+      // v4.8 TO DO 23.5: update kitchenItemStatus per-item di transaksi
+      updateItemKitchenStatus: (txId, lineId, status) => {
+        let updatedTx: Transaction | undefined;
+        set((s) => ({
+          transactions: s.transactions.map((t) => {
+            if (t.id !== txId) return t;
+            const updatedItems = t.items.map((item) =>
+              item.lineId === lineId ? { ...item, kitchenItemStatus: status } : item
+            );
+            // Hitung effective kitchenStatus berdasarkan item status
+            const allDone = updatedItems.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
+            const hasNew = updatedItems.some((i) => i.kitchenItemStatus === 'new');
+            const hasProcessing = updatedItems.some((i) => i.kitchenItemStatus === 'processing');
+            let newKitchenStatus = t.kitchenStatus;
+            if (allDone) newKitchenStatus = 'Done';
+            else if (hasNew) newKitchenStatus = 'Waiting';
+            else if (hasProcessing) newKitchenStatus = 'Processing';
+            updatedTx = { ...t, items: updatedItems, kitchenStatus: newKitchenStatus, updatedAt: new Date().toISOString() };
+            return updatedTx;
+          }),
+        }));
+        // v4.8 TO DO 23.6: sync ke cloud — kitchenStatus + items (dengan kitchenItemStatus)
+        // v4.8 FIX 25.2: tambah await + try/catch agar sync error tidak hilang diam-diam
+        if (updatedTx) {
+          const syncKitchen = async () => {
+            try {
+              await syncTransactionStatus(txId, updatedTx!.kitchenStatus);
+              await syncTransactionMeta(txId, { items: updatedTx!.items });
+            } catch (err) {
+              console.warn('[TransactionStore] Failed to sync kitchenItemStatus to cloud:', err);
+            }
+          };
+          syncKitchen(); // Fire-and-forget (tidak block UI)
+        }
       },
 
       updateTxStatus: (id, status) => {

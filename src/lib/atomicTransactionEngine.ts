@@ -340,15 +340,21 @@ export class AtomicTransactionEngine {
           // v4.7 TO DO 21.1: saat finalisasi pending yang diedit (deltaKitchenItems ada),
           // cetak tiket HANYA untuk item BARU (bukan semua item) → anti tiket dobel
           // untuk item lama yang sudah diproses/diantar dapur.
+          // v4.8 TO DO 23.3: tandai tiket delta sebagai 'TAMBAHAN' agar dapur tahu ini pesanan tambahan.
           if (!params.skipKitchenPrint) {
             const kitchenReceiptData = params.deltaKitchenItems && params.deltaKitchenItems.length > 0
-              ? { ...receiptData, items: params.deltaKitchenItems }
+              ? { ...receiptData, items: params.deltaKitchenItems, isAdditionalPrint: true }
               : receiptData;
             const kitchenResults = await printReceipt(kitchenReceiptData, params.settings, 'kitchen');
+            // v4.8 TO DO 23.7: logging kitchenTicketPrintedAt untuk debugging
             if (didKitchenPrintSucceed(kitchenResults)) {
+              const printedAt = new Date().toISOString();
+              console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt}`);
               useTransactionStore
                 .getState()
-                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: new Date().toISOString() });
+                .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
+            } else {
+              console.warn(`[AtomicEngine] Kitchen print FAILED for Tx #${tx.id} — kitchenTicketPrintedAt NOT stamped`);
             }
           }
         }

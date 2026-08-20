@@ -1,14 +1,14 @@
-# 📣 BerdikariPOS v4.7 — Rilis Final
+# 📣 BerdikariPOS v4.8 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, dan **audit flow Pending + Split Bill yang aman**). Validasi: build produksi sukses, **602/602 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, **audit flow Pending + Split Bill yang aman**, dan **per-item kitchen status di KDS**). Validasi: build produksi sukses, **632/632 tes otomatis lolos**.
 
 ---
 
-## 📢 Ringkasan Rilis v4.7 (untuk dibagikan ke klien/tim)
+## 📢 Ringkasan Rilis v4.8 (untuk dibagikan ke klien/tim)
 
 > Versi singkat — salin & kirim ke klien. Detail lengkap di bagian bawah dokumen ini & `CHANGELOG.md`.
 
-**Versi 4.7 menghadirkan:**
+**Versi 4.8 menghadirkan:**
 
 1. **Promo & Loyalty lengkap** 🏷️ — promo per menu/kategori, BOGO (beli N gratis M), syarat minimal qty/belanja, batas pemakaian per pelanggan, promo bisa digabung atau dipilih otomatis yang terbaik, nama promo tampil di struk, dan **poin loyalty** (pelanggan mengumpulkan poin & menukarnya). Laporan performa promo siap membantu evaluasi penjualan.
 2. **Laporan PPN bulanan** 🧾 — ringkasan pajak per bulan (DPP, PPN, total) + ekspor CSV/PDF, memudahkan pelaporan.
@@ -20,6 +20,7 @@ Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, la
 8. **Printer thermal & dapur andal** 🖨️ — koneksi Bluetooth tidak putus saat refresh (auto re-pair), ada opsi cetak per transaksi (struk saja / tiket dapur saja / tanpa cetak), antrean cetak & indikator status di halaman Dapur.
 9. **Skenario 2 kasir & offline** 👥 — dua kasir tidak bisa menjual stok melebihi fisik (proteksi otomatis), nomor antrean tidak dobel, satu shift aktif per toko, expected cash tutup shift akurat dari semua kasir, tombol **"Catat sebagai Demo"** untuk uji coba tanpa memotong stok.
 10. **Perbaikan ketelitian & kenyamanan** ✅ — ringkasan tutup shift **tidak lagi salah hitung saat ada refund** (angka penjualan bersih + keterangan Refund Tunai); semua notifikasi kini tampil rapi (toast) & semua konfirmasi memakai dialog seragam — **tidak ada popup browser lama**.
+11. **Per-item Kitchen Status di KDS** 🍳 — dapur bisa melihat status per-item (Baru/Diproses/Selesai), bukan hanya per-transaksi. Saat pelanggan tambah menu saat pesanan sedang diproses, item baru ditandai "TAMBAHAN" dan tidak mengganggu item yang sedang dimasak.
 
 > ⚠️ **Untuk database lama, wajib menjalankan langkah SQL sekali** (lihat bagian "Langkah yang Wajib Dijalankan" di bawah — tim teknis akan membantu).
 
@@ -226,10 +227,22 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ---
 
+## 🔧 Perbaikan Bug (v4.8.1 — Fix 24.1–24.5 + Fix 25.1–25.4 + Fix 26.1)
+
+- **24.1 (KRITIS)**: Sync `kitchenItemStatus` per-item ke cloud → status item sinkron lintas device.
+- **24.2**: Tombol "Selesai Semua" hanya menandai item `processing` (bukan `new`) sebagai done.
+- **24.3 + 24.4**: `mergeKitchenItemStatus` cek perubahan qty/specs/addons → status `new` untuk item berubah.
+- **24.5**: Filter KDS menampilkan transaksi di SEMUA kolom yang relevan (mixed status).
+- **25.1**: `mergeKitchenItemStatus` hanya quantity NAIK yang dianggap berubah.
+- **25.2**: `updateItemKitchenStatus` sync cloud dengan await + try/catch.
+- **25.3**: Filter KDS transaksi muncul di kolom DOMINAN saja.
+- **25.4**: Filter items sesuai kolom: Waiting = 'new', Processing = 'processing', Done = all.
+- **26.1 (KRITIS)**: Hapus tombol per-order "Proses"/"Selesai" di KDS — tombol tidak berfungsi. Sudah ada tombol per-item + shortcut batch.
+
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **602/602 test lolos** (57 file — Prioritas 20: +10 test; **Prioritas 21: +4 test** — `kitchenTicketPrint` filtering deltaKitchenItems)
-- `npm run build` → **✅ BERHASIL (diverifikasi 18 Agt 2026, setelah seluruh Prioritas 18 tuntas)**: `✓ built in 16.61s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3622.00 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.7 final terverifikasi**.
+- `npx vitest run` → **632/632 test lolos** (61 file)
+- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026)**: `✓ built in 7.33s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.53 KiB)**. Build produksi **v4.8.1 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---

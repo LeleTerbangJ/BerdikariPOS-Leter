@@ -1442,7 +1442,7 @@
 - **Temuan**: Toggle `loyaltySettings.enabled` sudah ada di `Promos.tsx` (baris 267) dan berfungsi — earn & redeem hanya jalan jika enabled.
 - **Tindakan**: Verifikasi manual bahwa:
   - Toggle OFF → tidak ada input redeem di POS, poin tidak di-earn saat checkout
-  - Toggle ON → redeem muncul, poin di-earn
+  - Toggle ON → redeem muncul, poin di-earn
   - Sinkronisasi cloud (`syncLoyaltySettings`) tetap jalan
 - **Tidak perlu perubahan kode** — hanya verifikasi manual.
 
@@ -1451,6 +1451,124 @@
 - **Masalah**: Jika 22.1 dieksekusi, struk perlu menampilkan "Promo Bundle: -Rp 5.000" secara terpisah dari diskon lain.
 - **Solusi**: Tampilkan promo bundle di struk sebagai baris terpisah (sudah didukung oleh format struk saat ini yang menampilkan promo per-baris).
 - **Laporan**: Tambah filter "Promo Bundle" di laporan performa promo (sudah ada field `promoName`/`promoAmount` di transaksi).
+
+---
+
+---
+
+## 🔴 PRIORITAS 23 — TIKET DAPUR & KDS PER-ITEM STATUS (Analisa, v4.8)
+
+> **Sumber audit**: `ANALYSE.md` section M. Audit flow tiket dapur + Kitchen Display System per-item status.
+> **Baseline**: 632/632 test hijau (61 file), tsc 0 error.
+
+### 23.1 (🔴 KRITIS) — Per-item kitchen status di CartItem ✅ SELESAI (v4.8)
+
+- [x] Tambah field `kitchenItemStatus?: 'new' \| 'processing' \| 'done'` di `CartItem` — ✅ `types/index.ts`
+- [x] Tambah helper `hasNewStatusItems()`, `mergeKitchenItemStatus()`, `calculateDeltaKitchenItems()` — ✅ `kitchenTicket.ts`
+- [x] Render badge per-item di KDS (🆕 Baru / 👨‍🍳 Diproses / ✅ Selesai) — ✅ `Kitchen.tsx`
+- [x] Filter KDS: transaksi dengan semua item 'done' tidak masuk kolom Waiting/Processing — ✅ `Kitchen.tsx`
+
+### 23.2 (🔴 KRITIS) — Fix overrideKitchenStatus agar item lama tidak reset ke Waiting ✅ SELESAI (v4.8)
+
+- [x] Pertahankan `kitchenItemStatus` item lama saat commit pending update — ✅ `kitchenTicket.ts` (mergeKitchenItemStatus)
+- [x] Set `overrideKitchenStatus` hanya jika ADA item dengan status 'new' — ✅ `POS.tsx` (handleSavePending)
+- [x] HandleSavePending menggunakan `mergeKitchenItemStatus` untuk merge status item lama + baru — ✅ `POS.tsx`
+
+### 23.3 (🟠 TINGGI) — Badge "TAMBAHAN" di tiket dapur saat update pending ✅ SELESAI (v4.8)
+
+- [x] Tambah field `isAdditionalPrint?: boolean` di `ReceiptData` — ✅ `printer.ts`
+- [x] Header 'TAMBAHAN' di tiket dapur browser print — ✅ `printer.ts` (printKitchenReceiptBrowser)
+- [x] Header 'TAMBAHAN' di tiket dapur Bluetooth ESC/POS — ✅ `printer.ts` (buildKitchenESCPOS)
+- [x] Engine tandai `isAdditionalPrint: true` saat cetak delta items — ✅ `atomicTransactionEngine.ts`
+
+### 23.4 (🟠 TINGGI) — KDS filter per-item (tampilkan transaksi jika ADA item 'new'/'processing') ✅ SELESAI (v4.8)
+
+- [x] Hitung effectiveStatus berdasarkan kitchenItemStatus per-item — ✅ `Kitchen.tsx`
+- [x] Filter Waiting: tampilkan jika ada item 'new' — ✅ `Kitchen.tsx`
+- [x] Filter Processing: tampilkan jika ada item 'processing' (tanpa 'new') — ✅ `Kitchen.tsx`
+- [x] Filter Done: tampilkan jika semua item 'done' — ✅ `Kitchen.tsx`
+
+### 23.5 (🟠 TINGGI) — Tombol Proses/Selesai per-item di KDS ✅ SELESAI (v4.8)
+
+- [x] Tambah fungsi `updateItemKitchenStatus(txId, lineId, status)` di transactionStore — update item + recalculate kitchenStatus — ✅ `transactionStore.ts`
+- [x] Tombol per-item: 'Proses' untuk item 'new', 'Selesai' untuk item 'processing' — ✅ `Kitchen.tsx`
+- [x] Shortcut 'Proses Semua' di kolom Waiting (batch new → processing) — ✅ `Kitchen.tsx`
+- [x] Shortcut 'Selesai Semua' di kolom Processing (batch processing → done) — ✅ `Kitchen.tsx`
+
+### 23.6 (🟡 SEDANG) — Sync kitchenItemStatus ke cloud ✅ SELESAI (v4.8)
+
+- [x] Tambah `kitchenItemStatus` ke `migrationNeeded` — ✅ `cloudSync.ts`
+- [x] `syncTransactionMeta` sync `items` (JSON) ke cloud — ✅ `cloudSync.ts`
+- [x] `updateItemKitchenStatus` panggil `syncTransactionMeta({ items })` — ✅ `transactionStore.ts`
+
+### 23.7 (🟡 SEDANG) — Logging sync kitchenTicketPrintedAt ✅ SELESAI (v4.8)
+
+- [x] `console.log` saat `kitchenTicketPrintedAt` di-stamp — ✅ `atomicTransactionEngine.ts`
+- [x] `console.warn` saat kitchen print GAGAL (tidak di-stamp) — ✅ `atomicTransactionEngine.ts`
+
+---
+
+## 🟠 TEMUAN AUDIT PASCA-RIILS 23 (Bug Baru / Logic Flaw)
+
+### 24.1 (🔴 KRITIS) — syncTransactionMeta tidak sync `items` ke cloud ✅ SELESAI (v4.8)
+
+- [x] Hapus guard `migrationNeeded.kitchenItemStatus` yang tidak perlu — ✅ `cloudSync.ts`
+- [x] Hapus `as any` cast di transactionStore — ✅ `transactionStore.ts`
+
+### 24.2 (🟠 TINGGI) — Tombol "Selesai Semua" bisa menandai item 'new' sebagai done ✅ SELESAI (v4.8)
+
+- [x] Ubah filter dari `!== 'done'` ke `=== 'processing'` — ✅ `Kitchen.tsx`
+
+### 24.3 (🟠 TINGGI) — calculateDeltaKitchenItems reset status item 'processing' ke 'new' ✅ SELESAI (v4.8)
+
+- [x] Delta kitchen items hanya kirim item benar-benar baru (bukan reset status item lama) — ✅ `kitchenTicket.ts`
+
+### 24.4 (🟡 SEDANG) — mergeKitchenItemStatus tidak handle quantity berubah ✅ SELESAI (v4.8)
+
+- [x] Cek quantity berubah, specs berubah, atau addons berubah → status 'new' — ✅ `kitchenTicket.ts`
+
+### 24.5 (🟡 SEDANG) — Filter KDS bisa sembunyikan transaksi dengan mixed status ✅ SELESAI (v4.8)
+
+- [x] Filter orders: tampilkan di kolom JIKA ada item dengan status kolom tersebut — ✅ `Kitchen.tsx`
+- [x] Filter items: tampilkan item sesuai kolom (new→Waiting, processing→Processing, all→Done) — ✅ `Kitchen.tsx`
+
+---
+
+## 🟠 TEMUAN AUDIT PASCA-FIX 24 (Bug Baru / Logic Flaw)
+
+### 25.1 (🟠 TINGGI) — mergeKitchenItemStatus salah handle quantity TURUN ✅ SELESAI (v4.8)
+
+- [x] Ubah `quantityChanged = c.quantity !== p.quantity` ke `quantityIncreased = c.quantity > p.quantity` — ✅ `kitchenTicket.ts`
+
+### 25.2 (🟡 SEDANG) — updateItemKitchenStatus sync tanpa await ✅ SELESAI (v4.8)
+
+- [x] Tambah async wrapper + try/catch + console.warn untuk sync cloud — ✅ `transactionStore.ts`
+
+### 25.3 (🟡 SEDANG) — Transaksi mixed status muncul di 2 kolom sekaligus ✅ SELESAI (v4.8)
+
+- [x] Filter orders: transaksi muncul di kolom DOMINAN saja (Priority: Waiting > Processing > Done) — ✅ `Kitchen.tsx`
+
+### 25.4 (🟡 SEDANG) — Tombol "Proses Semua" tidak handle item 'processing' ✅ SELESAI (v4.8)
+
+- [x] Filter items sudah benar: Waiting = 'new', Processing = 'processing', Done = all — ✅ `Kitchen.tsx`
+- [x] Transaksi hanya muncul di 1 kolom → item 'processing' terlihat di kolom Processing — ✅ `Kitchen.tsx`
+
+### 25.5 (🟡 SEDANG) — calculateDeltaKitchenItems tidak kirim item yang quantity TURUN
+
+- **Temuan**: `calculateDeltaKitchenItems` hanya memproses item baru, specs berubah, atau quantity NAIK. Item yang quantity TURUN (misal 3→2) tidak masuk delta → tiket dapur tidak mencetak item yang dihapus.
+- **Dampak**: Dapur tidak tahu item mana yang sudah tidak perlu diproses (tidak signifikan, tapi bisa membingungkan).
+- **File**: `kitchenTicket.ts` (calculateDeltaKitchenItems)
+- **Catatan**: Ini sebenarnya benar (item dihapus tidak perlu dicetak), tapi bisa ditambahkan notifikasi ke dapur jika diperlukan.
+
+---
+
+## 🔴 TEMUAN AUDIT PASCA-FIX 25 (Bug KRITIS)
+
+### 26.1 (🔴 KRITIS) — Tombol per-order "Proses"/"Selesai" tidak update kitchenItemStatus ✅ SELESAI (v4.8)
+
+- [x] Hapus tombol per-order "Proses"/"Selesai" (sudah ada tombol per-item + shortcut batch) — ✅ `Kitchen.tsx`
+- [x] Hapus fungsi `getNextStatus` yang tidak terpakai — ✅ `Kitchen.tsx`
+- [x] Hapus import `ArrowRight` yang tidak terpakai — ✅ `Kitchen.tsx`
 
 ---
 

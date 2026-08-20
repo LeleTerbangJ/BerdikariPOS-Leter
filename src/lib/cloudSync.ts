@@ -568,7 +568,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false, kitchenItemStatus: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -692,6 +692,11 @@ export async function syncTransactionMeta(id: string, partial: Partial<Transacti
   // v4.7 TO DO 18.8 (A10): waktu tiket dapur tercetak — resume skip tiket di device lain
   if (!migrationNeeded.kitchenTicketPrintedAt) {
     if (partial.kitchenTicketPrintedAt !== undefined) data.kitchen_ticket_printed_at = partial.kitchenTicketPrintedAt;
+  }
+  // v4.8 TO DO 23.6: sync kitchenItemStatus per-item ke cloud (JSON)
+  // v4.8 FIX 24.1: selalu sync items jika ada (tanpa guard migration)
+  if (partial.items !== undefined) {
+    data.items = partial.items;
   }
   if (Object.keys(data).length > 0) {
     await smartUpdate('transactions', data, 'id', id);
