@@ -1488,11 +1488,12 @@
 - [x] Filter Processing: tampilkan jika ada item 'processing' (tanpa 'new') — ✅ `Kitchen.tsx`
 - [x] Filter Done: tampilkan jika semua item 'done' — ✅ `Kitchen.tsx`
 
-### 23.5 (🟠 TINGGI) — Tombol Proses/Selesai per-item di KDS
+### 23.5 (🟠 TINGGI) — Tombol Proses/Selesai per-item di KDS ✅ SELESAI (v4.8)
 
-- **Temuan**: Saat ini tombol "Proses" & "Selesai" hanya ada di level transaksi. Dapur perlu bisa menandai item per-item.
-- **Solusi**: Tambah tombol per-item (ikon kecil) untuk transisi `new → processing → done`. Tombol transaksi level tetap ada sebagai shortcut "Proses Semua" / "Selesai Semua".
-- **File**: `Kitchen.tsx`, `transactionStore.ts` (updateItemKitchenStatus)
+- [x] Tambah fungsi `updateItemKitchenStatus(txId, lineId, status)` di transactionStore — update item + recalculate kitchenStatus — ✅ `transactionStore.ts`
+- [x] Tombol per-item: 'Proses' untuk item 'new', 'Selesai' untuk item 'processing' — ✅ `Kitchen.tsx`
+- [x] Shortcut 'Proses Semua' di kolom Waiting (batch new → processing) — ✅ `Kitchen.tsx`
+- [x] Shortcut 'Selesai Semua' di kolom Processing (batch processing → done) — ✅ `Kitchen.tsx`
 
 ### 23.6 (🟡 SEDANG) — Sync kitchenItemStatus ke cloud
 

@@ -21,7 +21,7 @@ const columns: { status: KitchenStatus; label: string; color: string; icon: any 
 const ALERT_THRESHOLD_MS = 5 * 60 * 1000; // 5 menit
 
 export default function Kitchen() {
-  const { transactions, updateKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
+  const { transactions, updateKitchenStatus, updateItemKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
   const { shifts } = useShiftStore();
   const { currentUser } = useAuthStore();
   const { settings } = useSettingsStore();
@@ -262,6 +262,35 @@ export default function Kitchen() {
                 <Icon size={20} />
                 <h2 className="font-bold text-lg">{label}</h2>
                 <span className="badge bg-white/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 ml-auto">{orders.length}</span>
+                {/* v4.8 TO DO 23.5: shortcut 'Proses Semua' / 'Selesai Semua' */}
+                {status === 'Waiting' && orders.length > 0 && (
+                  <button
+                    onClick={() => {
+                      orders.forEach((o) => {
+                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'new').forEach((i) => {
+                          updateItemKitchenStatus(o.id, i.lineId, 'processing');
+                        });
+                      });
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800 transition font-semibold"
+                  >
+                    <Flame size={10} className="inline mr-0.5" />Proses Semua
+                  </button>
+                )}
+                {status === 'Processing' && orders.length > 0 && (
+                  <button
+                    onClick={() => {
+                      orders.forEach((o) => {
+                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus !== 'done').forEach((i) => {
+                          updateItemKitchenStatus(o.id, i.lineId, 'done');
+                        });
+                      });
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800 transition font-semibold"
+                  >
+                    <CheckCircle2 size={10} className="inline mr-0.5" />Selesai Semua
+                  </button>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -378,6 +407,27 @@ export default function Kitchen() {
                                 <p className="text-xs text-slate-500">
                                   + {item.addons.map((a) => a.name).join(', ')}
                                 </p>
+                              )}
+                              {/* v4.8 TO DO 23.5: tombol per-item untuk transisi status */}
+                              {!isDone && (
+                                <div className="flex gap-1 mt-1">
+                                  {isNew && (
+                                    <button
+                                      onClick={() => updateItemKitchenStatus(order.id, item.lineId, 'processing')}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800 transition"
+                                    >
+                                      <Flame size={10} className="inline mr-0.5" />Proses
+                                    </button>
+                                  )}
+                                  {!isNew && (
+                                    <button
+                                      onClick={() => updateItemKitchenStatus(order.id, item.lineId, 'done')}
+                                      className="text-[10px] px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800 transition"
+                                    >
+                                      <CheckCircle2 size={10} className="inline mr-0.5" />Selesai
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
                           );
