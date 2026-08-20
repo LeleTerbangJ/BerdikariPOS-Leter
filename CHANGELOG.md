@@ -345,9 +345,9 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **602/602 test lolos** (57 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test** — `shiftStats` refund tunai/lintas metode +5, `dateRange` filter tanggal custom lokal +5; **Prioritas 21 (21.1): +4 test** — `kitchenTicketPrint` filtering deltaKitchenItems)
+- `npx vitest run` → **632/632 test lolos** (61 file — Prioritas 18: +128 test dari 460; **Prioritas 20 (20.1–20.4): +10 test**; **Prioritas 21 (21.1): +4 test**; **Prioritas 23 (23.1–23.7): +30 test** — per-item kitchen status, KDS filter, tombol per-item, sync cloud, logging)
 - `npm run build` → **sukses** (tsc + vite build + PWA generateSW)
 
 ---
 
-*Changelog ini disusun untuk rilis v4.7.0. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*
+*Changelog ini disusun untuk rilis v4.8.0. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*

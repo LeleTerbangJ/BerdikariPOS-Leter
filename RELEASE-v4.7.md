@@ -1,6 +1,6 @@
-# 📣 BerdikariPOS v4.7 — Rilis Final
+# 📣 BerdikariPOS v4.8 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, dan **audit flow Pending + Split Bill yang aman**). Validasi: build produksi sukses, **602/602 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, **audit flow Pending + Split Bill yang aman**, dan **per-item kitchen status di KDS**). Validasi: build produksi sukses, **632/632 tes otomatis lolos**.
 
 ---
 
@@ -228,8 +228,8 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **602/602 test lolos** (57 file — Prioritas 20: +10 test; **Prioritas 21: +4 test** — `kitchenTicketPrint` filtering deltaKitchenItems)
-- `npm run build` → **✅ BERHASIL (diverifikasi 18 Agt 2026, setelah seluruh Prioritas 18 tuntas)**: `✓ built in 16.61s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3622.00 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.7 final terverifikasi**.
+- `npx vitest run` → **632/632 test lolos** (61 file — Prioritas 20: +10 test; **Prioritas 21: +4 test**; **Prioritas 23: +30 test** — per-item kitchen status, KDS filter, tombol per-item, sync cloud, logging)
+- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026, setelah seluruh Prioritas 23 tuntas)**: `✓ built in 19.14s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.50 KiB)**, `dist/sw.js` + `dist/workbox-c3716bd4.js` digenerate. Satu-satunya catatan: warning chunk > 500 kB (kosmetik, bukan error) — build produksi **v4.8 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---
