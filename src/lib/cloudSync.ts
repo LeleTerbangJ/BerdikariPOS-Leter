@@ -694,11 +694,9 @@ export async function syncTransactionMeta(id: string, partial: Partial<Transacti
     if (partial.kitchenTicketPrintedAt !== undefined) data.kitchen_ticket_printed_at = partial.kitchenTicketPrintedAt;
   }
   // v4.8 TO DO 23.6: sync kitchenItemStatus per-item ke cloud (JSON)
-  if (!migrationNeeded.kitchenItemStatus) {
-    if (partial.items !== undefined) {
-      // Simpan items dengan kitchenItemStatus ke cloud
-      data.items = partial.items;
-    }
+  // v4.8 FIX 24.1: selalu sync items jika ada (tanpa guard migration)
+  if (partial.items !== undefined) {
+    data.items = partial.items;
   }
   if (Object.keys(data).length > 0) {
     await smartUpdate('transactions', data, 'id', id);

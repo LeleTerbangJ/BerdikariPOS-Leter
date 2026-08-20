@@ -281,7 +281,8 @@ export default function Kitchen() {
                   <button
                     onClick={() => {
                       orders.forEach((o) => {
-                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus !== 'done').forEach((i) => {
+                        // v4.8 FIX 24.2: hanya tandai item 'processing' (bukan 'new') sebagai done
+                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'processing').forEach((i) => {
                           updateItemKitchenStatus(o.id, i.lineId, 'done');
                         });
                       });

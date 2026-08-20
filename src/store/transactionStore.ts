@@ -156,7 +156,7 @@ export const useTransactionStore = create<TransactionState>()(
         // v4.8 TO DO 23.6: sync ke cloud — kitchenStatus + items (dengan kitchenItemStatus)
         if (updatedTx) {
           syncTransactionStatus(txId, updatedTx.kitchenStatus);
-          syncTransactionMeta(txId, { items: updatedTx.items } as any);
+          syncTransactionMeta(txId, { items: updatedTx.items });
         }
       },
 

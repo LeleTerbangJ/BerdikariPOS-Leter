@@ -1510,19 +1510,14 @@
 
 ## 🟠 TEMUAN AUDIT PASCA-RIILS 23 (Bug Baru / Logic Flaw)
 
-### 24.1 (🔴 KRITIS) — syncTransactionMeta tidak sync `items` ke cloud
+### 24.1 (🔴 KRITIS) — syncTransactionMeta tidak sync `items` ke cloud ✅ SELESAI (v4.8)
 
-- **Temuan**: `updateItemKitchenStatus` memanggil `syncTransactionMeta(txId, { items: updatedTx.items } as any)`, tapi `syncTransactionMeta` di `cloudSync.ts` HANYA memproses field tertentu (paymentMethod, refunded, kitchenTicketPrintedAt). Field `items` TIDAK diproses → **kitchenItemStatus tidak tersync ke cloud** → device lain (termasuk KDS di tablet dapur) tidak melihat perubahan status item.
-- **Dampak**: Dapur di device lain tidak tahu item mana yang sudah diproses. Tombol "Selesai" tidak sinkron lintas device.
-- **File**: `cloudSync.ts` (syncTransactionMeta), `transactionStore.ts` (updateItemKitchenStatus)
-- **Fix**: Tambah handler `partial.items` di `syncTransactionMeta` untuk sync items JSON ke cloud, atau gunakan `smartUpdate` langsung untuk field `items`.
+- [x] Hapus guard `migrationNeeded.kitchenItemStatus` yang tidak perlu — ✅ `cloudSync.ts`
+- [x] Hapus `as any` cast di transactionStore — ✅ `transactionStore.ts`
 
-### 24.2 (🟠 TINGGI) — Tombol "Selesai Semua" bisa menandai item 'new' sebagai done
+### 24.2 (🟠 TINGGI) — Tombol "Selesai Semua" bisa menandai item 'new' sebagai done ✅ SELESAI (v4.8)
 
-- **Temuan**: Tombol "Selesai Semua" di kolom Processing memakai filter `kitchenItemStatus !== 'done'`. Artinya item dengan status 'new' (belum diproses) juga akan ditandai 'done' → item tidak pernah diproses tapi dianggap selesai.
-- **Dampak**: Item pesanan tidak pernah dimasak tapi dianggap selesai di KDS.
-- **File**: `Kitchen.tsx` (tombol Selesai Semua)
-- **Fix**: Filter harus `kitchenItemStatus === 'processing'` (bukan `!== 'done'`).
+- [x] Ubah filter dari `!== 'done'` ke `=== 'processing'` — ✅ `Kitchen.tsx`
 
 ### 24.3 (🟠 TINGGI) — calculateDeltaKitchenItems reset status item 'processing' ke 'new'
 
