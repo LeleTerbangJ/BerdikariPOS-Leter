@@ -108,4 +108,37 @@ describe('Pending Payment Print Options', () => {
     expect(cashierCalls.length).toBe(1);
     expect(kitchenCalls.length).toBe(1);
   });
+
+  it('AtomicTransactionEngine saves custom manual customer name without customerId', async () => {
+    const testItem: CartItem = {
+      lineId: 'line-3',
+      menuId: 'm1',
+      name: 'Jamu Kunyit',
+      basePrice: 15000,
+      quantity: 1,
+      temperature: 'Dingin',
+      sugar: 'Normal',
+      addons: [],
+      subtotal: 15000,
+    };
+
+    const result = await AtomicTransactionEngine.executeCheckout({
+      transactionId: 'test-pending-3',
+      cartItems: [testItem],
+      subtotal: 15000,
+      discount: 0,
+      taxAmount: 0,
+      totalAmount: 15000,
+      payMethod: 'Cash',
+      orderType: 'Dine In',
+      settings: seedSettings,
+      overrideTxStatus: 'Pending',
+      selectedCustomerName: 'Budi Santoso (Non-Pelanggan)',
+      selectedCustomerId: undefined,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.transaction?.customerName).toBe('Budi Santoso (Non-Pelanggan)');
+    expect(result.transaction?.customerId).toBeUndefined();
+  });
 });

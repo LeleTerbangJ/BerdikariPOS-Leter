@@ -1384,20 +1384,18 @@ export async function printTextRaw(lines: string[], settings: AppSettings): Prom
 }
 
 export function printHtmlInIframe(htmlContent: string) {
-  let iframe = document.getElementById('thermal-print-iframe') as HTMLIFrameElement;
-  if (!iframe) {
-    iframe = document.createElement('iframe');
-    iframe.id = 'thermal-print-iframe';
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0px';
-    iframe.style.height = '0px';
-    iframe.style.border = '0px';
-    iframe.style.opacity = '0';
-    iframe.style.pointerEvents = 'none';
-    document.body.appendChild(iframe);
-  }
+  const iframeId = `thermal-print-iframe-${Math.random().toString(36).substring(2, 9)}`;
+  const iframe = document.createElement('iframe');
+  iframe.id = iframeId;
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0px';
+  iframe.style.height = '0px';
+  iframe.style.border = '0px';
+  iframe.style.opacity = '0';
+  iframe.style.pointerEvents = 'none';
+  document.body.appendChild(iframe);
 
   const doc = iframe.contentWindow?.document || iframe.contentDocument;
   if (doc) {
@@ -1411,6 +1409,14 @@ export function printHtmlInIframe(htmlContent: string) {
         iframe.contentWindow?.print();
       } catch (e) {
         console.error('Iframe print error:', e);
+      } finally {
+        setTimeout(() => {
+          try {
+            document.body.removeChild(iframe);
+          } catch (e) {
+            // ignore
+          }
+        }, 60000);
       }
     }, 250);
   } else {
