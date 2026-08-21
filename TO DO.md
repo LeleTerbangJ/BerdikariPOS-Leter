@@ -1583,6 +1583,14 @@
 - **File**: `atomicTransactionEngine.ts` (triggerPostCommitTasks), `kitchenTicketPrint.test.ts`
 - **Validasi**: tsc 0 error, 632/632 test pass
 
+### 27.2 (🔴 KRITIS) — Pending order tidak muncul di KDS device lain (cross-device) ✅ SELESAI (v4.8.3)
+
+- [x] Akar masalah: `triggerPostCommitTasks` memanggil `syncTransaction(tx)` **SEBELUM** `kitchenTicketPrintedAt` di-stamp → cloud menerima `kitchen_ticket_printed_at: null` → device lain mem-filter pending order dari KDS
+- [x] Fix: stamp `kitchenTicketPrintedAt` pada `tx` object + local store **SEBELUM** `syncTransaction(tx)`, sehingga initial cloud sync sudah menyertakan field ini
+- [x] Test cross-device: verifikasi `syncTransaction` dipanggil dengan `kitchenTicketPrintedAt` terisi (type string, bukan null/undefined)
+- **File**: `atomicTransactionEngine.ts` (triggerPostCommitTasks), `kitchenTicketPrint.test.ts`
+- **Validasi**: tsc 0 error, 633/633 test pass
+
 ---
 
 *Dokumen dibuat berdasarkan analisa statis kode — belum ada perubahan yang diterapkan.*

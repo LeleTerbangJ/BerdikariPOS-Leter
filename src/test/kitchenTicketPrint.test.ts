@@ -45,6 +45,7 @@ import {
   didKitchenPrintSucceed,
   shouldSkipKitchenPrintAtResume,
 } from '../utils/kitchenTicket';
+import { syncTransaction } from '../lib/cloudSync';
 
 function makeMenu(id: string, name: string, price: number, ingredientInv: string): Menu {
   return {
@@ -219,6 +220,36 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
     expect(saved!.kitchenTicketPrintedAt).toBeDefined();
     // Cetak fisik tidak dipanggil karena printerEnabled=false DAN autoPrintOnCheckout tidak aktif
     expect(printReceiptMock).not.toHaveBeenCalled();
+  });
+
+  it('v4.8.3: syncTransaction menerima kitchenTicketPrintedAt di initial sync (cross-device fix)', async () => {
+    const syncTxMock = vi.mocked(syncTransaction);
+    syncTxMock.mockClear();
+    printReceiptMock.mockResolvedValue([{ printer: 'Dapur 1', status: 'success' }]);
+    const m1 = makeMenu('m1', 'Nasi Goreng', 15000, 'inv1');
+    useMenuStore.setState({ menus: [m1] });
+    useInventoryStore.setState({ items: [makeInv('inv1', 100)] });
+
+    const r = await AtomicTransactionEngine.executeCheckout(
+      baseParams({
+        transactionId: 'pending-xdevice',
+        cartItems: [makeCartItem(m1, 1)],
+        subtotal: 15000,
+        totalAmount: 15000,
+        overrideTxStatus: 'Pending',
+        settings: { tableFeaturesEnabled: true, printerEnabled: true, kitchenPrinters: [{ name: 'Dapur 1', enabled: true }] } as any,
+      })
+    );
+    expect(r.success).toBe(true);
+    await flushPostCommit();
+
+    // syncTransaction harus dipanggil dengan kitchenTicketPrintedAt terisi
+    expect(syncTxMock).toHaveBeenCalled();
+    const txArg = syncTxMock.mock.calls[0]?.[0] as Transaction;
+    expect(txArg).toBeDefined();
+    expect(txArg.kitchenTicketPrintedAt).toBeTruthy();
+    // Pastikan bukan null/undefined — device lain akan menerima nilai ini
+    expect(typeof txArg.kitchenTicketPrintedAt).toBe('string');
   });
 });
 

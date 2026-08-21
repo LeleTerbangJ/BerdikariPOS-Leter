@@ -143,8 +143,8 @@ export const useTransactionStore = create<TransactionState>()(
             );
             // Hitung effective kitchenStatus berdasarkan item status
             const allDone = updatedItems.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-            const hasNew = updatedItems.some((i) => i.kitchenItemStatus === 'new');
-            const hasProcessing = updatedItems.some((i) => i.kitchenItemStatus === 'processing');
+            const hasNew = updatedItems.some((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new');
+            const hasProcessing = updatedItems.some((i) => !i.isBundle && i.kitchenItemStatus === 'processing');
             let newKitchenStatus = t.kitchenStatus;
             if (allDone) newKitchenStatus = 'Done';
             else if (hasNew) newKitchenStatus = 'Waiting';

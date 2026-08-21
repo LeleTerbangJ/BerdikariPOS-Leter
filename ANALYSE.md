@@ -917,5 +917,112 @@ Saat Dapur klik "Selesai" per-item:
 - **K.2** (Status reset ke Waiting saat kurang menu) → sudah diperbaiki di Prioritas 21.2 (`hasNewKitchenItems`), tapi masih mempengaruhi seluruh transaksi level.
 - **L.2** (Tiket ter-overwrite saat cetak simultan) → masalah cetak fisik, terpisah dari masalah display KDS.
 
+---
+
+## 🔴 N. Analisa: Pesanan Pending Kasir Tidak Langsung Masuk ke KDS vs Akun Manager (v4.8.3)
+
+> **Pertanyaan Investigasi**: Mengapa pesanan pending yang diinput dari akun level **Kasir** tidak langsung masuk ke KDS, sedangkan pesanan pending yang diinput dari akun level **Manager** langsung masuk ke KDS?
+
+### N.1 — Ringkasan Penyebab Utama (Root Causes)
+
+| # | Faktor Penyebab | Mekanisme & Dampak |
+|---|-----------------|-------------------|
+| **1** | **Arsitektur State Lokal (Same-Device) vs Sinkronisasi Cloud (Cross-Device)** ⭐ *(Paling Dominan)* | Akun **Manager** memiliki akses ke `/pos` DAN `/kitchen` (KDS). Saat diuji pada 1 perangkat, mutasi terjadi di store lokal (`useTransactionStore`) → KDS membaca memori yang sama secara **instan (0 ms)**. Akun **Kasir** TIDAK memiliki akses ke `/kitchen` → pengujian WAJIB lintas perangkat (Device 1 Kasir → Cloud → Device 2 KDS) yang membutuhkan roundtrip jaringan 2 arah (2–10 detik). |
+| **2** | **Filter Visibilitas KDS & Opsi Cetak (`pendingPrintOption`)** | KDS memiliki guard filter: `if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false`. Jika kasir memilih *"Simpan Tanpa Cetak"* (atau setting di perangkat kasir `none`), `kitchenTicketPrintedAt` sengaja tidak di-stamp sehingga pesanan pending **tidak ditampilkan di KDS by design**. |
+| **3** | **Skema DB Cloud / Status Kolom `kitchen_ticket_printed_at`** | Jika kolom `kitchen_ticket_printed_at` di tabel Supabase belum dimigrasi (Migration 30), nilai timestamp tidak terkirim ke cloud (tersimpan `NULL`). Device 2 (KDS) menerima `kitchenTicketPrintedAt = undefined` dan memfilter transaksi tersebut keluar dari KDS. |
+| **4** | **Throttling Tab Background & Realtime WebSocket Supabase** | Perangkat KDS (Device 2) yang berada dalam tab background/tidak aktif mengalami *timer & websocket throttling* oleh browser hingga tab difokuskan kembali (`visibilitychange`). |
+
+---
+
+### N.2 — Detail Analisis Teknis
+
+#### 1. Perbedaan Lingkungan Uji: Single-Device (Manager) vs Multi-Device (Kasir)
+
+- **Izin Akses Role (`App.tsx` baris 269–270)**:
+  ```tsx
+  <Route path="/pos" element={<ProtectedRoute allowedRoles={['Manager', 'Kasir']}><POS /></ProtectedRoute>} />
+  <Route path="/kitchen" element={<ProtectedRoute allowedRoles={['Manager', 'Acaraki']}><Kitchen /></ProtectedRoute>} />
+  ```
+- **Alur Akun Manager (Single-Device Test)**:
+  1. User login sebagai `Manager`.
+  2. Buka `/pos`, masukkan menu, klik **Simpan Pending**.
+  3. `AtomicTransactionEngine.executeCheckout` memanggil `useTransactionStore.getState().addTransaction(tx)`.
+  4. Transaksi tersimpan ke state memori & IndexedDB lokal.
+  5. User berpindah halaman ke `/kitchen` (atau membuka KDS di jendela browser yang sama).
+  6. Komponen `Kitchen.tsx` membaca `transactions` dari store lokal yang sama → **Muncul seketika tanpa perlu menunggu internet/cloud**.
+
+- **Alur Akun Kasir (Multi-Device Reality)**:
+  1. User login sebagai `Kasir` di **Device 1**.
+  2. Karena role Kasir diblokir dari `/kitchen`, pemantauan KDS harus dilakukan di **Device 2 (Dapur/Manager/Acaraki)**.
+  3. Alur pengiriman data:
+     $$\text{Device 1 (Kasir)} \xrightarrow{\text{HTTP POST}} \text{Supabase} \xrightarrow{\text{WAL Realtime}} \text{Device 2 (KDS Subscription)} \xrightarrow{\text{HTTP GET}} \text{fetchTransactionsFromCloud()} \xrightarrow{} \text{loadFromCloud()}$$
+  4. Seluruh siklus ini membutuhkan waktu beberapa detik (latensi jaringan, antrean request Supabase REST, dan pull data).
+  5. Jika penguji mengharapkan kemunculan instan seperti pada pengujian Manager di 1 perangkat, proses ini terasa "tidak langsung masuk".
+
+---
+
+#### 2. Ketergantungan Filter KDS terhadap `kitchenTicketPrintedAt`
+
+Di `src/pages/Kitchen.tsx` (baris 91–95):
+```tsx
+const activeOrders = transactions.filter((t) => {
+  if (t.txStatus !== 'Selesai' && t.txStatus !== 'Pending') return false;
+  // v4.8: Pesanan pending yang disimpan dengan "Simpan Tanpa Cetak" (kitchenTicketPrintedAt belum terisi)
+  // TIDAK boleh muncul di KDS. KDS hanya menampilkan pesanan pending yang dicetak ke dapur.
+  if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false;
+  // ...
+  return true;
+});
+```
+
+Di `src/pages/POS.tsx` (baris 232–264 & 2524–2595):
+- Jika `settings.pendingPrintOption` bernilai:
+  - `'dapur_only'` atau `'dapur_and_cashier'` → `skipKitchenPrint = false` → `kitchenTicketPrintedAt` di-stamp timestamp ISO saat ini.
+  - `'none'` → `skipKitchenPrint = true` → `kitchenTicketPrintedAt` tetap `undefined` → **KDS memfilter keluar order ini**.
+  - `'ask'` → Membuka modal pilihan cetak:
+    - Jika memilih *"Cetak Struk (Dapur) Saja"* → `skipKitchenPrint = false` → Muncul di KDS.
+    - Jika memilih *"Simpan Tanpa Cetak"* → `skipKitchenPrint = true` → **TIDAK muncul di KDS**.
+
+**Perbedaan Praktik**:
+- Saat akun Manager menguji, biasanya menggunakan pengaturan default (`dapur_only`) atau memilih opsi cetak dapur.
+- Jika kasir mengklik *"Simpan Tanpa Cetak"* saat pop-up muncul, pesanan sengaja disembunyikan dari KDS agar tidak membebani antrean dapur.
+
+---
+
+#### 3. Titik Kritis Cloud Sync: Pre-Sync Stamping vs Cloud Nulling
+
+Di `src/lib/atomicTransactionEngine.ts` (baris 313–327):
+- Pada versi sebelum **v4.8.3**, `kitchenTicketPrintedAt` di-stamp *setelah* `syncTransaction(tx)` selesai. Akibatnya payload sync awal ke cloud membawa nilai `null`. Device 2 (KDS) menerima `null` dan menyembunyikan pesanan gantung tersebut.
+- Di **v4.8.3 (Fix 27.2)**, stamp sudah dipindahkan ke sebelum `syncTransaction`:
+  ```ts
+  if (!params.suppressAutoPrint && !params.skipKitchenPrint) {
+    const printedAt = new Date().toISOString();
+    tx.kitchenTicketPrintedAt = printedAt; // Stamp SEBELUM sync
+    useTransactionStore.getState().updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
+  }
+  await syncTransaction(tx);
+  ```
+- **Kondisi Khusus DB**: Jika Supabase belum memiliki kolom `kitchen_ticket_printed_at` (Migration 30 belum dieksekusi di database server), fungsi `syncTransaction` akan membuang field tersebut (`if (!migrationNeeded.kitchenTicketPrintedAt)`), sehingga database cloud tetap tidak menyimpannya. Saat Device 2 melakukan `loadFromCloud`, data lokal Device 2 akan kehilangan field tersebut dan pesanan pending disembunyikan.
+
+---
+
+### N.3 — Langkah Verifikasi & Panduan Operasional
+
+1. **Pastikan Uji Coba Apple-to-Apple (Lintas Perangkat)**:
+   - Uji akun Manager dan akun Kasir pada skenario yang sama: Device 1 (POS Kasir / POS Manager) $\rightarrow$ amati di Device 2 (KDS).
+   - Tunggu interval sinkronisasi cloud ($\approx 2 - 10$ detik).
+
+2. **Periksa Opsi Cetak Pesanan Pending di Kasir**:
+   - Masuk ke **Settings $\rightarrow$ Pengaturan Cetak $\rightarrow$ Pencetakan Pesanan Gantung**.
+   - Pastikan disetel ke **"🍳 Cetak Tiket Dapur Saja (Tanpa Struk Kasir)"** atau **"❓ Tanyakan Pilihan Cetak saat Simpan Pending"**.
+   - Saat pop-up muncul di POS, pilih **"Cetak Struk (Dapur) Saja"** (bukan "Simpan Tanpa Cetak").
+
+3. **Pastikan Kolom Database Supabase Lengkap**:
+   - Buka **Supabase SQL Editor** dan pastikan kolom berikut sudah ada:
+     ```sql
+     ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;
+     ALTER TABLE settings ADD COLUMN IF NOT EXISTS pending_print_option TEXT DEFAULT 'dapur_only';
+     ```
+
 
 

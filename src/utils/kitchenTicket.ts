@@ -34,26 +34,30 @@ export function shouldSkipKitchenPrintAtResume(
 }
 
 /**
+ * Helper untuk membuat signature spesifikasi unik dari sebuah item (menu + suhu + gula + addons).
+ * Digunakan untuk mencocokkan item keranjang dengan item pending lintas multi-resume.
+ */
+export function getItemSpecKey(item: CartItem): string {
+  const addons = (item.addons || [])
+    .map((a) => `${a.name}:${a.price}`)
+    .sort()
+    .join(',');
+  const bundleTag = item.isBundle ? ':bundle' : item.isBundleChild ? `:bundleChild:${item.parentLineId || ''}` : '';
+  return `${item.menuId}|${item.temperature || 'Hangat'}|${item.sugar || 'None'}|${addons}${bundleTag}`;
+}
+
+/**
  * v4.8: Cek apakah ada item dapur baru, kuantitas bertambah, atau spesifikasi berubah.
- * Pengurangan item atau kuantitas berkurang tidak dianggap "item baru yang perlu dimasak".
+ * Menggunakan signature spesifikasi menu agar akurat pada multi-resume bertahap.
  */
 export function hasNewKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): boolean {
   for (const c of cartItems) {
-    const p = pendingItems.find((item) => item.lineId === c.lineId);
-    if (!p) {
-      return true; // Item baru ditambahkan
-    }
-    if (c.quantity > p.quantity) {
-      return true; // Kuantitas bertambah
-    }
-    if (c.temperature !== p.temperature || c.sugar !== p.sugar) {
-      return true; // Spesifikasi suhu/gula berubah
-    }
-    // Cek perbedaan addons
-    const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-    const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-    if (cAddons !== pAddons) {
-      return true; // Addon berubah
+    const specKey = getItemSpecKey(c);
+    const matchingPending = pendingItems.filter((p) => getItemSpecKey(p) === specKey);
+    const totalPendingQty = matchingPending.reduce((sum, p) => sum + p.quantity, 0);
+
+    if (totalPendingQty === 0 || c.quantity > totalPendingQty) {
+      return true;
     }
   }
   return false;
@@ -63,7 +67,7 @@ export function hasNewKitchenItems(cartItems: CartItem[], pendingItems: CartItem
  * v4.8 TO DO 23.1: Cek apakah ada item dengan status 'new' yang perlu diproses dapur.
  */
 export function hasNewStatusItems(items: CartItem[]): boolean {
-  return items.some((item) => item.kitchenItemStatus === 'new');
+  return items.some((item) => (item.kitchenItemStatus || 'new') === 'new');
 }
 
 /**
@@ -77,68 +81,105 @@ export function setAllItemsKitchenStatus(
 }
 
 /**
- * v4.8 TO DO 23.2: Hitung item dengan status baru + pertahankan status item lama.
- * Item lama yang sudah 'done' tetap 'done', item baru/delta di-set 'new'.
- * v4.8 FIX 24.4: Jika quantity naik atau spesifikasi berubah, status 'new' untuk item yang berubah.
+ * v4.8.4: Hitung item dengan status baru + pertahankan status item lama berbasis Signature Spesifikasi Menu.
+ * Jika kuantitas bertambah (c.quantity > totalPendingQty), semua porsi lama tetap mempertahankan
+ * status aslinya ('done' / 'processing'), dan HANYA selisih porsi tambahan yang diberi status 'new'.
  */
 export function mergeKitchenItemStatus(
   cartItems: CartItem[],
   pendingItems: CartItem[]
 ): CartItem[] {
-  return cartItems.map((c) => {
-    const p = pendingItems.find((item) => item.lineId === c.lineId);
-    if (!p) {
+  const result: CartItem[] = [];
+
+  for (const c of cartItems) {
+    const specKey = getItemSpecKey(c);
+    const matchingPending = pendingItems.filter((p) => getItemSpecKey(p) === specKey);
+    const totalPendingQty = matchingPending.reduce((sum, p) => sum + p.quantity, 0);
+
+    if (totalPendingQty === 0) {
       // Item baru ditambahkan → status 'new'
-      return { ...c, kitchenItemStatus: 'new' as const };
+      result.push({ ...c, kitchenItemStatus: 'new' as const });
+    } else if (c.quantity >= totalPendingQty) {
+      // Pertahankan seluruh item pending yang sudah ada dengan status masing-masing
+      const unitPrice = c.basePrice + (c.addons || []).reduce((a, b) => a + b.price, 0);
+      for (const p of matchingPending) {
+        result.push({
+          ...c,
+          lineId: p.lineId,
+          quantity: p.quantity,
+          subtotal: Math.max(0, unitPrice * p.quantity - (p.itemDiscount || 0)),
+          kitchenItemStatus: p.kitchenItemStatus || 'new',
+        });
+      }
+
+      // Jika kuantitas bertambah di atas total kuantitas lama, buat item delta baru berstatus 'new'
+      if (c.quantity > totalPendingQty) {
+        const addQty = c.quantity - totalPendingQty;
+        result.push({
+          ...c,
+          lineId: `${c.lineId}-add-${Math.random().toString(36).substring(2, 7)}`,
+          quantity: addQty,
+          subtotal: Math.max(0, unitPrice * addQty),
+          kitchenItemStatus: 'new' as const,
+        });
+      }
+    } else {
+      // Kuantitas berkurang (c.quantity < totalPendingQty): alokasikan kuantitas baru ke item lama
+      let remainingQty = c.quantity;
+      const unitPrice = c.basePrice + (c.addons || []).reduce((a, b) => a + b.price, 0);
+
+      // Prioritaskan mempertahankan item yang sudah 'done' atau 'processing'
+      const sortedPending = [...matchingPending].sort((a, b) => {
+        const score = (st?: string) => (st === 'done' ? 3 : st === 'processing' ? 2 : 1);
+        return score(b.kitchenItemStatus) - score(a.kitchenItemStatus);
+      });
+
+      for (const p of sortedPending) {
+        if (remainingQty <= 0) break;
+        const allocatedQty = Math.min(p.quantity, remainingQty);
+        result.push({
+          ...c,
+          lineId: p.lineId,
+          quantity: allocatedQty,
+          subtotal: Math.max(0, unitPrice * allocatedQty - (p.itemDiscount || 0)),
+          kitchenItemStatus: p.kitchenItemStatus || 'new',
+        });
+        remainingQty -= allocatedQty;
+      }
     }
-    // v4.8 FIX 25.1: Cek apakah quantity NAIK atau spesifikasi berubah
-    // Catatan: quantity TURUN tidak dianggap berubah (item yang dikurangi tidak perlu dimasak ulang)
-    const quantityIncreased = c.quantity > p.quantity;
-    const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar;
-    const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-    const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-    const addonsChanged = cAddons !== pAddons;
-    
-    if (quantityIncreased || specsChanged || addonsChanged) {
-      // Qty naik atau spesifikasi berubah → status 'new' (ada item tambahan yang perlu dimasak)
-      return { ...c, kitchenItemStatus: 'new' as const };
-    }
-    // Item sama → pertahankan status lama
-    return { ...c, kitchenItemStatus: p.kitchenItemStatus || 'new' };
-  });
+  }
+
+  return result;
 }
 
 /**
- * v4.8: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur.
- * Item baru, kuantitas bertambah (selisih kuantitas), dan spesifikasi berubah dikirim.
- * v4.8 FIX 24.3: Pertahankan status lama dari pendingItems untuk item yang sudah ada.
+ * v4.8.4: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur berbasis Signature Spesifikasi Menu.
+ * Hanya porsi selisih baru di atas total porsi lama yang dikirim sebagai tiket tambahan.
  */
 export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): CartItem[] {
   const delta: CartItem[] = [];
-  for (const c of cartItems) {
-    const p = pendingItems.find((item) => item.lineId === c.lineId);
-    if (!p) {
-      // Item baru → tambahkan dengan status 'new'
-      delta.push({ ...c, kitchenItemStatus: 'new' });
-    } else {
-      const cAddons = c.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-      const pAddons = p.addons.map((a) => `${a.name}:${a.price}`).sort().join(',');
-      const specsChanged = c.temperature !== p.temperature || c.sugar !== p.sugar || cAddons !== pAddons;
 
-      if (specsChanged) {
-        // Spesifikasi berubah → status 'new' (item perlu dimasak ulang)
-        delta.push({ ...c, kitchenItemStatus: 'new' });
-      } else if (c.quantity > p.quantity) {
-        // Kuantitas bertambah → selisih dengan status 'new'
-        // Pertahankan status asli dari pendingItems untuk item yang sudah ada
-        delta.push({
-          ...c,
-          quantity: c.quantity - p.quantity,
-          kitchenItemStatus: 'new',
-        });
-      }
-      // Item yang sama & tidak berubah → tidak masuk delta (status dipertahankan)
+  for (const c of cartItems) {
+    const specKey = getItemSpecKey(c);
+    const matchingPending = pendingItems.filter((p) => getItemSpecKey(p) === specKey);
+    const totalPendingQty = matchingPending.reduce((sum, p) => sum + p.quantity, 0);
+
+    if (totalPendingQty === 0) {
+      // Item baru → kirim seluruh kuantitas dengan status 'new'
+      delta.push({ ...c, kitchenItemStatus: 'new' });
+    } else if (c.quantity > totalPendingQty) {
+      // Kuantitas bertambah → kirim HANYA selisih porsi tambahan
+      const addQty = c.quantity - totalPendingQty;
+      const unitPrice = c.basePrice + (c.addons || []).reduce((a, b) => a + b.price, 0);
+      delta.push({
+        ...c,
+        lineId: `${c.lineId}-add-${Math.random().toString(36).substring(2, 7)}`,
+        quantity: addQty,
+        subtotal: Math.max(0, unitPrice * addQty),
+        kitchenItemStatus: 'new',
+      });
     }
   }
+
   return delta;
 }
