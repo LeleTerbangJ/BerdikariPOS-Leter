@@ -1,6 +1,6 @@
-# 📣 BerdikariPOS v4.8 — Rilis Final
+# 📣 BerdikariPOS v4.8.3 — Rilis Final
 
-Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, **audit flow Pending + Split Bill yang aman**, dan **per-item kitchen status di KDS**). Validasi: build produksi sukses, **632/632 tes otomatis lolos**.
+Versi ini menuntaskan **semua prioritas pengembangan** (stok, opname, backup, laporan, refund, struk digital, sistem **Promo & Loyalty lengkap**, **mode offline andal**, hingga **integrasi printer thermal yang andal**, **pengalaman kasir yang mulus**, **audit flow Pending + Split Bill yang aman**, **per-item kitchen status di KDS**, dan **fix cross-device pending KDS**). Validasi: build produksi sukses, **633/633 tes otomatis lolos**.
 
 ---
 
@@ -239,10 +239,14 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 - **25.4**: Filter items sesuai kolom: Waiting = 'new', Processing = 'processing', Done = all.
 - **26.1 (KRITIS)**: Hapus tombol per-order "Proses"/"Selesai" di KDS — tombol tidak berfungsi. Sudah ada tombol per-item + shortcut batch.
 
+## 🔧 Perbaikan Bug (v4.8.3 — Fix 27.2 Cross-Device)
+
+- **27.2 (KRITIS)**: Pending order tidak muncul di KDS device lain — `triggerPostCommitTasks` memanggil `syncTransaction(tx)` SEBELUM `kitchenTicketPrintedAt` di-stamp → cloud menerima `null` → device lain mem-filter pending dari KDS. Fix: stamp pada `tx` object + local store SEBELUM sync.
+
 ## 🧪 Validasi Rilis
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **632/632 test lolos** (61 file)
-- `npm run build` → **✅ BERHASIL (diverifikasi 20 Agt 2026)**: `✓ built in 7.33s` tanpa error TypeScript/rollup; **PWA v1.3.0** `generateSW` → **50 precache entries (3643.53 KiB)**. Build produksi **v4.8.1 final terverifikasi**.
+- `npx vitest run` → **633/633 test lolos** (61 file)
+- `npm run build` → **✅ BERHASIL**: PWA v1.3.0, 50 chunks. Build produksi **v4.8.3 final terverifikasi**.
 - **Mode offline**: transaksi & Rekap Kas tetap tercatat tanpa koneksi, tersinkron otomatis saat online, tanpa kehilangan data.
 
 ---

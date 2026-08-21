@@ -354,12 +354,16 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - **25.4**: Filter items sesuai kolom: Waiting = 'new', Processing = 'processing', Done = all.
 - **26.1 (KRITIS)**: Hapus tombol per-order "Proses"/"Selesai" di KDS — tombol tidak berfungsi karena KDS filter pakai `kitchenItemStatus`, bukan `kitchenStatus`. Sudah ada tombol per-item + shortcut batch.
 
+### 🔧 Perbaikan Bug (v4.8.3 — Fix 27.2 Cross-Device)
+
+- **27.2 (KRITIS)**: Pending order tidak muncul di KDS device lain — `triggerPostCommitTasks` memanggil `syncTransaction(tx)` SEBELUM `kitchenTicketPrintedAt` di-stamp → cloud menerima `null` → device lain mem-filter pending dari KDS. Fix: stamp `kitchenTicketPrintedAt` pada `tx` object + local store SEBELUM `syncTransaction(tx)`.
+
 ### 🧪 Validasi Rilis
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **632/632 test lolos** (61 file)
-- `npm run build` → **sukses** (7.33s, 50 chunks, PWA v1.3.0)
+- `npx vitest run` → **633/633 test lolos** (61 file)
+- `npm run build` → **sukses**
 
 ---
 
-*Changelog ini disusun untuk rilis v4.8.1. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*
+*Changelog ini disusun untuk rilis v4.8.3. Rincian teknis & riwayat lengkap: `AI-HANDOFF.md`, `TO DO.md`, `DEPLOYMENT.md`.*
