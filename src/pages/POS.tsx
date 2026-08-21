@@ -19,7 +19,7 @@ import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
 // v4.7 TO DO 18.8 (A10): keputusan skip tiket dapur saat resume berbasis fakta (kitchenTicketPrintedAt)
-import { shouldSkipKitchenPrintAtResume, hasNewKitchenItems, calculateDeltaKitchenItems, mergeKitchenItemStatus, hasNewStatusItems } from '../utils/kitchenTicket';
+import { shouldSkipKitchenPrintAtResume, hasNewKitchenItems, calculateDeltaKitchenItems, mergeKitchenItemStatus, hasNewStatusItems, getMaxBatch, formatBatchLabel } from '../utils/kitchenTicket';
 import { createBundleChildCartItems, buildBundleComponentsSnapshot } from '../lib/bundleService';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
 // v4.7 TO DO 11.2 (P0.4): struk digital — auto-kirim WA pasca-checkout (Settings)
@@ -284,28 +284,28 @@ export default function POS() {
       addToast('Sesi Split Bill yang belum selesai dibatalkan — sisa stok reserve dikembalikan.', 'info');
     }
 
-    // v4.8 FIX (Bug 2): Ambil versi TERBARU pending dari transactionStore agar kitchenItemStatus
-    // yang sudah di-update KDS (done/processing) tidak tertimpa versi stale dari state lokal POS.
-    // currentPendingTx bisa stale jika KDS memperbarui status setelah POS me-load pending.
-    const freshPendingTx = currentPendingTx
-      ? (useTransactionStore.getState().transactions.find((t) => t.id === currentPendingTx.id) ?? currentPendingTx)
+    // 🏷️ v4.9 ORDER BATCH & DUAL LOOKUP: Ambil versi TERBARU pending dari store
+    // (fallback ke resumeContext?.id jika state React currentPendingTx sempat null saat remount)
+    const pendingId = currentPendingTx?.id || useCartStore.getState().resumeContext?.id;
+    const freshPendingTx = pendingId
+      ? (useTransactionStore.getState().transactions.find((t) => t.id === pendingId && isPendingTransaction(t)) ?? currentPendingTx)
       : null;
 
-    // v4.8 TO DO 23.1 & 23.2: merge kitchenItemStatus — pertahankan status item lama, set 'new' untuk item baru
-    const cartItemsWithKitchenStatus = freshPendingTx
+    // 🏷️ v4.9: Merge kitchenItemStatus & pastikan setiap item memiliki batch yang benar
+    const cartItemsWithBatchStatus = freshPendingTx
       ? mergeKitchenItemStatus(cart.items, freshPendingTx.items)
-      : cart.items.map((item) => ({ ...item, kitchenItemStatus: 'new' as const }));
+      : cart.items.map((item) => ({ ...item, batch: item.batch || 1, kitchenItemStatus: 'new' as const }));
 
-    // v4.8.4: hitung deltaKitchenItems saat Simpan Pending jika ada pending sebelumnya
-    // agar printer dapur hanya mencetak menu baru / tambahan porsi (bukan semua item)
-    const deltaKitchenItems = freshPendingTx
-      ? calculateDeltaKitchenItems(cart.items, freshPendingTx.items)
+    // 🏷️ v4.9 ORDER BATCH: Hitung deltaKitchenItems berbasis kloter aktif (Batch N)
+    const maxBatch = getMaxBatch(cartItemsWithBatchStatus);
+    const deltaKitchenItems = freshPendingTx && maxBatch > 1
+      ? cartItemsWithBatchStatus.filter((i) => (i.batch || 1) === maxBatch)
       : undefined;
 
     const result = await AtomicTransactionEngine.executeCheckout({
-      transactionId: currentPendingTx ? currentPendingTx.id : checkoutTxId,
-      overrideQueueNumber: currentPendingTx ? currentPendingTx.queueNumber : undefined,
-      cartItems: cartItemsWithKitchenStatus,
+      transactionId: freshPendingTx ? freshPendingTx.id : checkoutTxId,
+      overrideQueueNumber: freshPendingTx ? freshPendingTx.queueNumber : undefined,
+      cartItems: cartItemsWithBatchStatus,
       subtotal,
       discount: totalDiscount,
       taxAmount,
@@ -327,16 +327,16 @@ export default function POS() {
       // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo (laporan performa promo)
       promoName: appliedPromo?.name,
       promoAmount: appliedPromoId ? discountCalc.promoApplied : undefined,
-      bypassIdempotency: !!currentPendingTx,
+      bypassIdempotency: !!freshPendingTx,
       // v4.8 TO DO 23.2: kitchenStatus hanya 'Waiting' jika ADA item dengan status 'new'
       overrideKitchenStatus:
         skipKitchenPrint
           ? (freshPendingTx ? freshPendingTx.kitchenStatus : 'Waiting')
-          : (freshPendingTx && !hasNewStatusItems(cartItemsWithKitchenStatus)
+          : (freshPendingTx && !hasNewStatusItems(cartItemsWithBatchStatus)
               ? freshPendingTx.kitchenStatus
               : 'Waiting'),
-      reservedDeductions: currentPendingTx
-        ? calculateItemDeductions(currentPendingTx.items, menus)
+      reservedDeductions: freshPendingTx
+        ? calculateItemDeductions(freshPendingTx.items, menus)
         : undefined,
       deltaKitchenItems,
     });
@@ -373,7 +373,21 @@ export default function POS() {
   };
   const applyResumePendingOrder = (tx: Transaction) => {
     cart.clearCart();
-    tx.items.forEach((item) => cart.addItem(item));
+    // 🏷️ v4.9 ORDER BATCH: Hitung max batch dari transaksi yang di-resume
+    const maxExistingBatch = Math.max(...(tx.items || []).map((i) => i.batch || 1), 1);
+
+    // Masukkan item-item lama ke keranjang dengan batch & status dapur aslinya
+    tx.items.forEach((item) => {
+      cart.addItem({
+        ...item,
+        batch: item.batch || 1,
+        kitchenItemStatus: item.kitchenItemStatus || 'done',
+      });
+    });
+
+    // Set activeBatch di cartStore ke kloter berikutnya untuk item tambahan baru
+    useCartStore.getState().setActiveBatch(maxExistingBatch + 1);
+
     setOrderType(tx.orderType || 'Dine In'); // Restore tipe pesanan (Take Away tidak boleh jadi Dine In)
     setTableNumber(tx.tableName || tx.tableNumber || '');
     if (tx.customerId) {
@@ -403,7 +417,7 @@ export default function POS() {
       queueNumber: tx.queueNumber,
       kitchenStatus: tx.kitchenStatus,
     });
-    addToast(`Pesanan gantung #${tx.queueNumber} dimuat ke keranjang.`, 'info');
+    addToast(`Pesanan gantung #${tx.queueNumber} dimuat ke keranjang (Kloter #${maxExistingBatch + 1} siap untuk menu tambahan).`, 'info');
   };
 
   // v4.7 TO DO 17.3: restore identitas pending setelah remount (mount ulang POS).
@@ -421,6 +435,8 @@ export default function POS() {
     // tidak salah dipakai ulang oleh order baru.
     if (stale) cartStore.setResumeContext(null);
     if (!tx) return;
+    const maxExistingBatch = Math.max(...(tx.items || []).map((i) => i.batch || 1), 1);
+    cartStore.setActiveBatch(maxExistingBatch + 1);
     setCurrentPendingTx(tx);
     setCheckoutTxId(tx.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -908,22 +924,18 @@ export default function POS() {
       preOpenedWaWindow = window.open('about:blank', '_blank', 'width=480,height=640');
     }
 
-    // v4.8 FIX (Bug 3): Ambil versi TERBARU pending dari store agar kitchenItemStatus yang
-    // sudah di-update KDS (done/processing) terbawa ke transaksi final. Tanpa ini, cart.items
-    // yang dikirim ke engine tidak memiliki kitchenItemStatus → KDS fallback ke mode legacy
-    // dan menampilkan transaksi lunas kembali di kolom Antrean Menunggu.
-    const freshPendingForFinalize = currentPendingTx
-      ? (useTransactionStore.getState().transactions.find((t) => t.id === currentPendingTx.id) ?? currentPendingTx)
+    // 🏷️ v4.9 ORDER BATCH & DUAL LOOKUP: Ambil versi TERBARU pending dari store
+    const pendingFinalizeId = currentPendingTx?.id || useCartStore.getState().resumeContext?.id;
+    const freshPendingForFinalize = pendingFinalizeId
+      ? (useTransactionStore.getState().transactions.find((t) => t.id === pendingFinalizeId) ?? currentPendingTx)
       : null;
 
     // Merge kitchenItemStatus ke cart items sebelum dikirim ke engine
     const cartItemsForFinalize = freshPendingForFinalize
       ? mergeKitchenItemStatus(cart.items, freshPendingForFinalize.items)
-      : cart.items;
+      : cart.items.map((item) => ({ ...item, batch: item.batch || 1, kitchenItemStatus: 'new' as const }));
 
-    // v4.8 FIX (Bug 3): Hitung kitchenStatus final yang akurat berdasarkan status item aktual.
-    // Tidak lagi memaksa 'Waiting' — jika semua item sudah done, set 'Done' agar KDS tidak
-    // menampilkan transaksi yang sudah lunas kembali ke Antrean Menunggu.
+    // 🏷️ v4.9: Hitung kitchenStatus final yang akurat berdasarkan status seluruh item dari semua batch
     const computeFinalKitchenStatus = (items: typeof cartItemsForFinalize): KitchenStatus => {
       const nonBundle = items.filter((i) => !i.isBundle);
       if (nonBundle.length > 0 && nonBundle.every((i) => i.kitchenItemStatus === 'done')) return 'Done';
@@ -931,26 +943,24 @@ export default function POS() {
       return 'Waiting';
     };
 
-    // v4.7 TO DO 21.1 & v4.8: hitung deltaKitchenItems (hanya item baru/tambahan porsi/spesifikasi baru)
-    // agar tiket dapur HANYA mencetak item baru/tambahan (bukan semua item → anti tiket dobel).
-    const deltaKitchenItems = freshPendingForFinalize
-      ? calculateDeltaKitchenItems(cart.items, freshPendingForFinalize.items)
+    // 🏷️ v4.9: Tiket dapur hanya mencetak item batch baru jika ada item baru yang ditambahkan saat finalize
+    const maxFinalBatch = getMaxBatch(cartItemsForFinalize);
+    const deltaKitchenItems = freshPendingForFinalize && maxFinalBatch > 1
+      ? cartItemsForFinalize.filter((i) => (i.batch || 1) === maxFinalBatch)
       : undefined;
-    const pendingFinalizeParams: Partial<AtomicCheckoutParams> = currentPendingTx
+
+    const pendingFinalizeParams: Partial<AtomicCheckoutParams> = freshPendingForFinalize
       ? {
-          overrideQueueNumber: currentPendingTx.queueNumber,
+          overrideQueueNumber: freshPendingForFinalize.queueNumber,
           overrideTxStatus: 'Selesai',
-          // v4.8 FIX (Bug 3): kitchenStatus dihitung dari status item aktual (freshPendingForFinalize)
-          // sehingga transaksi lunas tidak muncul kembali di KDS Antrean Menunggu.
-          overrideKitchenStatus: freshPendingForFinalize
-            ? computeFinalKitchenStatus(cartItemsForFinalize)
-            : 'Waiting',
+          // 🏷️ v4.9: kitchenStatus dihitung dari status item aktual di semua batch
+          overrideKitchenStatus: computeFinalKitchenStatus(cartItemsForFinalize),
           bypassIdempotency: true,
           // v4.7 TO DO 21.3: jika SplitBillModal sudah merekonsiliasi stok pending (pendingSplitReconciled),
           // skip reservedDeductions — stok sudah disesuaikan, jangan double-adjust.
           reservedDeductions: pendingSplitReconciled
             ? undefined
-            : calculateItemDeductions(currentPendingTx.items, menus),
+            : calculateItemDeductions(freshPendingForFinalize.items, menus),
           deltaKitchenItems,
         }
       : {};

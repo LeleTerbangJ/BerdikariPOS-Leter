@@ -16,6 +16,8 @@ interface CartState {
   items: CartItem[];
   discount: number;
   resumeContext: ResumeContext | null;
+  activeBatch: number; // 🏷️ v4.9: Kloter aktif (1 = Awal, 2+ = Tambahan)
+  setActiveBatch: (batch: number) => void;
   addItem: (item: CartItem) => void;
   addBundleItem: (parentItem: CartItem, childItems: CartItem[]) => void;
   removeItem: (lineId: string) => void;
@@ -35,22 +37,36 @@ export const useCartStore = create<CartState>()(
       items: [],
       discount: 0,
       resumeContext: null,
+      activeBatch: 1,
+
+      setActiveBatch: (batch: number) => set({ activeBatch: Math.max(1, batch) }),
 
       addItem: (item) => set((s) => {
+        const itemBatch = item.batch || s.activeBatch || 1;
+        const normalizedItem: CartItem = {
+          ...item,
+          batch: itemBatch,
+          batchCreatedAt: item.batchCreatedAt || new Date().toISOString(),
+          kitchenItemStatus: item.kitchenItemStatus || 'new',
+        };
+
+        // 🏷️ v4.9: Match HANYA dalam batch yang sama agar item Batch 1 (sudah selesai) tidak
+        // tergabung dengan item Batch 2 (tambahan baru)
         const existingIdx = s.items.findIndex((i) => {
-          if (i.menuId !== item.menuId) return false;
-          if (i.temperature !== item.temperature) return false;
-          if (i.sugar !== item.sugar) return false;
-          if (i.addons.length !== item.addons.length) return false;
+          if ((i.batch || 1) !== itemBatch) return false;
+          if (i.menuId !== normalizedItem.menuId) return false;
+          if (i.temperature !== normalizedItem.temperature) return false;
+          if (i.sugar !== normalizedItem.sugar) return false;
+          if (i.addons.length !== normalizedItem.addons.length) return false;
           const names1 = i.addons.map((a) => a.name).sort();
-          const names2 = item.addons.map((a) => a.name).sort();
+          const names2 = normalizedItem.addons.map((a) => a.name).sort();
           return names1.every((val, idx) => val === names2[idx]);
         });
 
         if (existingIdx !== -1) {
           const updated = [...s.items];
           const existing = updated[existingIdx];
-          const newQty = existing.quantity + item.quantity;
+          const newQty = existing.quantity + normalizedItem.quantity;
           const unitPrice = existing.basePrice + existing.addons.reduce((a, b) => a + b.price, 0);
           const disc = existing.itemDiscount || 0;
           updated[existingIdx] = {
@@ -61,7 +77,7 @@ export const useCartStore = create<CartState>()(
           return { items: updated };
         }
 
-        return { items: [...s.items, item] };
+        return { items: [...s.items, normalizedItem] };
       }),
 
       addBundleItem: (parentItem, childItems) => set((s) => ({
@@ -120,7 +136,7 @@ export const useCartStore = create<CartState>()(
       // v4.7 TO DO 17.3: setter konteks resume pending (dipanggil handleResumePendingOrder POS)
       setResumeContext: (ctx) => set({ resumeContext: ctx }),
 
-      clearCart: () => set({ items: [], discount: 0, resumeContext: null }),
+      clearCart: () => set({ items: [], discount: 0, resumeContext: null, activeBatch: 1 }),
 
       getSubtotal: () => get().items.reduce((a, b) => a + b.subtotal, 0),
 

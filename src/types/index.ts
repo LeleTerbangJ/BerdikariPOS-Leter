@@ -130,6 +130,10 @@ export interface CartItem {
   // v4.8 TO DO 23.1: Status dapur per item (bukan per transaksi)
   kitchenItemStatus?: 'new' | 'processing' | 'done'; // status item di KDS
 
+  // 🏷️ v4.9: ORDER BATCH (Kloter Pesanan)
+  batch?: number;            // 1 = Pesanan Awal, 2 = Tambahan 1, 3 = Tambahan 2, dst.
+  batchCreatedAt?: string;   // ISO timestamp saat kloter pesanan dibuat/dikirim ke dapur
+
   // BUNDLE SUPPORT
   isBundle?: boolean;       // true = Parent Bundle Menu
   isBundleChild?: boolean;  // true = Child item generated from Bundle
@@ -204,6 +208,9 @@ export interface Transaction {
   // keputusan skip memakai asumsi "selalu sudah tercetak saat Simpan Pending" — salah
   // bila printer gagal saat itu (tiket hilang diam-diam).
   kitchenTicketPrintedAt?: string; // ISO timestamp saat tiket dapur sukses dicetak
+
+  // 🏷️ v4.9: Order Batch
+  currentBatch?: number;         // Kloter aktif tertinggi (1 = Pesanan Awal, 2+ = Tambahan)
 
   // v4.7 TO DO 11.2 (P0.2): refund/retur penuh — transaksi Selesai yang dikembalikan.
   // Stok & kunjungan pelanggan sudah di-revert saat refund; Kas Keluar 'Refund' dicatat

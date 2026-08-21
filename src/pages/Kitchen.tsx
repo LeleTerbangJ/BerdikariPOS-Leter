@@ -385,10 +385,16 @@ export default function Kitchen() {
                                     : 'border-blue-400 dark:border-blue-600 bg-blue-50/50 dark:bg-blue-950/20'
                               }`}
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className={`font-bold text-base dark:text-slate-100 ${isDone ? 'line-through text-slate-500 dark:text-slate-400' : ''}`}>
                                   {item.name}
                                 </p>
+                                {/* 🏷️ v4.9: Badge Order Batch (Kloter) */}
+                                {(item.batch || 1) > 1 && (
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                    Kloter #{item.batch}
+                                  </span>
+                                )}
                                 {/* v4.8: badge status per-item */}
                                 {isDone && (
                                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 dark:bg-green-900/60 text-green-700 dark:text-green-400">
@@ -397,7 +403,7 @@ export default function Kitchen() {
                                 )}
                                 {isNew && status === 'Waiting' && (
                                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-400">
-                                    <Plus size={10} /> {hasPreviousItems ? 'Tambahan' : 'Baru'}
+                                    <Plus size={10} /> {(item.batch || 1) > 1 || hasPreviousItems ? 'Tambahan' : 'Baru'}
                                   </span>
                                 )}
                                 {!isDone && !isNew && (
