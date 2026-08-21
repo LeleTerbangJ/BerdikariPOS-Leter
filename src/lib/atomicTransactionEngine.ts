@@ -310,7 +310,22 @@ export class AtomicTransactionEngine {
   private static async triggerPostCommitTasks(tx: Transaction, params: AtomicCheckoutParams) {
     this.registerState(tx.id, 'SYNC_PENDING', tx);
 
-    // Asynchronous Cloud Sync
+    // v4.8.3 FIX: Stamp kitchenTicketPrintedAt SEBELUM syncTransaction(tx) agar
+    // initial cloud sync sudah menyertakan field ini. Sebelumnya stamp dilakukan
+    // SETELAH syncTransaction → cloud menerima null → device lain memfilter keluar
+    // pending order dari KDS (filter: `if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false`).
+    if (!params.suppressAutoPrint && !params.skipKitchenPrint) {
+      const printedAt = new Date().toISOString();
+      // Stamp di object tx agar syncTransaction(tx) mengikutsertakan ke cloud
+      tx.kitchenTicketPrintedAt = printedAt;
+      // Stamp di local store agar konsisten
+      useTransactionStore
+        .getState()
+        .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
+      console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt} (intent-based, pre-sync)`);
+    }
+
+    // Asynchronous Cloud Sync — tx sudah menyertakan kitchenTicketPrintedAt jika di-stamp di atas
     try {
       await syncTransaction(tx);
       this.registerState(tx.id, 'SYNCED', tx);
@@ -324,20 +339,9 @@ export class AtomicTransactionEngine {
     // v4.7 TO DO 15.3: dua toggle independen — skipReceiptPrint (struk kasir dilewati, tiket dapur
     // tetap bisa keluar) & skipKitchenPrint (tiket dapur dilewati — anti tiket DOBEL saat resume
     // pending yang tiket dapurnya sudah tercetak saat Simpan Pending). Keduanya false → normal.
-    // v4.8.2 FIX BUG: kitchenTicketPrintedAt di-stamp berdasarkan NIAT user (skipKitchenPrint=false),
-    // bukan berdasarkan keberhasilan print fisik. Jika tidak di-stamp, pending order TIDAK muncul
-    // di KDS (filter Kitchen.tsx: `if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false`).
-    // PrinterEnabled/autoPrintOnCheckout hanya mengontrol CETAK FISIK, bukan visibilitas di KDS.
+    // v4.8.2: kitchenTicketPrintedAt di-stamp berdasarkan NIAT user (skipKitchenPrint=false).
+    // v4.8.3: stamp sudah dilakukan di awal triggerPostCommitTasks (sebelum syncTransaction).
     if (!params.suppressAutoPrint) {
-      // Stamp kitchenTicketPrintedAt segera jika user menginginkan tiket dapur (skipKitchenPrint=false).
-      // Ini memastikan pending order muncul di KDS meskipun printer tidak aktif/gagal.
-      if (!params.skipKitchenPrint) {
-        const printedAt = new Date().toISOString();
-        useTransactionStore
-          .getState()
-          .updateTxMeta(tx.id, { kitchenTicketPrintedAt: printedAt });
-        console.log(`[AtomicEngine] kitchenTicketPrintedAt stamped for Tx #${tx.id} at ${printedAt} (intent-based)`);
-      }
       try {
         if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
           const receiptData = buildReceiptFromTransaction(tx, params.settings);
