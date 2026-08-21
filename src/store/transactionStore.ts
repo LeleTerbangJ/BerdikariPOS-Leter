@@ -14,7 +14,7 @@ export const isPendingTransaction = (t: Transaction): boolean =>
 // sudah displit dikelola sesi split (anak-anak 'Selesai' & stoknya terpakai sah) → jangan revert.
 export const hasPendingSplitChildren = (allTxs: Transaction[], parentId: string): boolean =>
   allTxs.some((t) => t.splitParentId === parentId);
-import { syncTransaction, syncTransactionStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud, fetchMaxQueueNumberCloud, allocateQueueNumberCloud } from '../lib/cloudSync';
+import { syncTransaction, syncTransactionStatus, syncTransactionKitchenStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud, fetchMaxQueueNumberCloud, allocateQueueNumberCloud } from '../lib/cloudSync';
 import { localMaxQueueNumber, toLocalDateKey } from '../utils/queueNumber';
 import { calculateItemDeductions } from '../utils/hpp';
 import { useMenuStore } from './menuStore';
@@ -153,18 +153,9 @@ export const useTransactionStore = create<TransactionState>()(
             return updatedTx;
           }),
         }));
-        // v4.8 TO DO 23.6: sync ke cloud — kitchenStatus + items (dengan kitchenItemStatus)
-        // v4.8 FIX 25.2: tambah await + try/catch agar sync error tidak hilang diam-diam
+        // 🏷️ v4.9: Sync status dapur & items secara atomik dalam 1 kali update
         if (updatedTx) {
-          const syncKitchen = async () => {
-            try {
-              await syncTransactionStatus(txId, updatedTx!.kitchenStatus);
-              await syncTransactionMeta(txId, { items: updatedTx!.items });
-            } catch (err) {
-              console.warn('[TransactionStore] Failed to sync kitchenItemStatus to cloud:', err);
-            }
-          };
-          syncKitchen(); // Fire-and-forget (tidak block UI)
+          void syncTransactionKitchenStatus(txId, updatedTx.kitchenStatus, updatedTx.items);
         }
       },
 

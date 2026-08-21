@@ -376,12 +376,12 @@ export default function POS() {
     // 🏷️ v4.9 ORDER BATCH: Hitung max batch dari transaksi yang di-resume
     const maxExistingBatch = Math.max(...(tx.items || []).map((i) => i.batch || 1), 1);
 
-    // Masukkan item-item lama ke keranjang dengan batch & status dapur aslinya
+    // Masukkan item-item lama ke keranjang dengan batch & status dapur aslinya (item lama dari kloter sebelumnya berstatus 'done')
     tx.items.forEach((item) => {
       cart.addItem({
         ...item,
         batch: item.batch || 1,
-        kitchenItemStatus: tx.kitchenStatus === 'Done' ? 'done' : (item.kitchenItemStatus || 'done'),
+        kitchenItemStatus: item.kitchenItemStatus === 'processing' ? 'processing' : 'done',
       });
     });
 

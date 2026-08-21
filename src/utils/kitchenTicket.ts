@@ -91,6 +91,7 @@ export function mergeKitchenItemStatus(
   pendingKitchenStatus?: KitchenStatus
 ): CartItem[] {
   const result: CartItem[] = [];
+  const maxPendingBatch = getMaxBatch(pendingItems);
 
   for (const c of cartItems) {
     const specKey = getItemSpecKey(c);
@@ -98,34 +99,36 @@ export function mergeKitchenItemStatus(
     const totalPendingQty = matchingPending.reduce((sum, p) => sum + p.quantity, 0);
 
     if (totalPendingQty === 0) {
-      // Item baru ditambahkan (tidak ada di pending sebelumnya) → status 'new'
+      // Item baru ditambahkan (tidak ada di pending sebelumnya) → selalu kloter baru & status 'new'
       result.push({
         ...c,
-        batch: c.batch || 1,
-        kitchenItemStatus: c.kitchenItemStatus || 'new',
+        batch: c.batch && c.batch > 1 ? c.batch : maxPendingBatch + 1,
+        kitchenItemStatus: 'new' as const,
       });
     } else if (c.quantity >= totalPendingQty) {
       // Pertahankan seluruh item pending yang sudah ada dengan status & batch masing-masing
       const unitPrice = c.basePrice + (c.addons || []).reduce((a, b) => a + b.price, 0);
       for (const p of matchingPending) {
-        const itemStatus = pendingKitchenStatus === 'Done'
-          ? 'done'
-          : (p.kitchenItemStatus || c.kitchenItemStatus || 'done');
+        // Item dari pending sebelumnya selalu 'done' (kecuali secara eksplisit sedang 'processing')
+        const itemStatus = p.kitchenItemStatus === 'processing'
+          ? 'processing'
+          : (pendingKitchenStatus === 'Done' || p.kitchenItemStatus === 'done' || (p.batch || 1) <= maxPendingBatch)
+            ? 'done'
+            : (p.kitchenItemStatus || 'done');
 
         result.push({
           ...c,
           lineId: p.lineId,
-          batch: p.batch || c.batch || 1,
+          batch: p.batch || 1,
           quantity: p.quantity,
           subtotal: Math.max(0, unitPrice * p.quantity - (p.itemDiscount || 0)),
           kitchenItemStatus: itemStatus,
         });
       }
 
-      // Jika kuantitas bertambah di atas total kuantitas lama, buat item delta baru berstatus 'new'
+      // Jika kuantitas bertambah di atas total kuantitas lama, buat item delta baru berstatus 'new' di kloter baru
       if (c.quantity > totalPendingQty) {
         const addQty = c.quantity - totalPendingQty;
-        const maxPendingBatch = Math.max(...matchingPending.map((p) => p.batch || 1), 1);
         result.push({
           ...c,
           lineId: `${c.lineId}-add-${Math.random().toString(36).substring(2, 7)}`,
@@ -149,14 +152,16 @@ export function mergeKitchenItemStatus(
       for (const p of sortedPending) {
         if (remainingQty <= 0) break;
         const allocatedQty = Math.min(p.quantity, remainingQty);
-        const itemStatus = pendingKitchenStatus === 'Done'
-          ? 'done'
-          : (p.kitchenItemStatus || c.kitchenItemStatus || 'done');
+        const itemStatus = p.kitchenItemStatus === 'processing'
+          ? 'processing'
+          : (pendingKitchenStatus === 'Done' || p.kitchenItemStatus === 'done' || (p.batch || 1) <= maxPendingBatch)
+            ? 'done'
+            : (p.kitchenItemStatus || 'done');
 
         result.push({
           ...c,
           lineId: p.lineId,
-          batch: p.batch || c.batch || 1,
+          batch: p.batch || 1,
           quantity: allocatedQty,
           subtotal: Math.max(0, unitPrice * allocatedQty - (p.itemDiscount || 0)),
           kitchenItemStatus: itemStatus,

@@ -109,9 +109,9 @@ export default function Kitchen() {
 
   const waitingOrders = activeOrders.filter((t) => t.kitchenStatus === 'Waiting');
 
-  // v4.7 TO DO 21.5: deteksi pesanan yang di-update (Done → Waiting setelah tambah item)
-  // updatedAt > date + 5 detik = order pernah selesai lalu di-reset ke Waiting
-  const isUpdatedOrder = (t: { date: string; updatedAt?: string }): boolean => {
+  // v4.7 TO DO 21.5 & v4.9: deteksi pesanan yang di-update (kloter tambahan atau Done → Waiting)
+  const isUpdatedOrder = (t: { date: string; updatedAt?: string; currentBatch?: number }): boolean => {
+    if ((t.currentBatch || 1) > 1) return true;
     if (!t.updatedAt) return false;
     return new Date(t.updatedAt).getTime() - new Date(t.date).getTime() > 5000;
   };

@@ -321,5 +321,105 @@ describe('KDS Multi-Column Item Distribution & Delta Splitting (v4.8.4)', () => 
     expect(merged.every((i) => i.kitchenItemStatus === 'done')).toBe(true);
     expect(merged.some((i) => i.kitchenItemStatus === 'new')).toBe(false);
   });
+
+  it('Order Batch Kloter 1 (sudah selesai di KDS) + Kloter 2 (menu baru): Kloter 1 tetap done, Kloter 2 new di Antrean Menunggu', () => {
+    const pendingItemsBatch1: CartItem[] = [
+      {
+        lineId: 'line-lele',
+        menuId: 'm-lele',
+        name: 'PH Lele Terbang',
+        basePrice: 20000,
+        quantity: 1,
+        temperature: 'Hangat',
+        sugar: 'None',
+        addons: [],
+        subtotal: 20000,
+        batch: 1,
+        kitchenItemStatus: 'done',
+      },
+      {
+        lineId: 'line-ayam',
+        menuId: 'm-ayam',
+        name: 'PH Ayam Goreng',
+        basePrice: 22000,
+        quantity: 1,
+        temperature: 'Hangat',
+        sugar: 'None',
+        addons: [],
+        subtotal: 22000,
+        batch: 1,
+        kitchenItemStatus: 'done',
+      },
+    ];
+
+    // Kasir resume dan tambah PK Ayam Goreng (Kloter 2)
+    const cartItemsBatch2: CartItem[] = [
+      {
+        lineId: 'line-lele',
+        menuId: 'm-lele',
+        name: 'PH Lele Terbang',
+        basePrice: 20000,
+        quantity: 1,
+        temperature: 'Hangat',
+        sugar: 'None',
+        addons: [],
+        subtotal: 20000,
+        batch: 1,
+        kitchenItemStatus: 'done',
+      },
+      {
+        lineId: 'line-ayam',
+        menuId: 'm-ayam',
+        name: 'PH Ayam Goreng',
+        basePrice: 22000,
+        quantity: 1,
+        temperature: 'Hangat',
+        sugar: 'None',
+        addons: [],
+        subtotal: 22000,
+        batch: 1,
+        kitchenItemStatus: 'done',
+      },
+      {
+        lineId: 'line-pk-ayam',
+        menuId: 'm-pk-ayam',
+        name: 'PK Ayam Goreng',
+        basePrice: 25000,
+        quantity: 1,
+        temperature: 'Hangat',
+        sugar: 'None',
+        addons: [],
+        subtotal: 25000,
+        batch: 2,
+        kitchenItemStatus: 'new',
+      },
+    ];
+
+    const merged = mergeKitchenItemStatus(cartItemsBatch2, pendingItemsBatch1, 'Done');
+    expect(merged).toHaveLength(3);
+
+    const lele = merged.find((i) => i.menuId === 'm-lele');
+    const ayam = merged.find((i) => i.menuId === 'm-ayam');
+    const pkAyam = merged.find((i) => i.menuId === 'm-pk-ayam');
+
+    expect(lele?.kitchenItemStatus).toBe('done');
+    expect(lele?.batch).toBe(1);
+
+    expect(ayam?.kitchenItemStatus).toBe('done');
+    expect(ayam?.batch).toBe(1);
+
+    expect(pkAyam?.kitchenItemStatus).toBe('new');
+    expect(pkAyam?.batch).toBe(2);
+
+    // Filter KDS Waiting Column: HANYA item 'new' (Kloter 2) yang muncul
+    const waitingItems = merged.filter((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new');
+    expect(waitingItems).toHaveLength(1);
+    expect(waitingItems[0].name).toBe('PK Ayam Goreng');
+
+    // Filter KDS Done Column: HANYA item 'done' (Kloter 1) yang muncul
+    const doneItems = merged.filter((i) => !i.isBundle && i.kitchenItemStatus === 'done');
+    expect(doneItems).toHaveLength(2);
+    expect(doneItems.map((i) => i.name)).toEqual(['PH Lele Terbang', 'PH Ayam Goreng']);
+  });
 });
 
