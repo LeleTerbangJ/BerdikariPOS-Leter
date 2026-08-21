@@ -69,6 +69,10 @@ export interface ReceiptData {
   // v4.8 TO DO 23.3: tanda tiket TAMBAHAN (delta items saat update pending) — header '=== TAMBAHAN ==='
   // ditampilkan di tiket dapur agar dapur tahu ini pesanan tambahan dari nomor antrean yang sudah ada.
   isAdditionalPrint?: boolean;
+
+  // 🏷️ v4.9: Order Batch
+  batchNumber?: number; // 1 = Pesanan Awal, 2+ = Tambahan
+  batchLabel?: string;  // misal: 'PESANAN AWAL', 'TAMBAHAN #1'
 }
 
 export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettings, isReprint: boolean = false): ReceiptData {
@@ -93,6 +97,7 @@ export function buildReceiptFromTransaction(tx: Transaction, settings: AppSettin
     receiptHeader: settings.receiptHeader,
     receiptFooter: settings.receiptFooter,
     isReprint,
+    batchNumber: tx.currentBatch,
     showLogoOnReceipt: settings.showLogoOnReceipt !== false,
     // v4.7 TO DO 12.2.7 (P-A7): tampilkan promo hanya bila memberi diskon (P-A3 snapshot promoAmount)
     promoName: tx.promoAmount ? tx.promoName : undefined,
@@ -1012,12 +1017,19 @@ export function printKitchenReceiptBrowser(data: ReceiptData, items: CartItem[],
   let lines: string[] = [];
 
   // Header
-  // v4.8 TO DO 23.3: header TAMBAHAN untuk tiket delta items (update pending)
-  if (data.isAdditionalPrint) {
+  // 🏷️ v4.9: Header Order Batch
+  if (data.batchNumber && data.batchNumber > 1) {
+    lines.push(center('================================', kp.width));
+    lines.push(center(`[BATCH #${data.batchNumber} - ${data.batchLabel || `TAMBAHAN #${data.batchNumber - 1}`}]`, kp.width));
+    lines.push(center('================================', kp.width));
+  } else if (data.isAdditionalPrint) {
     lines.push(center('========== ==========', kp.width));
     lines.push(center('TAMBAHAN', kp.width));
     lines.push(center('========== ==========', kp.width));
+  } else if (data.batchNumber === 1) {
+    lines.push(center('[BATCH #1 - PESANAN AWAL]', kp.width));
   }
+
   lines.push(center(`TIKET DAPUR - #${data.queueNumber}`, kp.width));
   lines.push(center(kp.name.toUpperCase(), kp.width));
   if (data.isReprint) {
@@ -1090,16 +1102,18 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   commands.push(ESC, 0x61, 0x01);
 
   // 1. Header (Scoped bold and explicit CRLF line feeds to prevent buffer overlap)
-  // v4.8 TO DO 23.3: header TAMBAHAN untuk tiket delta items (update pending)
-  if (data.isAdditionalPrint) {
+  // 🏷️ v4.9: Header Order Batch
+  if (data.batchNumber && data.batchNumber > 1) {
     commands.push(ESC, 0x45, 0x01);
-    commands.push(...encoder.encode('========== ==========`\r\n'));
+    commands.push(...encoder.encode('================================\r\n'));
+    commands.push(...encoder.encode(`[BATCH #${data.batchNumber} - ${data.batchLabel || `TAMBAHAN #${data.batchNumber - 1}`}]\r\n`));
+    commands.push(...encoder.encode('================================\r\n'));
     commands.push(ESC, 0x45, 0x00);
+  } else if (data.isAdditionalPrint) {
     commands.push(ESC, 0x45, 0x01);
+    commands.push(...encoder.encode('========== ==========\r\n'));
     commands.push(...encoder.encode('TAMBAHAN\r\n'));
-    commands.push(ESC, 0x45, 0x00);
-    commands.push(ESC, 0x45, 0x01);
-    commands.push(...encoder.encode('========== ==========`\r\n'));
+    commands.push(...encoder.encode('========== ==========\r\n'));
     commands.push(ESC, 0x45, 0x00);
   }
 
@@ -1234,9 +1248,10 @@ export async function printReceipt(
     settings.kitchenPrinters &&
     settings.kitchenPrinters.length > 0
   ) {
-    const kitchenJobs = settings.kitchenPrinters
-      .filter(kp => kp.enabled)
-      .map(async (kp): Promise<PrintJobResult> => {
+    const activeKitchenPrinters = settings.kitchenPrinters.filter((kp) => kp.enabled);
+
+    if (activeKitchenPrinters.length > 0) {
+      const kitchenJobs = activeKitchenPrinters.map(async (kp): Promise<PrintJobResult> => {
         // Filter items by kitchen target (Bundles themselves are NEVER printed in kitchen, only child items)
         const matchingItems = data.items.filter((item) => {
           if (item.isBundle) return false;
@@ -1244,7 +1259,7 @@ export async function printReceipt(
           const printerTarget = (kp.targetCategory || '').trim().toLowerCase();
           // v4.7: kitchenTarget 'ALL' ("Semua Dapur" di form Edit Menu) → tiket dicetak
           // ke SEMUA printer dapur yang aktif (item ini tampil di semua target dapur).
-          if (itemTarget === 'all' || itemTarget === 'semua dapur' || itemTarget === '*') {
+          if (!itemTarget || itemTarget === 'all' || itemTarget === 'semua dapur' || itemTarget === '*') {
             return true;
           }
           return itemTarget === printerTarget && printerTarget !== '';
@@ -1273,12 +1288,13 @@ export async function printReceipt(
         }
       });
 
-    const kitchenResults = await Promise.allSettled(kitchenJobs);
-    for (const result of kitchenResults) {
-      if (result.status === 'fulfilled') {
-        results.push(result.value);
-      } else {
-        results.push({ printer: 'Kitchen (unknown)', status: 'error', error: result.reason?.message });
+      const kitchenResults = await Promise.allSettled(kitchenJobs);
+      for (const result of kitchenResults) {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          results.push({ printer: 'Kitchen (unknown)', status: 'error', error: result.reason?.message });
+        }
       }
     }
   }

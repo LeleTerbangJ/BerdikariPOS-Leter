@@ -153,7 +153,43 @@ export function mergeKitchenItemStatus(
 }
 
 /**
- * v4.8.4: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur berbasis Signature Spesifikasi Menu.
+ * v4.9 ORDER BATCH: Mendapatkan nomor batch tertinggi dari daftar item.
+ */
+export function getMaxBatch(items: CartItem[]): number {
+  if (!items || items.length === 0) return 1;
+  return Math.max(...items.map((i) => i.batch || 1), 1);
+}
+
+/**
+ * v4.9 ORDER BATCH: Label kloter pesanan (Batch 1 = Pesanan Awal, Batch 2+ = Tambahan).
+ */
+export function formatBatchLabel(batch: number): string {
+  if (batch <= 1) return 'PESANAN AWAL';
+  return `TAMBAHAN #${batch - 1}`;
+}
+
+/**
+ * v4.9 ORDER BATCH: Ambil item-item yang termasuk dalam batch tertentu.
+ */
+export function getBatchItems(items: CartItem[], targetBatch: number): CartItem[] {
+  return items.filter((i) => (i.batch || 1) === targetBatch);
+}
+
+/**
+ * v4.9 ORDER BATCH: Ambil item-item untuk dicetak ke dapur saat simpan/update pending.
+ * Jika ada targetBatch eksplisit (> 1), ambil item kloter tersebut.
+ * Jika tidak, ambil item dengan status 'new' atau delta items.
+ */
+export function getNewBatchOrStatusItems(items: CartItem[], targetBatch?: number): CartItem[] {
+  if (targetBatch && targetBatch > 1) {
+    const batchItems = getBatchItems(items, targetBatch);
+    if (batchItems.length > 0) return batchItems;
+  }
+  return items.filter((i) => (i.kitchenItemStatus || 'new') === 'new');
+}
+
+/**
+ * v4.8.4 & v4.9: Hitung porsi delta baru/tambahan yang perlu dikirim ke printer dapur berbasis Signature Spesifikasi Menu.
  * Hanya porsi selisih baru di atas total porsi lama yang dikirim sebagai tiket tambahan.
  */
 export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: CartItem[]): CartItem[] {
@@ -183,3 +219,6 @@ export function calculateDeltaKitchenItems(cartItems: CartItem[], pendingItems: 
 
   return delta;
 }
+
+
+

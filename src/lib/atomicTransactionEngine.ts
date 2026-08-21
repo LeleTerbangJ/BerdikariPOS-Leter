@@ -13,7 +13,7 @@ import { useTransactionStore } from '../store/transactionStore';
 import { useMenuStore } from '../store/menuStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { printReceipt, buildReceiptFromTransaction } from '../utils/printer';
-import { didKitchenPrintSucceed } from '../utils/kitchenTicket';
+import { didKitchenPrintSucceed, getMaxBatch, formatBatchLabel } from '../utils/kitchenTicket';
 import { syncTransaction, deleteTransactionCloud } from './cloudSync';
 import {
   pruneIdempotencyEntries,
@@ -189,6 +189,8 @@ export class AtomicTransactionEngine {
         // v4.7 TO DO 12.2.4 (P-A3): snapshot nama & nominal diskon promo untuk laporan performa promo
         promoName: params.promoName,
         promoAmount: params.promoAmount,
+        // 🏷️ v4.9: Order Batch — catat kloter aktif tertinggi
+        currentBatch: getMaxBatch(itemsWithSnapshot),
         lifecycleState: 'COMMITTED',
       };
 
@@ -343,26 +345,39 @@ export class AtomicTransactionEngine {
     // v4.8.3: stamp sudah dilakukan di awal triggerPostCommitTasks (sebelum syncTransaction).
     if (!params.suppressAutoPrint) {
       try {
-        if (params.settings.printerEnabled || params.settings.autoPrintOnCheckout) {
+        const shouldPrintCashier = !params.skipReceiptPrint && (params.settings.printerEnabled || params.settings.autoPrintOnCheckout);
+        const shouldPrintKitchen = !params.skipKitchenPrint;
+
+        if (shouldPrintCashier || shouldPrintKitchen) {
           const receiptData = buildReceiptFromTransaction(tx, params.settings);
-          // 1. Struk kasir — dilewati bila skipReceiptPrint
-          if (!params.skipReceiptPrint) {
+
+          // 1. Struk kasir — dicetak bila printer kasir aktif & tidak diskip
+          if (shouldPrintCashier) {
             printReceipt(receiptData, params.settings, 'cashier', params.preOpenedPrintWindow || undefined);
           }
-          // 2. Tiket dapur — dilewati bila skipKitchenPrint
-          // v4.7 TO DO 21.1: saat finalisasi pending yang diedit (deltaKitchenItems ada),
-          // cetak tiket HANYA untuk item BARU (bukan semua item) → anti tiket dobel
-          // untuk item lama yang sudah diproses/diantar dapur.
-          // v4.8 TO DO 23.3: tandai tiket delta sebagai 'TAMBAHAN' agar dapur tahu ini pesanan tambahan.
-          // v4.8.2: kitchenTicketPrintedAt sudah di-stamp di atas (intent-based),
-          // print fisik berikut hanya best-effort — gagal print TIDAK membatalkan stamp.
-          if (!params.skipKitchenPrint) {
-            const kitchenReceiptData = params.deltaKitchenItems && params.deltaKitchenItems.length > 0
-              ? { ...receiptData, items: params.deltaKitchenItems, isAdditionalPrint: true }
-              : receiptData;
+
+          // 2. Tiket dapur — dicetak bila shouldPrintKitchen = true
+          // 🏷️ v4.9 ORDER BATCH: Cetak HANYA item dari kloter aktif (Batch N) atau delta items
+          if (shouldPrintKitchen) {
+            const activeBatch = tx.currentBatch || getMaxBatch(tx.items);
+            const targetKitchenItems =
+              params.deltaKitchenItems && params.deltaKitchenItems.length > 0
+                ? params.deltaKitchenItems
+                : activeBatch > 1
+                  ? tx.items.filter((i) => (i.batch || 1) === activeBatch)
+                  : tx.items;
+
+            const kitchenReceiptData = {
+              ...receiptData,
+              items: targetKitchenItems,
+              batchNumber: activeBatch,
+              batchLabel: formatBatchLabel(activeBatch),
+              isAdditionalPrint: activeBatch > 1 || !!params.deltaKitchenItems,
+            };
+
             const kitchenResults = await printReceipt(kitchenReceiptData, params.settings, 'kitchen');
             if (!didKitchenPrintSucceed(kitchenResults)) {
-              console.warn(`[AtomicEngine] Kitchen print FAILED for Tx #${tx.id} — but kitchenTicketPrintedAt already stamped (intent-based)`);
+              console.warn(`[AtomicEngine] Kitchen print warning for Tx #${tx.id} — but kitchenTicketPrintedAt already stamped`);
             }
           }
         }

@@ -70,7 +70,7 @@ function makeCartItem(menu: Menu, qty: number): CartItem {
     basePrice: menu.price,
     price: menu.price,
     quantity: qty,
-    temperature: 'Normal',
+    temperature: 'Hangat',
     sugar: 'Normal',
     addons: [],
     subtotal: menu.price * qty,
@@ -191,14 +191,13 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
     expect(printReceiptMock).toHaveBeenCalled(); // dipanggil tapi gagal
   });
 
-  it('printerEnabled=false (tanpa printer) → tidak ada cetak fisik & TIDAK di-stamp (skipKitchenPrint=true by default)', async () => {
+  it('printerEnabled=false (tanpa printer kasir) → tiket dapur TETAP dicetak jika skipKitchenPrint=false', async () => {
     const m1 = makeMenu('m1', 'Nasi Goreng', 15000, 'inv1');
     useMenuStore.setState({ menus: [m1] });
     useInventoryStore.setState({ items: [makeInv('inv1', 100)] });
 
-    // v4.8.2: printerEnabled=false + skipKitchenPrint tidak dikirim (default undefined → falsy)
-    // Namun printerEnabled=false DAN autoPrintOnCheckout=false → cetak TIDAK dijalankan sama sekali
-    // Kitchen ticket tetap di-stamp karena skipKitchenPrint=false (user intent)
+    // 🏷️ v4.9: printerEnabled=false hanya mematikan struk kasir, BUKAN tiket dapur.
+    // Jika skipKitchenPrint=false, tiket dapur TETAP dicetak via printer dapur/browser fallback.
     const r = await AtomicTransactionEngine.executeCheckout(
       baseParams({
         transactionId: 'pending-a10-4',
@@ -206,6 +205,7 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
         subtotal: 15000,
         totalAmount: 15000,
         overrideTxStatus: 'Pending',
+        skipKitchenPrint: false,
         settings: { tableFeaturesEnabled: true, printerEnabled: false } as any,
       })
     );
@@ -215,11 +215,13 @@ describe('A10 — engine stamp kitchenTicketPrintedAt', () => {
 
     const saved = useTransactionStore.getState().transactions.find((t) => t.id === 'pending-a10-4');
     expect(saved).toBeDefined();
-    // v4.8.2: kitchenTicketPrintedAt TETAP di-stamp (intent-based) karena skipKitchenPrint=false (default).
-    // PrinterEnabled hanya mengontrol cetak FISIK, bukan visibilitas KDS.
     expect(saved!.kitchenTicketPrintedAt).toBeDefined();
-    // Cetak fisik tidak dipanggil karena printerEnabled=false DAN autoPrintOnCheckout tidak aktif
-    expect(printReceiptMock).not.toHaveBeenCalled();
+    // 🏷️ v4.9: Tiket dapur dipanggil dengan target 'kitchen'
+    expect(printReceiptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ batchNumber: 1 }),
+      expect.anything(),
+      'kitchen'
+    );
   });
 
   it('v4.8.3: syncTransaction menerima kitchenTicketPrintedAt di initial sync (cross-device fix)', async () => {
@@ -314,15 +316,14 @@ describe('21.1 — deltaKitchenItems filtering', () => {
   });
 
   it('tanpa parentTx → deltaKitchenItems undefined ( cetak semua item)', () => {
-    const parentTx = null;
+    const filterDelta = (parent: { items: { lineId: string }[] } | null, cart: { lineId: string }[]) => {
+      return parent ? cart.filter((ci) => !parent.items.some((pi) => pi.lineId === ci.lineId)) : undefined;
+    };
     const cartItems = [
       { lineId: 'a', name: 'Kopi', quantity: 1, subtotal: 15000 },
       { lineId: 'b', name: 'Mie', quantity: 1, subtotal: 20000 },
     ];
-    // Tanpa parentTx, deltaKitchenItems harus undefined
-    const deltaKitchenItems = parentTx ? cartItems.filter(
-      (ci) => !parentTx.items.some((pi) => pi.lineId === ci.lineId)
-    ) : undefined;
+    const deltaKitchenItems = filterDelta(null, cartItems);
     expect(deltaKitchenItems).toBeUndefined();
   });
 
