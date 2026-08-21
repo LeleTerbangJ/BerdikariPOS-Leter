@@ -293,7 +293,7 @@ export default function POS() {
 
     // 🏷️ v4.9: Merge kitchenItemStatus & pastikan setiap item memiliki batch yang benar
     const cartItemsWithBatchStatus = freshPendingTx
-      ? mergeKitchenItemStatus(cart.items, freshPendingTx.items)
+      ? mergeKitchenItemStatus(cart.items, freshPendingTx.items, freshPendingTx.kitchenStatus)
       : cart.items.map((item) => ({ ...item, batch: item.batch || 1, kitchenItemStatus: 'new' as const }));
 
     // 🏷️ v4.9 ORDER BATCH: Hitung deltaKitchenItems berbasis kloter aktif (Batch N)
@@ -381,7 +381,7 @@ export default function POS() {
       cart.addItem({
         ...item,
         batch: item.batch || 1,
-        kitchenItemStatus: item.kitchenItemStatus || 'done',
+        kitchenItemStatus: tx.kitchenStatus === 'Done' ? 'done' : (item.kitchenItemStatus || 'done'),
       });
     });
 
@@ -932,15 +932,20 @@ export default function POS() {
 
     // Merge kitchenItemStatus ke cart items sebelum dikirim ke engine
     const cartItemsForFinalize = freshPendingForFinalize
-      ? mergeKitchenItemStatus(cart.items, freshPendingForFinalize.items)
+      ? mergeKitchenItemStatus(cart.items, freshPendingForFinalize.items, freshPendingForFinalize.kitchenStatus)
       : cart.items.map((item) => ({ ...item, batch: item.batch || 1, kitchenItemStatus: 'new' as const }));
 
     // 🏷️ v4.9: Hitung kitchenStatus final yang akurat berdasarkan status seluruh item dari semua batch
     const computeFinalKitchenStatus = (items: typeof cartItemsForFinalize): KitchenStatus => {
       const nonBundle = items.filter((i) => !i.isBundle);
+      // Jika pending aslinya sudah 'Done' dan tidak ada menu baru berstatus 'new', pertahankan 'Done'
+      if (freshPendingForFinalize?.kitchenStatus === 'Done' && !nonBundle.some((i) => i.kitchenItemStatus === 'new')) {
+        return 'Done';
+      }
       if (nonBundle.length > 0 && nonBundle.every((i) => i.kitchenItemStatus === 'done')) return 'Done';
+      if (nonBundle.some((i) => i.kitchenItemStatus === 'new')) return 'Waiting';
       if (nonBundle.some((i) => i.kitchenItemStatus === 'processing')) return 'Processing';
-      return 'Waiting';
+      return freshPendingForFinalize?.kitchenStatus || 'Done';
     };
 
     // 🏷️ v4.9: Tiket dapur hanya mencetak item batch baru jika ada item baru yang ditambahkan saat finalize
@@ -967,7 +972,7 @@ export default function POS() {
 
     // Execute Atomic Checkout via AtomicTransactionEngine
     const result = await AtomicTransactionEngine.executeCheckout({
-      transactionId: checkoutTxId,
+      transactionId: freshPendingForFinalize ? freshPendingForFinalize.id : checkoutTxId,
       // v4.8 FIX (Bug 3): pakai cartItemsForFinalize (sudah di-merge dengan kitchenItemStatus terbaru
       // dari KDS) agar transaksi final tidak kehilangan status item → KDS tidak menampilkan order
       // yang sudah lunas kembali di Antrean Menunggu.

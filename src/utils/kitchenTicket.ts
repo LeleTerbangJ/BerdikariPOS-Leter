@@ -1,4 +1,4 @@
-import type { Transaction, CartItem } from '../types';
+import type { Transaction, CartItem, KitchenStatus } from '../types';
 import type { PrintJobResult } from './printer';
 
 /**
@@ -87,7 +87,8 @@ export function setAllItemsKitchenStatus(
  */
 export function mergeKitchenItemStatus(
   cartItems: CartItem[],
-  pendingItems: CartItem[]
+  pendingItems: CartItem[],
+  pendingKitchenStatus?: KitchenStatus
 ): CartItem[] {
   const result: CartItem[] = [];
 
@@ -97,27 +98,38 @@ export function mergeKitchenItemStatus(
     const totalPendingQty = matchingPending.reduce((sum, p) => sum + p.quantity, 0);
 
     if (totalPendingQty === 0) {
-      // Item baru ditambahkan → status 'new'
-      result.push({ ...c, kitchenItemStatus: 'new' as const });
+      // Item baru ditambahkan (tidak ada di pending sebelumnya) → status 'new'
+      result.push({
+        ...c,
+        batch: c.batch || 1,
+        kitchenItemStatus: c.kitchenItemStatus || 'new',
+      });
     } else if (c.quantity >= totalPendingQty) {
-      // Pertahankan seluruh item pending yang sudah ada dengan status masing-masing
+      // Pertahankan seluruh item pending yang sudah ada dengan status & batch masing-masing
       const unitPrice = c.basePrice + (c.addons || []).reduce((a, b) => a + b.price, 0);
       for (const p of matchingPending) {
+        const itemStatus = pendingKitchenStatus === 'Done'
+          ? 'done'
+          : (p.kitchenItemStatus || c.kitchenItemStatus || 'done');
+
         result.push({
           ...c,
           lineId: p.lineId,
+          batch: p.batch || c.batch || 1,
           quantity: p.quantity,
           subtotal: Math.max(0, unitPrice * p.quantity - (p.itemDiscount || 0)),
-          kitchenItemStatus: p.kitchenItemStatus || 'new',
+          kitchenItemStatus: itemStatus,
         });
       }
 
       // Jika kuantitas bertambah di atas total kuantitas lama, buat item delta baru berstatus 'new'
       if (c.quantity > totalPendingQty) {
         const addQty = c.quantity - totalPendingQty;
+        const maxPendingBatch = Math.max(...matchingPending.map((p) => p.batch || 1), 1);
         result.push({
           ...c,
           lineId: `${c.lineId}-add-${Math.random().toString(36).substring(2, 7)}`,
+          batch: c.batch && c.batch > maxPendingBatch ? c.batch : maxPendingBatch + 1,
           quantity: addQty,
           subtotal: Math.max(0, unitPrice * addQty),
           kitchenItemStatus: 'new' as const,
@@ -137,12 +149,17 @@ export function mergeKitchenItemStatus(
       for (const p of sortedPending) {
         if (remainingQty <= 0) break;
         const allocatedQty = Math.min(p.quantity, remainingQty);
+        const itemStatus = pendingKitchenStatus === 'Done'
+          ? 'done'
+          : (p.kitchenItemStatus || c.kitchenItemStatus || 'done');
+
         result.push({
           ...c,
           lineId: p.lineId,
+          batch: p.batch || c.batch || 1,
           quantity: allocatedQty,
           subtotal: Math.max(0, unitPrice * allocatedQty - (p.itemDiscount || 0)),
-          kitchenItemStatus: p.kitchenItemStatus || 'new',
+          kitchenItemStatus: itemStatus,
         });
         remainingQty -= allocatedQty;
       }

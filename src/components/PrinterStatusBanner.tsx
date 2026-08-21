@@ -11,15 +11,23 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { usePrinterMonitor } from '../hooks/usePrinterMonitor';
+import { useAuthStore } from '../store/authStore';
 import { getPrinterSessionState } from '../utils/printer';
 import { Printer, Wifi, WifiOff, RefreshCw, CheckCircle, X } from 'lucide-react';
 
 export default function PrinterStatusBanner() {
+  const { currentUser } = useAuthStore();
   const { status, reconnect, reconnectAll } = usePrinterMonitor();
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 🏷️ v4.9: Banner hanya muncul untuk user level Manager dan Kasir (tidak untuk Acaraki / Staf Dapur / Staf Gudang)
+  const allowedRoles = ['Manager', 'Kasir'];
+  if (!currentUser || !allowedRoles.includes(currentUser.role)) {
+    return null;
+  }
 
   // TO DO 14.1 P-2/P-4: setelah page refresh, printer yang tadinya tersambung otomatis
   // terputus (koneksi Web Bluetooth in-memory). Tampilkan banner reconnect AGRESIF
