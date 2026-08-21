@@ -289,6 +289,12 @@ export default function POS() {
       ? mergeKitchenItemStatus(cart.items, currentPendingTx.items)
       : cart.items.map((item) => ({ ...item, kitchenItemStatus: 'new' as const }));
 
+    // v4.8.4: hitung deltaKitchenItems saat Simpan Pending jika ada pending sebelumnya
+    // agar printer dapur hanya mencetak menu baru / tambahan porsi (bukan semua item)
+    const deltaKitchenItems = currentPendingTx
+      ? calculateDeltaKitchenItems(cart.items, currentPendingTx.items)
+      : undefined;
+
     const result = await AtomicTransactionEngine.executeCheckout({
       transactionId: currentPendingTx ? currentPendingTx.id : checkoutTxId,
       overrideQueueNumber: currentPendingTx ? currentPendingTx.queueNumber : undefined,
@@ -325,6 +331,7 @@ export default function POS() {
       reservedDeductions: currentPendingTx
         ? calculateItemDeductions(currentPendingTx.items, menus)
         : undefined,
+      deltaKitchenItems,
     });
 
     if (result.success) {

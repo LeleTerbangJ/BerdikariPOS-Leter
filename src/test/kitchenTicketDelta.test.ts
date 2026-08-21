@@ -104,7 +104,7 @@ describe('Kitchen Ticket Delta Utilities (v4.8)', () => {
       const pending = [itemA, itemB];
       const res = calculateDeltaKitchenItems(cart, pending);
       expect(res).toHaveLength(1);
-      expect(res[0].lineId).toBe('line-1');
+      expect(res[0].menuId).toBe('menu-1');
       expect(res[0].quantity).toBe(3); // 5 - 2 = 3
     });
 
@@ -116,6 +116,21 @@ describe('Kitchen Ticket Delta Utilities (v4.8)', () => {
       expect(res[0].lineId).toBe('line-2');
       expect(res[0].quantity).toBe(2); // Kuantitas penuh dari item berspesifikasi baru
       expect(res[0].temperature).toBe('Hangat');
+    });
+
+    it('v4.8.4: multi-resume bertahap — pending memiliki beberapa baris porsi (mis. x1 done + x1 done), cart menambah +1 (total 3), delta HANYA 1', () => {
+      const pendingMultiLines: CartItem[] = [
+        { ...itemA, lineId: 'line-1', quantity: 1, subtotal: 15000, kitchenItemStatus: 'done' },
+        { ...itemA, lineId: 'line-1-add-abc', quantity: 1, subtotal: 15000, kitchenItemStatus: 'done' },
+      ];
+      // Di keranjang, kasir melihat total 2 lalu menambah +1 menjadi 3
+      const cartMulti: CartItem[] = [
+        { ...itemA, lineId: 'line-1', quantity: 3, subtotal: 45000 },
+      ];
+
+      const delta = calculateDeltaKitchenItems(cartMulti, pendingMultiLines);
+      expect(delta).toHaveLength(1);
+      expect(delta[0].quantity).toBe(1); // 3 - (1 + 1) = 1 porsi tambahan
     });
   });
 });

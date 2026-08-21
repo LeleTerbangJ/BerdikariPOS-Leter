@@ -230,9 +230,7 @@ export default function Kitchen() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
         {columns.map(({ status, label, color, icon: Icon }) => {
-          // v4.8 TO DO 23.4 + FIX 24.5: filter orders berdasarkan kitchenItemStatus per-item
-          // v4.8 FIX 25.3: transaksi muncul di kolom DOMINAN saja (tidak muncul di 2 kolom)
-          // Priority: Waiting (ada 'new') > Processing (ada 'processing') > Done (semua 'done')
+          // v4.8.4: Multi-column distribution — transaksi muncul di setiap kolom yang memiliki item dengan status bersangkutan
           const orders = activeOrders
             .filter((t) => {
               const hasKitchenItemStatus = t.items.some((i) => i.kitchenItemStatus);
@@ -242,18 +240,17 @@ export default function Kitchen() {
                 return t.kitchenStatus === status;
               }
               
-              const allDone = t.items.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-              const hasNew = t.items.some((i) => i.kitchenItemStatus === 'new');
-              const hasProcessing = t.items.some((i) => i.kitchenItemStatus === 'processing');
-              
-              // Tentukan status dominan (hanya 1 kolom)
-              let effectiveStatus: 'Waiting' | 'Processing' | 'Done';
-              if (allDone) effectiveStatus = 'Done';
-              else if (hasNew) effectiveStatus = 'Waiting';
-              else if (hasProcessing) effectiveStatus = 'Processing';
-              else effectiveStatus = 'Done'; // fallback
-              
-              return effectiveStatus === status;
+              // Per-column item check:
+              if (status === 'Waiting') {
+                return t.items.some((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new');
+              }
+              if (status === 'Processing') {
+                return t.items.some((i) => !i.isBundle && i.kitchenItemStatus === 'processing');
+              }
+              if (status === 'Done') {
+                return t.items.some((i) => !i.isBundle && i.kitchenItemStatus === 'done');
+              }
+              return false;
             })
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
           return (
@@ -267,7 +264,7 @@ export default function Kitchen() {
                   <button
                     onClick={() => {
                       orders.forEach((o) => {
-                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'new').forEach((i) => {
+                        o.items.filter((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new').forEach((i) => {
                           updateItemKitchenStatus(o.id, i.lineId, 'processing');
                         });
                       });
@@ -299,6 +296,10 @@ export default function Kitchen() {
                   const updated = isUpdatedOrder(order);
                   const overdue = status === 'Waiting' && isOverdue(order);
                   const waitMins = getWaitingMinutes(order);
+                  // v4.8.4: Deteksi apakah pesanan ini memiliki item lama yang sudah diproses atau selesai
+                  const hasPreviousItems = order.items.some(
+                    (i) => !i.isBundle && (i.kitchenItemStatus === 'processing' || i.kitchenItemStatus === 'done')
+                  );
 
                   return (
                     <div
@@ -306,9 +307,11 @@ export default function Kitchen() {
                       className={`rounded-xl p-4 shadow-sm transition-all ${
                         overdue
                           ? 'bg-red-50 dark:bg-red-950/40 border-2 border-red-300 dark:border-red-700 animate-pulse'
-                          : updated
-                            ? 'bg-blue-50/60 dark:bg-blue-950/30 border-2 border-blue-300 dark:border-blue-600/60'
-                            : 'bg-white dark:bg-slate-800'
+                          : hasPreviousItems && status === 'Waiting'
+                            ? 'bg-amber-50/70 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-600/70'
+                            : updated
+                              ? 'bg-blue-50/60 dark:bg-blue-950/30 border-2 border-blue-300 dark:border-blue-600/60'
+                              : 'bg-white dark:bg-slate-800'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -316,8 +319,13 @@ export default function Kitchen() {
                           <span className="text-2xl font-extrabold text-brand-700 dark:text-brand-400">
                             #{order.queueNumber}
                           </span>
-                          {/* v4.7 TO DO 21.5: badge '🔄 Diupdate' untuk pesanan yang di-update (Done → Waiting) */}
-                          {updated && status === 'Waiting' && (
+                          {/* v4.8.4: Badge '🔄 Pesanan Tambahan' jika order di kolom Waiting memiliki item lain yang sudah diproses/selesai */}
+                          {hasPreviousItems && status === 'Waiting' && (
+                            <span className="badge bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-xs font-semibold">
+                              🔄 Pesanan Tambahan
+                            </span>
+                          )}
+                          {!hasPreviousItems && updated && status === 'Waiting' && (
                             <span className="badge bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-400 text-xs font-semibold">
                               🔄 Diupdate
                             </span>
@@ -327,11 +335,10 @@ export default function Kitchen() {
                               <AlertTriangle size={10} /> {waitMins} mnt
                             </span>
                           )}
-                          {status === 'Waiting' && !overdue && !updated && (
-                            <span className="text-xs text-slate-400">{waitMins} mnt</span>
-                          )}
-                          {status === 'Waiting' && !overdue && updated && (
-                            <span className="text-xs text-blue-400">{waitMins} mnt (sejak update)</span>
+                          {status === 'Waiting' && !overdue && (
+                            <span className={`text-xs ${hasPreviousItems ? 'text-amber-600 dark:text-amber-400 font-medium' : updated ? 'text-blue-400' : 'text-slate-400'}`}>
+                              {waitMins} mnt {hasPreviousItems || updated ? '(sejak update)' : ''}
+                            </span>
                           )}
                         </div>
                       </div>
@@ -351,7 +358,7 @@ export default function Kitchen() {
                       </p>
 
                       <div className="space-y-2">
-                        {/* v4.8 FIX 24.5: filter item berdasarkan kolom saat ini */}
+                        {/* v4.8 FIX 24.5 & v4.8.4: filter item strictly berdasarkan kolom saat ini */}
                         {order.items.filter((item) => {
                           if (item.isBundle) return false;
                           const itemStatus = item.kitchenItemStatus || 'new';
@@ -359,8 +366,9 @@ export default function Kitchen() {
                           if (status === 'Waiting') return itemStatus === 'new';
                           // Di kolom Processing: hanya tampilkan item 'processing'
                           if (status === 'Processing') return itemStatus === 'processing';
-                          // Di kolom Done: tampilkan SEMUA item (termasuk yang done)
-                          return true;
+                          // Di kolom Done: hanya tampilkan item 'done'
+                          if (status === 'Done') return itemStatus === 'done';
+                          return false;
                         }).map((item) => {
                           // v4.8 TO DO 23.1: badge per-item berdasarkan kitchenItemStatus
                           const itemStatus = item.kitchenItemStatus || 'new';
@@ -389,7 +397,7 @@ export default function Kitchen() {
                                 )}
                                 {isNew && status === 'Waiting' && (
                                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-400">
-                                    <Plus size={10} /> Baru
+                                    <Plus size={10} /> {hasPreviousItems ? 'Tambahan' : 'Baru'}
                                   </span>
                                 )}
                                 {!isDone && !isNew && (
@@ -432,8 +440,13 @@ export default function Kitchen() {
                         })}
                       </div>
 
-                      {/* v4.7 TO DO 21.5: catatan untuk pesanan yang di-update */}
-                      {updated && status === 'Waiting' && (
+                      {/* v4.7 TO DO 21.5 & v4.8.4: catatan untuk pesanan tambahan */}
+                      {hasPreviousItems && status === 'Waiting' && (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-2 pt-2 border-t border-amber-200 dark:border-amber-700/40 italic font-medium">
+                          🔄 Pesanan tambahan untuk meja/antrean ini — item sebelumnya tetap berada di kolom Selesai/Diproses
+                        </p>
+                      )}
+                      {!hasPreviousItems && updated && status === 'Waiting' && (
                         <p className="text-[10px] text-blue-500 dark:text-blue-400 mt-2 pt-2 border-t border-blue-200 dark:border-blue-700/40 italic">
                           🔄 Pesanan diperbarui — periksa item baru di atas
                         </p>
