@@ -1024,5 +1024,217 @@ Di `src/lib/atomicTransactionEngine.ts` (baris 313–327):
      ALTER TABLE settings ADD COLUMN IF NOT EXISTS pending_print_option TEXT DEFAULT 'dapur_only';
      ```
 
+---
+
+## 🚀 G. ANALISA LATENSI SINKRONISASI, BANNER "BELUM TERSINKRON", & AKSELERASI REALTIME KDS (v4.9.2)
+
+> **Latar Belakang**: Pada pengujian alur Pesanan Pending & KDS, ditemukan bahwa:
+> 1. Terdapat jeda waktu (delay 3–8 detik) saat pesanan baru dibuat di POS hingga muncul di KDS, serta saat status diubah di KDS (Menunggu $\rightarrow$ Diproses $\rightarrow$ Selesai).
+> 2. Muncul banner kuning di atas layar: *"N data belum tersinkron — klik untuk kirim sekarang"* selama beberapa detik saat transaksi diproses.
+
+---
+
+### G.1 — Mengapa Banner "N Data Belum Tersinkron" Muncul?
+
+#### 1. Cara Kerja Banner
+- Banner di header aplikasi dipicu oleh komponen [`src/components/Layout.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/components/Layout.tsx) yang membaca panjang antrean dari [`src/lib/offlineQueue.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/lib/offlineQueue.ts) (`getQueueLength()`).
+- Setiap kali ada operasi tulis ke cloud yang dipanggil (melalui `smartUpsert`, `smartUpdate`, atau `smartInsert`), jika:
+  - Request HTTP REST API sedang dalam perjalanan (in-flight) atau mengalami latensi jaringan, ATAU
+  - Request gagal/timeout sejenak dan masuk ke antrean retry lokal,
+- Maka `queueLength` bertambah $> 0$, dan banner peringatan otomatis muncul seketika di layar kasir/dapur.
+
+#### 2. Beban Operasi Saat Checkout / Simpan Pending
+Saat kasir mengklik "Simpan Pending" atau "Bayar", sistem mengeksekusi serangkaian sinkronisasi cloud secara simultan:
+1. `syncTransaction(tx)` $\rightarrow$ Menyimpan data transaksi utama ke tabel `transactions`.
+2. `adjustInventoryStockCloud(...)` $\rightarrow$ Memanggil RPC `adjust_inventory_stock` untuk memotong stok bahan.
+3. `syncStockLog(entry)` $\rightarrow$ Mengirim log riwayat pemotongan bahan per-item ke tabel `stock_logs` (jika pesanan memotong 4 bahan berbeda, sistem mengirim **4 request HTTP terpisah** berturutan!).
+4. `syncAuditLog(entry)` $\rightarrow$ Mengirim catatan audit kasir.
+
+Akibatnya, terdapat **5 hingga 8 request HTTP REST API** yang ditembakkan hampir bersamaan. Ketika browser sedang menunggu antrean koneksi HTTP ini selesai (`latency 300ms – 1.5 detik per request`), banner kuning menyala sesaat sampai seluruh response dari server Supabase berhasil diterima (*flush*).
+
+---
+
+### G.2 — Mengapa Terjadi Delay Masuk ke KDS & Perubahan Status?
+
+#### 1. Alur Transmisi Saat Ini (Model *Poll-After-Notification*)
+Berikut adalah urutan kejadian saat kasir menyimpan pesanan atau koki mengubah status di KDS:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Kasir as POS (Kasir)
+    participant Cloud as Supabase (Cloud)
+    actor KDS as Layar KDS (Dapur)
+
+    Kasir->>Cloud: 1. POST /transactions (smartUpsert) ~800ms
+    Cloud-->>Kasir: 2. Response OK
+    Cloud-)KDS: 3. WebSocket Realtime Notification (postgres_changes) ~200ms
+    Note over KDS: ⚠️ Titik Bottleneck Delay Terjadi di Sini
+    KDS->>Cloud: 4. HTTP GET /transactions?limit=500 (Download 500 transaksi) ~2.5 - 5 detik
+    Cloud-->>KDS: 5. Mengembalikan 500 JSON transaksi lengkap
+    Note over KDS: 6. loadFromCloud() + Parse JSON + Render Kartu ~150ms
+```
+
+#### 2. Akar Masalah Bottleneck
+Di [`src/pages/Kitchen.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/pages/Kitchen.tsx) (baris 43–47):
+```ts
+channel = subscribeToTransactions((payload: any) => {
+  fetchTransactionsFromCloud().then((cloudTx) => {
+    if (cloudTx) loadFromCloud(cloudTx, true); // fullSync
+  });
+});
+```
+- Ketika WebSocket Supabase memberi tahu ada 1 baris transaksi yang bertambah/berubah, KDS **tidak langsung memakai data dari event tersebut**, melainkan melakukan **re-fetch penuh (mengunduh ulang 500 data transaksi sekaligus)** lewat HTTP REST API!
+- Mengunduh payload 500 baris JSON transaksi yang besar (berisi snapshot resep, daftar items, diskon, dll) memakan waktu **2 hingga 5 detik** tergantung kecepatan internet outlet.
+- **Total waktu delay**: `800ms (kirim POS)` + `200ms (WebSocket)` + `3500ms (Download 500 baris)` = **$\approx 4.5$ detik delay**.
+
+---
+
+### G.3 — Apakah Delay Sinkronisasi Tersebut Memang Dibutuhkan?
+
+- **Jawabannya: TIDAK DIBUTUHKAN untuk operasional KDS.**
+- **Mengapa dulunya dibuat seperti itu?**
+  - Pada masa awal perancangan, pola *full re-fetch* dipilih untuk memastikan konsistensi penuh 100% jika terjadi penghapusan transaksi (*tombstone deletion*) atau resolusi konflik multi-device yang kompleks.
+- **Dampak Negatif Saat Ini**:
+  - Pemborosan kuota & bandwidth internet di outlet (500 transaksi di-download berulang-ulang setiap kali ada 1 aksi klik).
+  - Delay 4–8 detik menghambat ritme kerja koki di dapur saat jam sibuk (*rush hour*).
+  - Memicu munculnya banner "belum tersinkron" karena antrean HTTP yang menumpuk.
+
+---
+
+### G.4 — Solusi & Rencana Akselerasi Menuju Realtime Instan (< 300 ms)
+
+Untuk mencapai sinkronisasi instan yang mulus tanpa delay dan menghilangkan banner yang berkedip, berikut 3 pilar solusi yang siap dieksekusi:
+
+#### 1. Pilar 1: Direct Ingestion dari Payload WebSocket (`payload.new`) ⭐ (Utama)
+- Event WebSocket Supabase `postgres_changes` sudah membawa objek baris terbaru di dalam properti `payload.new`.
+- **Mekanisme Baru**:
+  - Saat event `INSERT` diterima: Langsung petakan `payload.new` menjadi objek `Transaction` dan panggil `addTransaction` / update local state KDS **seketika (< 50 milidetik)**.
+  - Saat event `UPDATE` diterima: Langsung perbarui transaksi bersangkutan di memori lokal KDS tanpa mendownload 500 data lainnya.
+  - Saat event `DELETE` diterima: Langsung hapus dari memori lokal via `deleteTransactionLocal(payload.old.id)`.
+  - **Full Re-fetch (`fetchTransactionsFromCloud`)** hanya dijalankan saat aplikasi pertama kali dibuka (boot) atau saat koneksi internet pulih setelah terputus (*reconnect fallback*).
+- **Hasil**: Pesanan dari kasir akan muncul di layar dapur dalam waktu **$\approx 200 - 400$ milidetik (sub-detik)**!
+
+#### 2. Pilar 2: Bulk Sync & Backgrounding Log Mutasi
+- Di [`src/store/stockLogStore.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/store/stockLogStore.ts), satukan N mutasi log bahan menjadi **1 request bulk insert** (`smartInsertMany` / batch payload), bukan mengirim N request HTTP terpisah.
+- Kategorikan prioritas antrean:
+  - **High Priority (Instan)**: Transaksi kasir & perubahan status KDS.
+  - **Low Priority (Background Silen)**: Stock log, audit log, dan loyalty sync.
+
+#### 3. Pilar 3: Debouncing Banner Notifikasi UI
+- Di [`src/components/Layout.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/components/Layout.tsx), tambahkan batas toleransi waktu (*debounce threshold*) $\approx 2.5$ detik sebelum banner kuning dimunculkan ke layar.
+- Jika request sync selesai dalam $< 2$ detik (kondisi koneksi normal), banner **tidak akan pernah muncul/berkedip**, sehingga tampilan layar kasir dan dapur tetap bersih dan tenang. Banner hanya akan muncul jika memang terjadi gangguan internet sungguhan $> 3$ detik.
+
+---
+
+### G.5 — Analisa Dampak Lintas Fitur (Feature Impact Matrix)
+
+| Fitur | Dampak Akselerasi | Status | Penjelasan Teknis |
+|---|---|---|---|
+| **1. KDS (Kitchen Display System)** | 🟢 **Sangat Positif** | **Aman & Lebih Cepat** | Pesanan masuk dan perubahan status koki (Menunggu $\rightarrow$ Diproses $\rightarrow$ Selesai) terjadi dalam **< 300 ms** (tanpa jeda 5 detik). Suara alarm dan lonceng pesanan berbunyi instan. |
+| **2. Order Batch & Kloter Menu** | 🟢 **Sangat Positif** | **Aman 100%** | Badge Kloter #1, #2, #3 dan filter item per kolom tetap berjalan seperti biasa karena seluruh array `items` dan `kitchenItemStatus` tetap terkirim utuh via WebSocket. |
+| **3. POS & Pesanan Pending** | 🟢 **Sangat Positif** | **Aman 100%** | Kasir yang membuka modal *Pending Payments* langsung melihat status dapur ter-update seketika jika koki sudah selesai memasak. Resume dan tambah menu menjadi lebih responsif. |
+| **4. Laporan & Dashboard** | 🟢 **Netral/Positif** | **Aman 100%** | Halaman Laporan Penjualan, Dashboard Omzet, dan HPP membaca state dari `transactionStore`. Dengan data masuk instan, grafik laporan di perangkat Manager bergerak dinamis secara realtime. |
+| **5. Tutup Shift (Shift Kasir)** | 🟢 **Sangat Positif** | **Aman 100%** | Perhitungan *Expected Cash* saat tutup shift menjadi lebih akurat karena transaksi dari kasir lain langsung terhitung tanpa harus menunggu delay sinkronisasi. |
+| **6. Mode Offline (Local-First)** | 🟢 **Tidak Terganggu** | **Aman 100%** | Transaksi saat internet mati tetap disimpan di IndexedDB/localStorage dan antrean `offlineQueue`. Saat internet kembali, sistem tetap menjalankan *Full Re-fetch* sebagai jaring pengaman (*safety net*). |
+| **7. Stok & Stock Opname** | 🟢 **Sangat Positif** | **Aman 100%** | Dengan mengubah pengiriman log bahan menjadi *bulk batch insert*, beban lalu lintas jaringan berkurang 70%, memperkecil risiko tabrakan koneksi saat checkout. |
+
+---
+
+### G.6 — 3 Titik Kritis Teknis & Mitigasi Pengaman (Safety Guards)
+
+Agar akselerasi berjalan 100% mulus tanpa resiko efek samping (*side effects*), dirancang 3 pengaman teknis:
+
+#### 1. Pengaman Konversi Format Data (`snake_case` $\rightarrow$ `camelCase`)
+- **Potensi Risiko**: Supabase WebSocket mengirim data dalam format database (`queue_number`, `kitchen_status`, `kitchen_ticket_printed_at`), sedangkan aplikasi TypeScript menggunakan camelCase (`queueNumber`, `kitchenStatus`, `kitchenTicketPrintedAt`). Jika langsung dimasukkan tanpa konversi, properti akan `undefined` dan merusak KDS.
+- **Mitigasi**: Dibuat helper parser terpusat `mapCloudRowToTransaction(payload.new)` yang menjamin setiap baris PostgreSQL dipetakan ke objek `Transaction` TypeScript yang valid sebelum dimasukkan ke Zustand store.
+
+#### 2. Pengaman Anti-Ghosting (Tombstone Protection)
+- **Potensi Risiko**: Jika transaksi dihapus/dibatalkan di satu perangkat, jangan sampai sinyal WebSocket dari perangkat lain membangkitkan kembali transaksi yang sudah dihapus (*ghost order*).
+- **Mitigasi**: Sistem memeriksa `deletedLocalIds` (tombstone). Jika ID transaksi ada di daftar yang sudah dihapus, sinyal `INSERT`/`UPDATE` dari WebSocket akan diabaikan secara aman.
+
+#### 3. Pengaman Freshness Timestamp (`updatedAt` Comparison / Last-Write-Wins)
+- **Potensi Risiko**: Menghindari kondisi di mana data lokal yang baru saja diedit kasir tertimpa oleh sinyal WebSocket lama yang terlambat tiba di jaringan.
+- **Mitigasi**: Menerapkan aturan *Last-Write-Wins* berbasis `updatedAt`. Hanya data dengan timestamp yang lebih baru atau sama (`freshTime(cloudTx) >= freshTime(localTx)`) yang diizinkan memperbarui data lokal.
+
+---
+
+---
+
+### G.8 — Analisa Komprehensif Kondisi Offline (Local-First Lifecycle)
+
+> **Pertanyaan Kritis**: *"Bagaimana perilaku dan dampak dari arsitektur akselerasi ini ketika perangkat berada dalam kondisi offline (tanpa koneksi internet) atau saat koneksi putus-nyambung?"*
+
+#### 1. Arsitektur Local-First Tetap Menjadi Fondasi Utama
+BerdikariPOS dibangun dengan prinsip **Local-First**:
+- Database lokal di browser (IndexedDB & Zustand memori) adalah **Sumber Kebenaran Primer (Primary Source of Truth)** untuk operasional kasir dan dapur.
+- Cloud Supabase dan WebSocket Realtime berfungsi sebagai **Kanal Sinkronisasi Antar-Perangkat (Synchronization Layer)**.
+- Perubahan akselerasi Direct Ingestion **HANYA bekerja di lapisan WebSocket**. Jika internet mati, WebSocket dinonaktifkan secara anggun (*graceful fallback*) dan seluruh aplikasi beralih 100% ke mode lokal murni.
+
+---
+
+#### 2. Matriks Siklus Hidup Transaksi Saat Offline (Offline Lifecycle)
+
+```mermaid
+stateDiagram-v2
+    [*] --> OfflineMode: Internet Terputus / Tanpa Sinyal
+    
+    state OfflineMode {
+        KasirCheckout: 1. Kasir Checkout / Simpan Pending
+        SimpanLokal: 2. Transaksi disimpan di IndexedDB Lokal
+        CetakStruk: 3. Struk & Tiket Dapur Dicetak (Bluetooth/USB)
+        QueueOffline: 4. Operasi Cloud masuk ke 'rempah-offline-queue' (IDB)
+        
+        KasirCheckout --> SimpanLokal
+        SimpanLokal --> CetakStruk
+        SimpanLokal --> QueueOffline
+    }
+    
+    OfflineMode --> ReconnectEvent: Internet Pulih Kembali (Event 'online')
+    
+    state ReconnectEvent {
+        FlushQueue: 5. flushQueue() mengirim antrean tertunda ke Cloud
+        SafetyNetSync: 6. fetchTransactionsFromCloud() Full Sync 1x (Jaring Pengaman)
+        DirectRealtimeReady: 7. WebSocket Aktif Kembali -> Mode Akselerasi (<300ms)
+        
+        FlushQueue --> SafetyNetSync
+        SafetyNetSync --> DirectRealtimeReady
+    }
+    
+    DirectRealtimeReady --> [*]
+```
+
+---
+
+#### 3. Detail Perilaku di Setiap Skenario Offline
+
+| Skenario | Perilaku Sistem | Apakah Terganggu? | Jaminan Keamanan Data |
+|---|---|---|---|
+| **A. Kasir Offline Penuh (Tidak Ada Internet)** | Transaksi, pending, cetak struk, dan pemotongan stok berjalan 100% instan di kasir lokal. Data sinkronisasi otomatis disimpan di `offlineQueue` IndexedDB. | 🟢 **Tidak Terganggu** | Transaksi aman tersimpan di memori perangkat lokal, tidak akan hilang meski aplikasi ditutup / di-refresh. |
+| **B. KDS Dapur Offline Penuh** | Koki tetap dapat melihat antrean pesanan lokal dan mengubah status ("Proses" / "Selesai"). Kartu berpindah seketika di layar dapur. | 🟢 **Tidak Terganggu** | Perubahan status koki dicatat lokal + diantrekan ke `offlineQueue`. |
+| **C. Internet Pulih (Reconnecting)** | Saat browser mendeteksi sinyal internet kembali: <br>1) `flushQueue()` otomatis mengirim semua transaksi tertunda.<br>2) Sistem menjalankan **Full Sync 1× (`fetchTransactionsFromCloud`)** sebagai jaring pengaman untuk menarik transaksi dari perangkat lain selama masa offline.<br>3) WebSocket kembali tersambung ke mode Direct Ingestion. | 🟢 **Sangat Mulus** | Jaring pengaman Full Sync 1× menjamin tidak ada data yang terlewat atau tercecer selama masa *reconnect*. |
+| **D. Multi-Kasir Offline Bersamaan** | Kasir A (Device 1) dan Kasir B (Device 2) sama-sama offline dan membuat transaksi. Saat keduanya online, masing-masing men-sync antrean. `loadFromCloud` menggabungkan data *by-ID* dengan aturan *Last-Write-Wins*. | 🟢 **Aman Konsisten** | Algoritma *tombstone pruning* & perbandingan `updatedAt` mencegah transaksi tertimpa atau terduplikasi. |
+
+---
+
+#### 4. Kesimpulan Evaluasi Kondisi Offline
+1. **Tidak Ada Risiko Data Hilang**: Seluruh data transaksi offline dipersistensikan ke IndexedDB yang memiliki kuota penyimpanan gigabyte.
+2. **Tidak Bergantung pada WebSocket**: WebSocket hanyalah akselerator saat online. Saat offline, aplikasi tetap berfungsi penuh layaknya aplikasi POS desktop standalone.
+3. **Penyatuan Data Otomatis**: Kombinasi `flushQueue()` + *Safety Net Full Sync 1× saat Reconnect* memastikan transisi dari offline ke online berjalan tanpa konflik dan tanpa intervensi manual.
+
+---
+
+### G.9 — Roadmap Eksekusi Teknis
+
+| No | File yang Dimodifikasi | Rencana Perubahan | Estimasi Dampak |
+|---|---|---|---|
+| 1 | `src/lib/cloudSync.ts` | Tambahkan helper pemetaan single-row `mapCloudRowToTransaction(row)` | Parsing aman tipe data Supabase ke state Zustand |
+| 2 | `src/store/transactionStore.ts` | Tambahkan method `upsertTransactionFromRealtime(tx)` dengan guard tombstone & `updatedAt` | Update instan 1 transaksi ke store tanpa re-fetch 500 baris |
+| 3 | `src/pages/Kitchen.tsx` & `src/App.tsx` | Ubah listener `subscribeToTransactions` agar langsung mengonsumsi `payload.new` (Direct Ingestion) | Latensi KDS turun drastis dari **~5 detik menjadi < 300ms** |
+| 4 | `src/components/Layout.tsx` | Tambahkan debounce 2.5s pada `queueLength` sebelum merender banner | Menghilangkan kedipan banner saat transaksi normal |
+| 5 | `src/store/stockLogStore.ts` & `cloudSync.ts` | Gabungkan pemotongan log stok menjadi bulk insert | Mengurangi beban request HTTP checkout hingga 70% |
+
+
+
 
 

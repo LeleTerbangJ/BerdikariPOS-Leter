@@ -46,6 +46,8 @@ interface TransactionState {
   getNextQueueNumber: () => Promise<number>;
   cancelPendingTransaction: (id: string) => void;
   loadFromCloud: (transactions: Transaction[], fullSync?: boolean) => void;
+  // 🏷️ v4.9.2: Ingestion instan dari payload WebSocket Realtime (< 300ms)
+  upsertTransactionFromRealtime: (tx: Transaction) => void;
 }
 
 function getTodayDateStr(): string {
@@ -336,6 +338,55 @@ export const useTransactionStore = create<TransactionState>()(
             nextQueueNumber: newNextQueue,
             lastQueueDate: today,
             deletedLocalIds: remainingTombstones,
+            confirmedSyncIds: Array.from(confirmed),
+          };
+        });
+      },
+
+      // 🏷️ v4.9.2: Ingestion instan dari WebSocket Supabase Realtime (< 300ms)
+      upsertTransactionFromRealtime: (cloudTx: Transaction) => {
+        set((s) => {
+          // 1. Tombstone guard: jangan bangkitkan transaksi yang sudah dihapus/rollback lokal
+          if ((s.deletedLocalIds || []).includes(cloudTx.id)) {
+            return {};
+          }
+
+          const existingIdx = s.transactions.findIndex((t) => t.id === cloudTx.id);
+          const freshTime = (tx: Transaction): number =>
+            new Date((tx.updatedAt as string | undefined) || tx.date).getTime();
+
+          // 2. Last-Write-Wins guard: jika data lokal lebih baru dari sinyal cloud yang tiba, pertahankan lokal
+          if (existingIdx !== -1) {
+            const localTx = s.transactions[existingIdx];
+            if (freshTime(localTx) > freshTime(cloudTx)) {
+              return {};
+            }
+          }
+
+          let updatedTransactions: Transaction[];
+          if (existingIdx !== -1) {
+            updatedTransactions = [...s.transactions];
+            updatedTransactions[existingIdx] = cloudTx;
+          } else {
+            updatedTransactions = [cloudTx, ...s.transactions];
+          }
+
+          // Sort by date descending
+          updatedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+          // Recalculate nextQueueNumber
+          const today = getTodayDateStr();
+          const todayTxs = updatedTransactions.filter((t) => toLocalDateKey(t.date) === today);
+          const maxQueue = todayTxs.reduce((max, t) => Math.max(max, t.queueNumber || 0), 0);
+          const newNextQueue = Math.max(s.nextQueueNumber, maxQueue + 1);
+
+          const confirmed = new Set(s.confirmedSyncIds);
+          confirmed.add(cloudTx.id);
+
+          return {
+            transactions: updatedTransactions,
+            nextQueueNumber: newNextQueue,
+            lastQueueDate: today,
             confirmedSyncIds: Array.from(confirmed),
           };
         });

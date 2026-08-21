@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { safeStorage } from '../utils/safeStorage';
 import { capEntries, DEFAULT_STOCK_LOG_CAP } from '../utils/storagePrune';
-import { syncStockLog, fetchStockLogsFromCloud } from '../lib/cloudSync';
+import { syncStockLog, syncStockLogsBulk, fetchStockLogsFromCloud } from '../lib/cloudSync';
 
 export type StockLogType = 'deduct' | 'add' | 'adjust' | 'import';
 
@@ -22,6 +22,8 @@ export interface StockLogEntry {
 interface StockLogState {
   logs: StockLogEntry[];
   addLog: (entry: StockLogEntry) => void;
+  // 🏷️ v4.9.2: Tambah bulk logs untuk efisiensi jaringan
+  addLogsBulk: (entries: StockLogEntry[]) => void;
   getLogsByItem: (inventoryId: string) => StockLogEntry[];
   clearOldLogs: (daysToKeep?: number) => void;
   loadFromCloud: () => Promise<void>;
@@ -36,6 +38,13 @@ export const useStockLogStore = create<StockLogState>()(
         set((s) => ({ logs: capEntries([entry, ...s.logs], DEFAULT_STOCK_LOG_CAP) })); // v4.5 TO DO 6.1: cap lokal 500 (selaras limit fetch cloud 500)
         // BUG-C4 fix: Sync stock logs to cloud
         syncStockLog(entry);
+      },
+
+      // 🏷️ v4.9.2: Catat banyak log stok sekaligus dalam 1 mutasi state & 1 request bulk sync
+      addLogsBulk: (entries) => {
+        if (!entries || entries.length === 0) return;
+        set((s) => ({ logs: capEntries([...entries, ...s.logs], DEFAULT_STOCK_LOG_CAP) }));
+        syncStockLogsBulk(entries);
       },
 
       getLogsByItem: (inventoryId) =>

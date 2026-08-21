@@ -25,6 +25,7 @@ vi.mock('../lib/cloudSync', () => ({
   deleteInventoryCloud: vi.fn().mockResolvedValue(true),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn().mockResolvedValue(true),
+  syncStockLogsBulk: vi.fn().mockResolvedValue(true),
   syncAuditLog: vi.fn().mockResolvedValue(true),
   fetchAuditLogsFromCloud: vi.fn().mockResolvedValue([]),
 }));

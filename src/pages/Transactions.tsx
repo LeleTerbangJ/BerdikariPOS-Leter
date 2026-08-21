@@ -8,7 +8,7 @@ import { useCustomerStore } from '../store/customerStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
-import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
+import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud, mapCloudRowToTransaction } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
@@ -50,7 +50,7 @@ type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Transactions() {
   // v4.7 TO DO 13.7 (O-5): confirmedSyncIds — badge "Belum Sync" per transaksi
-  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta, confirmedSyncIds } = useTransactionStore();
+  const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta, confirmedSyncIds, deleteTransactionLocal, upsertTransactionFromRealtime } = useTransactionStore();
   // v4.7 TO DO 18.2 (Prioritas 18): nomor antrean yang muncul > 1× di hari yang sama (2 kasir offline)
   const dupQueueNumbers = useMemo(() => findDuplicateQueueNumbers(transactions), [transactions]);
   const { currentUser } = useAuthStore();
@@ -88,10 +88,10 @@ export default function Transactions() {
   const [customDateTo, setCustomDateTo] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | TxStatus>('all');
-  const [perPage, setPerPage] = useState(10);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
 
-  // Real-time sync: subscribe to transaction changes from other devices
+  // Sync with cloud on mount + real-time subscription
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -101,8 +101,14 @@ export default function Transactions() {
       });
     };
 
-    const channel = subscribeToTransactions(() => {
-      refreshFromCloud(true); // fullSync: cloud is authoritative
+    // 🏷️ v4.9.2: Direct Ingestion dari WebSocket (< 300ms)
+    const channel = subscribeToTransactions((payload: any) => {
+      if (payload?.eventType === 'DELETE' && payload.old?.id) {
+        deleteTransactionLocal(payload.old.id);
+      } else if (payload?.new) {
+        const tx = mapCloudRowToTransaction(payload.new);
+        upsertTransactionFromRealtime(tx);
+      }
     });
 
     // v4.7 TO DO 13.7 (O-5): saat koneksi pulih, tarik cloud → confirmedSyncIds diperbarui

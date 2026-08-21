@@ -19,6 +19,7 @@ vi.mock('../lib/cloudSync', () => ({
   deleteInventoryCloud: vi.fn().mockResolvedValue(true),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn().mockResolvedValue(true),
+  syncStockLogsBulk: vi.fn().mockResolvedValue(true),
   syncAuditLog: vi.fn().mockResolvedValue(true),
   fetchAuditLogsFromCloud: vi.fn().mockResolvedValue([]),
 }));
@@ -32,13 +33,12 @@ function makeItem(menuId: string, qty: number): CartItem {
     menuId,
     name: `Menu ${menuId}`,
     basePrice: 10000,
-    price: 10000,
     quantity: qty,
-    temperature: 'Normal',
+    temperature: 'Dingin',
     sugar: 'Normal',
     addons: [],
     subtotal: 10000 * qty,
-  } as CartItem;
+  };
 }
 
 function makeTx(id: string, date: string, items: CartItem[], status = 'Pending'): Transaction {

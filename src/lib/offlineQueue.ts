@@ -602,3 +602,32 @@ export async function smartInsert(table: string, data: Record<string, any>): Pro
     return false;
   }
 }
+
+// 🏷️ v4.9.2: Bulk insert untuk mengurangi round-trip HTTP REST API (misal multi-stock log)
+export async function smartInsertMany(table: string, items: Record<string, any>[]): Promise<boolean> {
+  if (!isSupabaseConfigured || items.length === 0) return false;
+
+  if (!navigator.onLine) {
+    for (const data of items) {
+      addToQueue({ table, action: 'insert', data });
+    }
+    return false;
+  }
+
+  try {
+    const { error } = await supabase.from(table).insert(items);
+    if (error) {
+      for (const data of items) {
+        addToQueue({ table, action: 'insert', data });
+      }
+      return false;
+    }
+    return true;
+  } catch {
+    for (const data of items) {
+      addToQueue({ table, action: 'insert', data });
+    }
+    return false;
+  }
+}
+

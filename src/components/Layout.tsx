@@ -94,6 +94,8 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [queueLength, setQueueLength] = useState(getQueueLength());
+  // 🏷️ v4.9.2: Debounce 2.5s untuk antrean transient agar banner tidak berkedip saat checkout normal
+  const [debouncedQueueLength, setDebouncedQueueLength] = useState(getQueueLength());
   // v4.7 TO DO 13.2 (O-3): daftar op yang gagal permanen — jangan di-drop diam-diam
   const [failedCount, setFailedCount] = useState(getFailedOpsCount());
   const [showFailedModal, setShowFailedModal] = useState(false);
@@ -109,6 +111,17 @@ export default function Layout() {
     }, 4000);
     return () => clearTimeout(t);
   }, [cloudStatus]);
+
+  useEffect(() => {
+    if (queueLength === 0) {
+      setDebouncedQueueLength(0);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedQueueLength(queueLength);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [queueLength]);
 
   useEffect(() => {
     setQueueChangeListener((count) => {
@@ -529,9 +542,9 @@ export default function Layout() {
         {/* Printer Status Banner — monitors Bluetooth connections */}
         <PrinterStatusBanner />
 
-        {/* v4.7 TO DO 13.4 (O-4): banner global offline / belum sync — TERLIHAT di semua
+        {/* v4.7 TO DO 13.4 (O-4) & v4.9.2: banner global offline / belum sync — TERLIHAT di semua
             device & role (tidak bergantung sidebar yang bisa collapsed di mobile) */}
-        {(cloudStatus === 'disconnected' || failedCount > 0 || queueLength > 0) && (
+        {(cloudStatus === 'disconnected' || failedCount > 0 || debouncedQueueLength > 0) && (
           <button
             onClick={async () => {
               if (failedCount > 0) {
@@ -568,7 +581,7 @@ export default function Layout() {
               </>
             ) : (
               <>
-                <Clock size={14} /> {queueLength} data belum tersinkron — klik untuk kirim sekarang
+                <Clock size={14} /> {debouncedQueueLength} data belum tersinkron — klik untuk kirim sekarang
               </>
             )}
           </button>
