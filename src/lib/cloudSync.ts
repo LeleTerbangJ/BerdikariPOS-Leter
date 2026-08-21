@@ -14,7 +14,7 @@ export { smartUpsert, smartUpdate, smartDelete, smartInsert };
 import type { 
   User, InventoryItem, Menu, Transaction, Customer, 
   CashierShift, Promo, AuditLogEntry, AppSettings, LoyaltySettings,
-  StockOpname, CashMovement
+  StockOpname, CashMovement, CartItem
 } from '../types';
 import type { StockLogEntry } from '../store/stockLogStore';
 import { diagnoseCashMovementWriteError, CASH_MOVEMENTS_POLICY_SQL } from '../utils/cashMovementPolicy';
@@ -659,7 +659,17 @@ export async function syncTransaction(tx: Transaction): Promise<boolean> {
 
 export async function syncTransactionStatus(id: string, kitchenStatus: string) {
   if (!isSupabaseConfigured) return;
-  await smartUpdate('transactions', { kitchen_status: kitchenStatus }, 'id', id);
+  await smartUpdate('transactions', { kitchen_status: kitchenStatus, updated_at: new Date().toISOString() }, 'id', id);
+}
+
+// 🏷️ v4.9: Sinkronisasi atomik status dapur & status item ke cloud dalam 1 query (anti-race condition)
+export async function syncTransactionKitchenStatus(id: string, kitchenStatus: string, items: CartItem[]) {
+  if (!isSupabaseConfigured) return;
+  await smartUpdate('transactions', {
+    kitchen_status: kitchenStatus,
+    items: items,
+    updated_at: new Date().toISOString(),
+  }, 'id', id);
 }
 
 export async function syncTransactionTxStatus(id: string, txStatus: string) {

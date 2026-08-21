@@ -1,14 +1,14 @@
-# 🧪 Panduan Tes Manual — Pesanan Pending & KDS dengan Sistem Order Batch (v4.9)
+# 🧪 Panduan Tes Manual — Pesanan Pending & KDS dengan Sistem Order Batch (v4.9.1)
 
-Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Menu (Order Batch), dan Sinkronisasi KDS** berjalan 100% akurat dan deterministik menggunakan sistem **Kloter Pesanan (Order Batch)**. Ikuti urutan A → B → C → D → E → F → G (≈ 15–20 menit).
+Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Menu (Order Batch), Sinkronisasi KDS Realtime, dan Hak Akses Role** berjalan 100% akurat dan deterministik. Ikuti urutan A → B → C → D → E → F → G → H (≈ 15–20 menit).
 
 ---
 
-## 0. Persiapan & Arsitektur Order Batch
+## 0. Persiapan & Akun Pengujian
 
-- **2 Perangkat**: 
-  - Device 1 = Kasir (`kasir`/`kasir123`).
-  - Device 2 = Dapur/KDS (`manager`/`manager123`).
+- **2 Perangkat / 2 Tab Browser**: 
+  - Device / Tab 1 = Kasir (`kasir`/`kasir123`) atau Manager (`manager`/`manager123`).
+  - Device / Tab 2 = Dapur / KDS dengan akun Acaraki (`acaraki`/`acaraki123`) atau Manager.
 - Buka **POS** di Device 1, buka **Kitchen Display System (KDS)** di Device 2.
 - Pengaturan Cetak: **Settings → Pengaturan Cetak → Pencetakan Pesanan Gantung → "Tanyakan Pilihan Cetak saat Simpan Pending"**.
 - Pengaturan Printer Dapur: Pastikan printer Dapur/Bar aktif di **Settings → Printer Dapur** (atau gunakan fallback browser print otomatis).
@@ -16,7 +16,7 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
   1. Nasi Goreng (Rp15.000)
   2. Es Teh (Rp5.000)
   3. Ayam Bakar (Rp20.000)
-- **DevTools (F12)** di kedua perangkat — tab **Console** untuk memantau log `[AtomicEngine]` dan `[PrintReceipt]`.
+- **DevTools (F12)** di kedua perangkat — tab **Console** untuk memantau log `[AtomicEngine]`, `[CloudSync]`, dan `[PrintReceipt]`.
 
 ---
 
@@ -48,6 +48,7 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
    - **Hasil yang diharapkan**: ✅ Item berpindah ke kolom **Sedang Diproses** dengan badge 🔵 **Diproses**.
 2. Klik tombol **✅ Selesai** pada kedua item.
    - **Hasil yang diharapkan**: ✅ Item berpindah ke kolom **Selesai** dengan teks tercoret dan badge 🟢 **Selesai**.
+   - **Hasil yang diharapkan**: ✅ Di background, mutasi `kitchenItemStatus: 'done'` dan `updatedAt` tersinkronisasi ke cloud database.
 
 **Hasil akhir B**: ✅ Seluruh item Batch 1 sudah berstatus **Selesai** di KDS.
 
@@ -70,9 +71,9 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
    - **Hasil yang diharapkan**: 🚫 Nasi Goreng dan Es Teh **TIDAK ikut tercetak ulang** (anti-tiket dobel).
    - **Header Tiket**: Menampilkan `[BATCH #2 - TAMBAHAN #1]`.
 5. **Device 2 (KDS)**: Amati layar KDS.
-   - **Hasil yang diharapkan**: ✅ **Nasi Goreng & Es Teh (Batch 1)**: TETAP berada di kolom **Selesai** (tidak di-reset).
+   - **Hasil yang diharapkan**: ✅ **Nasi Goreng & Es Teh (Batch 1)**: TETAP berada di kolom **Selesai** (tidak di-reset ke Menunggu).
    - **Hasil yang diharapkan**: ✅ **Ayam Bakar (Batch 2)**: Muncul di kolom **Antrean Menunggu** dengan badge ungu **Kloter #2** dan badge 🆕 **Tambahan**.
-   - **Hasil yang diharapkan**: ✅ Terdapat catatan informatif di kartu: *"Pesanan tambahan untuk meja/antrean ini — item sebelumnya tetap berada di kolom Selesai/Diproses"*.
+   - **Hasil yang diharapkan**: ✅ Kartu di kolom Antrean Menunggu menampilkan badge **🔄 Pesanan Tambahan**.
 
 **Hasil akhir C**: ✅ Sistem Order Batch mengisolasi Batch 1 dan Batch 2 secara sempurna. Dapur hanya menerima tiket dan antrean untuk menu tambahan baru.
 
@@ -95,24 +96,24 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
 
 ## E. Bayar Pesanan Pending (Finalisasi Transaksi)
 
-**Tujuan**: Memastikan saat transaksi pending dibayar lunas:
-1. Status transaksi berubah menjadi **Selesai**.
+**Tujuan**: Memastikan saat transaksi pending dibayar lunas di Kasir:
+1. Status transaksi berubah menjadi **Selesai** (lunas).
 2. Seluruh batch (Batch 1 + Batch 2) terkonsolidasi menjadi 1 struk pembayaran kasir lengkap.
-3. Transaksi **TIDAK muncul kembali ke Antrean Menunggu** di KDS.
+3. Transaksi **TETAP berstatus Selesai di KDS dan TIDAK PERNAH muncul kembali ke Antrean Menunggu**.
 
-1. **Device 2 (KDS)**: Klik **🔥 Proses** lalu **✅ Selesai** pada item **Ayam Bakar (Batch 2)** sehingga seluruh item pada pesanan telah selesai.
+1. **Device 2 (KDS)**: Klik **🔥 Proses** lalu **✅ Selesai** pada item **Ayam Bakar (Batch 2)** sehingga seluruh item pada pesanan telah selesai dimasak.
 2. **Device 1 (Kasir)**:
    - Buka **Pending Payments** → cari pesanan meja tersebut → klik **"Lanjutkan Pembayaran"**.
-   - Pilih metode pembayaran (mis. Tunai) → klik **Bayar**.
+   - Klik **Bayar** → pilih metode pembayaran (mis. Tunai) → selesaikan pembayaran.
 3. **Cek Struk Kasir**:
    - **Hasil yang diharapkan**: ✅ Struk kasir mencetak rincian lengkap seluruh pesanan (Nasi Goreng × 1, Es Teh × 1, Ayam Bakar × 1).
 4. **Device 2 (KDS)**: Amati layar KDS.
-   - **Hasil yang diharapkan**: ✅ Transaksi **TETAP berada di kolom Selesai** (atau hilang dari antrean aktif jika filter hanya menampilkan active orders).
+   - **Hasil yang diharapkan**: ✅ Transaksi **TETAP berada di kolom Selesai**.
    - **Hasil yang diharapkan**: 🚫 Transaksi yang sudah lunas **TIDAK PERNAH muncul kembali** di kolom Antrean Menunggu.
 5. **Device 1 (Kasir)**: Buka riwayat **Transaksi**.
-   - **Hasil yang diharapkan**: ✅ Status transaksi = **Selesai** (lunas).
+   - **Hasil yang diharapkan**: ✅ Status transaksi = **Selesai** (lunas) dengan rincian semua kloter.
 
-**Hasil akhir E**: ✅ Transaksi lunas berkonsolidasi bersih, struk lengkap, dan status KDS tidak mengalami regresi.
+**Hasil akhir E**: ✅ Transaksi lunas berkonsolidasi bersih, struk lengkap, dan status KDS tidak mengalami regresi ke Antrean Menunggu.
 
 ---
 
@@ -130,6 +131,7 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
    - Di KDS: Nasi Goreng & Es Teh tetap di **Selesai**, Kerupuk muncul di **Antrean Menunggu** dengan badge **Kloter #3**.
 6. **Finalize**: Kasir menyelesaikan pembayaran.
    - Struk kasir memuat Batch 1, Batch 2, dan Batch 3 secara rapi.
+   - KDS mempertahankan seluruh item pada status **Selesai**.
 
 **Hasil akhir F**: ✅ Multi-kloter berjalan dinamis tanpa batas dan selalu akurat.
 
@@ -142,7 +144,19 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
 1. **Device 1 (Kasir)**: Simpan Pending dengan Cetak Dapur Saja.
 2. **Device 2 (KDS)**: Pesanan muncul di Antrean Menunggu dalam **< 5–10 detik**.
 3. **Device 2 (KDS)**: Klik "Selesai" pada salah satu item.
-4. **Device 1 (Kasir)**: Resume pesanan tersebut → sistem membaca status terbaru dari cloud sehingga item yang sudah selesai tidak ter-reset saat kasir menambah menu baru.
+4. **Device 1 (Kasir)**: Resume pesanan tersebut → sistem membaca status terbaru dari cloud (dengan `updatedAt` yang akurat) sehingga item yang sudah selesai tidak ter-reset saat kasir menambah menu baru.
+
+---
+
+## H. Pengujian Hak Akses Banner Printer Offline (Role-Based)
+
+**Tujuan**: Memastikan banner peringatan *Printer Offline* hanya muncul pada user yang relevan (Manager dan Kasir) dan tidak mengganggu layar operasional Dapur/Barista (Acaraki).
+
+1. **Login sebagai Kasir / Manager**:
+   - Jika ada printer bluetooth terkonfigurasi namun belum tersambung / offline, banner `[Nama Printer] Offline [Sambungkan Ulang]` tampil di bagian atas layar.
+2. **Login sebagai Acaraki (Dapur / Barista)**:
+   - **Hasil yang diharapkan**: ✅ Banner printer offline di bagian atas aplikasi **TIDAK MUNCUL sama sekali**.
+   - **Hasil yang diharapkan**: ✅ Header KDS tetap menampilkan tombol indikator printer senyap mandiri tanpa mengganggu operasional memasak.
 
 ---
 
@@ -156,6 +170,7 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
 | **Simpan Tanpa Cetak** | Tidak mencetak apapun | **Tidak muncul** di KDS | ✅ Pass |
 | **Finalisasi / Bayar** | Struk kasir mencetak semua item dari seluruh Batch | Transaksi tetap di **Selesai** (tidak kembali ke Menunggu) | ✅ Pass |
 | **Multi-Batch (Batch 3+)** | Header `[BATCH #3 - TAMBAHAN #2]` | Kloter lama tetap pada statusnya, kloter baru masuk Menunggu | ✅ Pass |
+| **Role Acaraki (Dapur)** | - | Banner "Printer Offline" **tidak muncul** pada user Dapur | ✅ Pass |
 
 ---
 
