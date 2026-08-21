@@ -64,7 +64,11 @@ export const useSettingsStore = create<SettingsState>()(
         if (cloudSettings) {
           set((s: SettingsState) => {
             const merged = { ...s.settings };
-            // Printer settings are device-specific (hardware bound) and should NOT be overwritten by cloud
+            // Settings yang bersifat hardware-bound per-device: TIDAK boleh ditimpa cloud.
+            // Contoh: bluetoothDeviceId terikat ke hardware dongle kasir tertentu.
+            // CATATAN: kitchenPrinters adalah konfigurasi outlet/toko (nama printer dapur,
+            // target kategori makanan/minuman) — BUKAN hardware-bound per device, sehingga
+            // harus tersinkron dari cloud agar tidak hilang setelah localStorage dikosongkan.
             const LOCAL_PRINTER_KEYS = [
               'printerEnabled',
               'printerType',
@@ -72,7 +76,7 @@ export const useSettingsStore = create<SettingsState>()(
               'autoPrintOnCheckout',
               'cashierBluetoothDeviceId',
               'cashierBluetoothDeviceName',
-              'kitchenPrinters',
+              // 'kitchenPrinters' — SENGAJA TIDAK DI-EXCLUDE: konfigurasi toko, bukan hardware device
               'autoPrintReceipt',
               'autoPrintKitchen',
               'showLogoOnReceipt',
