@@ -5,7 +5,7 @@ import { useAuthStore } from '../store/authStore';
 import { formatRupiah, formatTime } from '../utils/format';
 import { isSplitSubBill } from '../utils/splitAllocation';
 import { playNewOrderSound, playAlertSound } from '../utils/sound';
-import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud } from '../lib/cloudSync';
+import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud, mapCloudRowToTransaction } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePrinterCrossTab } from '../hooks/usePrinterCrossTab';
@@ -21,10 +21,12 @@ const columns: { status: KitchenStatus; label: string; color: string; icon: any 
 const ALERT_THRESHOLD_MS = 5 * 60 * 1000; // 5 menit
 
 export default function Kitchen() {
-  const { transactions, updateKitchenStatus, updateItemKitchenStatus, lastKdsClearTime, loadFromCloud } = useTransactionStore();
+  const { transactions, updateKitchenStatus, updateItemKitchenStatus, lastKdsClearTime, loadFromCloud, deleteTransactionLocal, upsertTransactionFromRealtime } = useTransactionStore();
   const { shifts } = useShiftStore();
   const { currentUser } = useAuthStore();
   const { settings } = useSettingsStore();
+  const [activeTab, setActiveTab] = useState<'kds' | 'history'>('kds');
+  const [selectedStation, setSelectedStation] = useState<string>('all');
   // TO DO 14.4: status koneksi printer dapur lintas-tab (indikator di header KDS)
   const { getStatus, tryReconnectSilent, isLocalConnected } = usePrinterCrossTab();
   const [reconnectingPrinter, setReconnectingPrinter] = useState<string | null>(null);
@@ -40,10 +42,14 @@ export default function Kitchen() {
 
     const setupSubscription = () => {
       if (channel) unsubscribeChannel(channel);
+      // 🏷️ v4.9.2: Direct Ingestion dari WebSocket Realtime (< 300ms tanpa re-fetch 500 baris)
       channel = subscribeToTransactions((payload: any) => {
-        fetchTransactionsFromCloud().then((cloudTx) => {
-          if (cloudTx) loadFromCloud(cloudTx, true); // fullSync
-        });
+        if (payload?.eventType === 'DELETE' && payload.old?.id) {
+          deleteTransactionLocal(payload.old.id);
+        } else if (payload?.new) {
+          const cloudTx = mapCloudRowToTransaction(payload.new);
+          upsertTransactionFromRealtime(cloudTx);
+        }
       });
     };
 

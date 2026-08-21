@@ -135,11 +135,12 @@ export const useInventoryStore = create<InventoryState>()(
 
       deductStock: (deductions, reason) => {
         const items = get().items;
-        // Log each deduction
+        // 🏷️ v4.9.2: Kumpulkan semua log pemotongan bahan dan kirim bulk
+        const newLogs: StockLogEntry[] = [];
         for (const [invId, amount] of Object.entries(deductions)) {
           const item = items.find((i) => i.id === invId);
           if (item && amount > 0) {
-            useStockLogStore.getState().addLog({
+            newLogs.push({
               id: uuid(),
               inventoryId: invId,
               inventoryName: item.name,
@@ -152,6 +153,9 @@ export const useInventoryStore = create<InventoryState>()(
               date: new Date().toISOString(),
             });
           }
+        }
+        if (newLogs.length > 0) {
+          useStockLogStore.getState().addLogsBulk(newLogs);
         }
         set((s) => ({
           items: s.items.map((i) => {

@@ -13,6 +13,7 @@ vi.mock('../lib/cloudSync', () => ({
   deleteInventoryCloud: vi.fn(),
   fetchInventoryFromCloud: vi.fn().mockResolvedValue([]),
   syncStockLog: vi.fn(),
+  syncStockLogsBulk: vi.fn(),
   fetchStockLogsFromCloud: vi.fn().mockResolvedValue([]),
   syncMenu: vi.fn(),
   deleteMenuCloud: vi.fn(),

@@ -16,7 +16,7 @@ import { useToastStore } from './store/toastStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToTransactions, unsubscribeChannel } from './lib/cloudSync';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToTransactions, unsubscribeChannel, mapCloudRowToTransaction } from './lib/cloudSync';
 import { startAutoBackupScheduler, stopAutoBackupScheduler } from './lib/autoBackupScheduler';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
@@ -153,10 +153,9 @@ export default function App() {
     const txChannel = subscribeToTransactions((payload: any) => {
       if (payload?.eventType === 'DELETE' && payload.old?.id) {
         useTransactionStore.getState().deleteTransactionLocal(payload.old.id);
-      } else {
-        fetchTransactionsFromCloud().then((txs) => {
-          if (txs) useTransactionStore.getState().loadFromCloud(txs, true);
-        });
+      } else if (payload?.new) {
+        const tx = mapCloudRowToTransaction(payload.new);
+        useTransactionStore.getState().upsertTransactionFromRealtime(tx);
       }
     });
 

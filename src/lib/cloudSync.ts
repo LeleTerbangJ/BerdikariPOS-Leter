@@ -9,8 +9,8 @@
  */
 
 import { supabase, isSupabaseConfigured } from './supabase';
-import { smartUpsert, smartUpdate, smartDelete, smartInsert } from './offlineQueue';
-export { smartUpsert, smartUpdate, smartDelete, smartInsert };
+import { smartUpsert, smartUpdate, smartDelete, smartInsert, smartInsertMany } from './offlineQueue';
+export { smartUpsert, smartUpdate, smartDelete, smartInsert, smartInsertMany };
 import type { 
   User, InventoryItem, Menu, Transaction, Customer, 
   CashierShift, Promo, AuditLogEntry, AppSettings, LoyaltySettings,
@@ -774,6 +774,51 @@ export async function allocateQueueNumberCloud(dateStr: string, floor: number): 
   }
 }
 
+// 🏷️ v4.9.2: Helper tunggal terpusat untuk memetakan row database Supabase (snake_case) ke Transaction TypeScript (camelCase)
+export function mapCloudRowToTransaction(row: any): Transaction {
+  return {
+    id: row.id,
+    queueNumber: row.queue_number,
+    date: row.date,
+    items: row.items || [],
+    subtotal: row.subtotal || 0,
+    discount: row.discount || 0,
+    totalAmount: row.total_amount || 0,
+    paymentMethod: row.payment_method,
+    cashReceived: row.cash_received,
+    change: row.change,
+    kitchenStatus: row.kitchen_status,
+    txStatus: row.tx_status,
+    cashierId: row.cashier_id,
+    cashierName: row.cashier_name,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    hpp: row.hpp,
+    tax: row.tax || 0,
+    orderType: row.order_type || undefined,
+    tableNumber: row.table_number || row.table_name || undefined,
+    tableName: row.table_name || row.table_number || undefined,
+    isPending: row.tx_status === 'Pending',
+    refunded: row.refunded || false,
+    refundedAt: row.refunded_at || undefined,
+    refundedAmount: row.refunded_amount || undefined,
+    refundNote: row.refund_note || undefined,
+    refundedById: row.refunded_by_id || undefined,
+    refundedByName: row.refunded_by_name || undefined,
+    pendingNotes: row.pending_notes || undefined,
+    splitParentId: row.split_parent_id || undefined,
+    splitIndex: row.split_index || undefined,
+    totalSplitCount: row.total_split_count || undefined,
+    paidAmount: row.paid_amount || undefined,
+    appliedPromoId: row.applied_promo_id || undefined,
+    voucherCode: row.voucher_code || undefined,
+    promoName: row.promo_name || undefined,
+    promoAmount: row.promo_amount || undefined,
+    kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined,
+    updatedAt: row.updated_at || row.date || undefined,
+  };
+}
+
 export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null> {
   if (!isSupabaseConfigured) { console.log('[CloudSync] Not configured'); return null; }
   try {
@@ -784,51 +829,7 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       .limit(500);
     if (error) { console.error('[CloudSync] Fetch error:', error.message); throw error; }
     console.log('[CloudSync] Fetched', data?.length || 0, 'transactions from cloud');
-    return data?.map((row) => ({
-      id: row.id,
-      queueNumber: row.queue_number,
-      date: row.date,
-      items: row.items,
-      subtotal: row.subtotal,
-      discount: row.discount,
-      totalAmount: row.total_amount,
-      paymentMethod: row.payment_method,
-      cashReceived: row.cash_received,
-      change: row.change,
-      kitchenStatus: row.kitchen_status,
-      txStatus: row.tx_status,
-      cashierId: row.cashier_id,
-      cashierName: row.cashier_name,
-      customerId: row.customer_id,
-      customerName: row.customer_name,
-      hpp: row.hpp,
-      tax: row.tax || 0,
-      orderType: row.order_type || undefined,
-      tableNumber: row.table_number || row.table_name || undefined,
-      tableName: row.table_name || row.table_number || undefined,
-      // v4.5 TO DO 5.10: tx_status adalah otoritatif — kolom is_pending bisa stale (true) untuk
-      // order yang sudah lunas/batal di era sebelum syncTransactionTxStatus menulis is_pending.
-      isPending: row.tx_status === 'Pending',
-      // v4.7 TO DO 11.2 (P0.2): baca balik status refund lintas device
-      refunded: row.refunded || false,
-      refundedAt: row.refunded_at || undefined,
-      refundedAmount: row.refunded_amount || undefined,
-      refundNote: row.refund_note || undefined,
-      refundedById: row.refunded_by_id || undefined,
-      refundedByName: row.refunded_by_name || undefined,
-      pendingNotes: row.pending_notes || undefined,
-      splitParentId: row.split_parent_id || undefined,
-      splitIndex: row.split_index || undefined,
-      totalSplitCount: row.total_split_count || undefined,
-      paidAmount: row.paid_amount || undefined,
-      appliedPromoId: row.applied_promo_id || undefined,
-      voucherCode: row.voucher_code || undefined,
-      promoName: row.promo_name || undefined,
-      promoAmount: row.promo_amount || undefined,
-      kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined,
-      // 🏷️ v4.9: Map updatedAt dari database Supabase agar perbandingan freshness di loadFromCloud akurat
-      updatedAt: row.updated_at || row.date || undefined,
-    })) || null;
+    return data?.map(mapCloudRowToTransaction) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);
     return null;
@@ -1637,6 +1638,24 @@ export async function syncStockLog(entry: StockLogEntry) {
     reason: entry.reason || null,
     date: entry.date,
   });
+}
+
+// 🏷️ v4.9.2: Sinkronisasi bulk log bahan dalam 1 kali insert ke Supabase (mengurangi beban jaringan)
+export async function syncStockLogsBulk(entries: StockLogEntry[]) {
+  if (!isSupabaseConfigured || entries.length === 0) return;
+  const payload = entries.map((entry) => ({
+    id: entry.id,
+    inventory_id: entry.inventoryId,
+    inventory_name: entry.inventoryName,
+    type: entry.type,
+    amount: entry.amount,
+    stock_before: entry.stockBefore,
+    stock_after: entry.stockAfter,
+    unit: entry.unit,
+    reason: entry.reason || null,
+    date: entry.date,
+  }));
+  await smartInsertMany('stock_logs', payload);
 }
 
 export async function fetchStockLogsFromCloud(): Promise<StockLogEntry[] | null> {
