@@ -1,4 +1,4 @@
-# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.8
+# 🤖 Panduan Handoff ke AI Developer Lain — BerdikariPOS v4.8.3
 
 ## Cara Melanjutkan Pengembangan dengan AI Lain (Antigravity, Cursor, dll)
 
@@ -341,7 +341,7 @@ ALTER TABLE settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN DEFAULT FALSE,
 ### 9.6 Status Validasi
 
 - `npx tsc --noEmit` → **0 error**
-- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru); **403/403** setelah 14.1 (36 file, `printerReconnect` +6 — §19.1); **406/406** setelah 14.2+14.3 (37 file, `printerQueue` +3 — §19.2–19.3); **409/409** setelah 14.4 (38 file, `printerCrossTab` +3 — §19.4); **416/416** setelah 14.5+14.6 (39 file, `printerFallback` +7 — §19.5–19.6); **427/427** setelah 15.1 (40 file, `menuValidation` +11 — §20.1); **431/431** setelah 15.3+15.4 (41 file, `printTarget` +4 — §20.3–20.4); **433/433** setelah perluasan 15.3 ke Split Bill (`printSplitReceipt` skipAllPrint — anti tiket dobel, `printTarget` +2 — §20.3); **434/434** setelah desain final dua toggle independen (`skipKitchenPrint`, `printTarget` +1 — §20.3); **441/441** setelah fix bug item pending tidak ter-update (42 file, `pendingUpdateHistory` +3 & `pendingCloudOverwrite` +4 — §21.2); **445/445** setelah updatedAt minimal (43 file, `pendingCloudOverwrite` +4 — §21.2); **447/447** setelah revisi add-on gratis + verifikasi struk (43 file, `digitalReceipt` +1 & `printTarget` +1 — §21.2/revisi 15.1); **449/449** setelah fitur "Semua Dapur" di Edit Menu (43 file, `printTarget` +2 — §21.2/16.2); **460/460** setelah Prioritas 17 (44 file, `pendingResumeContext` +11 — §22.3); **472/472** setelah 18.1 (46 file, `stockAtomicDeduct` +7 & `stockDeductConflict` +5 — §23.1); **491/491** setelah 18.2 (48 file, `queueNumber` +9 & `queueNumberAllocation` +10 — §23.2); **510/510** setelah 18.3 (50 file, `shiftStats` +6 & `shiftStore` +9 + fix tanggal lokal +4 — §23.3); **513/513** setelah 18.4 (50 file, `splitStockSession` +3 — §23.4); **524/524** setelah A4+A6 (50 file, `refund` +6 & `splitStockSession` +5 — §23.5); **532/532** setelah A1–A3 (52 file, `hpp` +6 & `engineRollback` +2 — §23.6); **547/547** setelah A5 (53 file, `inventoryFreshness` +15 — §23.7); **557/557** setelah A7/A8/A9 (53 file, `splitStockSession` +8 & `queueNumber` +2 — §23.8); **566/566** setelah A10 (54 file, `kitchenTicketPrint` +9 — §23.9); **574/574** setelah A11–A13 (55 file, `stockCheck` +2 & `stockNegativeAlert` +3 & `demoTransaction` +3 — §23.10); **582/582** setelah E7 (55 file, `promoStoreUsage` +8 — §23.11); **588/588** setelah 18.5+18.6 (56 file, `syncFreshnessBanner` +6 — §23.12); **593/593** setelah Prioritas 20 (56 file, `shiftStats` +5 — §24.1–24.3: fix shift refund + alert→toast + confirm→ConfirmDialog); **598/598** setelah Prioritas 20.4 (57 file, `dateRange` +5 — §24.5: filter tanggal custom lokal); **602/602** setelah Prioritas 21 (57 file, `kitchenTicketPrint` +4 — §25.1: filtering deltaKitchenItems)
+- `npx vitest run` → **26/26 test lolos** saat sesi v4.4 (bundle, splitAllocation, idempotencyCleanup, stockCheck); **87/87** setelah Prioritas 5 & 6 (9 file — §10.7); **99/99** setelah v4.6 fix Rekap Kas (11 file — §11.6); **106/106** setelah 7.1–7.3 (12 file); **109/109** setelah 7.4–7.5; **121/121** setelah 7.6 scheduler; **125/125** setelah 7.7–7.8 (13 file — §12.5); **139/139** setelah 8.1–8.2 (14 file); **148/148** setelah 8.3–8.4 (15 file — §13.3); **158/158** setelah 9.1–9.2 (16 file); **165/165** setelah 9.3–9.4 (17 file); **169/169** setelah 10.1; **187/187** setelah 10.2–10.3 (18 file); **192/192** setelah 10.4–10.5 (18 file — §14.5); **201/201** setelah P0.1 laporan PPN (19 file); **213/213** setelah P0.2 refund (20 file — §15.5); **231/231** setelah P0.4 struk digital modal (21 file); **235/235** setelah P0.4 Settings auto-kirim WA (21 file — §15.5); **248/248** setelah fitur urutan kategori POS (22 file, `categoryOrder.test.ts` 13 kasus); **258/258** setelah 12.1.1–12.1.2 (23 file, `dataManager.test.ts` 10 kasus — §16.1); **262/262** setelah 12.1.3 + P-A1 (reseedPlan +4 — §16.2); **267/267** setelah 12.1.4–12.1.5 (daftar tabel cloud +5 — §16.3); **284/284** setelah P-A2 (17 test `promoValidation` — §17.1); **300/300** setelah P-A3 (15 `promoReport` + 1 mapping cloud — §17.2); **313/313** setelah P-A4 (13 `discountEngine` — §17.3); **334/334** setelah P-A5 (21 `promoDiscount` — §17.4); **344/344** setelah P-A6 (10 test batas per pelanggan — §17.5); **352/352** setelah P-A7 (8 `receiptPromo` — §17.6); **370/370** setelah P-A8 (18 test loyalty points — §17.7); **377/377** setelah O-1 (7 test `offlineQueueStorage` — §18.1); **384/384** setelah O-2/O-3 (7 test `offlineQueueFailed` — §18.2–18.3); **389/389** setelah O-4/O-5 (5 test `transactionSyncBadge` — §18.5); **396/396** setelah O-6/O-7 (7 test `stockConflict` — §18.7); **397/397** setelah O-10 (urutan kronologis +1 — §18.10; O-8/O-9 diverifikasi via build, tanpa test baru); **403/403** setelah 14.1 (36 file, `printerReconnect` +6 — §19.1); **406/406** setelah 14.2+14.3 (37 file, `printerQueue` +3 — §19.2–19.3); **409/409** setelah 14.4 (38 file, `printerCrossTab` +3 — §19.4); **416/416** setelah 14.5+14.6 (39 file, `printerFallback` +7 — §19.5–19.6); **427/427** setelah 15.1 (40 file, `menuValidation` +11 — §20.1); **431/431** setelah 15.3+15.4 (41 file, `printTarget` +4 — §20.3–20.4); **433/433** setelah perluasan 15.3 ke Split Bill (`printSplitReceipt` skipAllPrint — anti tiket dobel, `printTarget` +2 — §20.3); **434/434** setelah desain final dua toggle independen (`skipKitchenPrint`, `printTarget` +1 — §20.3); **441/441** setelah fix bug item pending tidak ter-update (42 file, `pendingUpdateHistory` +3 & `pendingCloudOverwrite` +4 — §21.2); **445/445** setelah updatedAt minimal (43 file, `pendingCloudOverwrite` +4 — §21.2); **447/447** setelah revisi add-on gratis + verifikasi struk (43 file, `digitalReceipt` +1 & `printTarget` +1 — §21.2/revisi 15.1); **449/449** setelah fitur "Semua Dapur" di Edit Menu (43 file, `printTarget` +2 — §21.2/16.2); **460/460** setelah Prioritas 17 (44 file, `pendingResumeContext` +11 — §22.3); **472/472** setelah 18.1 (46 file, `stockAtomicDeduct` +7 & `stockDeductConflict` +5 — §23.1); **491/491** setelah 18.2 (48 file, `queueNumber` +9 & `queueNumberAllocation` +10 — §23.2); **510/510** setelah 18.3 (50 file, `shiftStats` +6 & `shiftStore` +9 + fix tanggal lokal +4 — §23.3); **513/513** setelah 18.4 (50 file, `splitStockSession` +3 — §23.4); **524/524** setelah A4+A6 (50 file, `refund` +6 & `splitStockSession` +5 — §23.5); **532/532** setelah A1–A3 (52 file, `hpp` +6 & `engineRollback` +2 — §23.6); **547/547** setelah A5 (53 file, `inventoryFreshness` +15 — §23.7); **557/557** setelah A7/A8/A9 (53 file, `splitStockSession` +8 & `queueNumber` +2 — §23.8); **566/566** setelah A10 (54 file, `kitchenTicketPrint` +9 — §23.9); **574/574** setelah A11–A13 (55 file, `stockCheck` +2 & `stockNegativeAlert` +3 & `demoTransaction` +3 — §23.10); **582/582** setelah E7 (55 file, `promoStoreUsage` +8 — §23.11); **588/588** setelah 18.5+18.6 (56 file, `syncFreshnessBanner` +6 — §23.12); **593/593** setelah Prioritas 20 (56 file, `shiftStats` +5 — §24.1–24.3: fix shift refund + alert→toast + confirm→ConfirmDialog); **598/598** setelah Prioritas 20.4 (57 file, `dateRange` +5 — §24.5: filter tanggal custom lokal); **602/602** setelah Prioritas 21 (57 file, `kitchenTicketPrint` +4 — §25.1: filtering deltaKitchenItems); **632/632** setelah Fix 24.1–24.5 (61 file, `kitchenTicketPrint` +4 — §28.5); **633/633** setelah Fix 27.2 cross-device (61 file, `kitchenTicketPrint` +1 — §30.3)
 - `npm run build` → **sukses** (tsc + vite build, PWA generateSW) — diverifikasi setelah migrasi IndexedDB, dan diverifikasi ulang setelah seluruh prioritas 1–10 tuntas (v4.7 — §14.5)
 
 ---
@@ -1190,6 +1190,55 @@ CREATE POLICY "Allow anon read backups" ON storage.objects FOR SELECT TO anon US
 - `npx tsc --noEmit` → **0 error**; `npx vitest run` → **632/632 test lolos** (61 file).
 - `npm run build` → **✅ BERHASIL** (7.33s, 50 chunks, PWA v1.3.0).
 - **TO DO.md**: 25.1 ✅ + 25.2 ✅ + 25.3 ✅ + 25.4 ✅ + 26.1 ✅ (semua selesai).
+
+## 30. Riwayat Pengerjaan v4.8.3 — Fix Cross-Device Pending KDS (27.2 ✅)
+
+> Sesi lanjutan setelah Fix 25–26. Bug: pending order tidak muncul di KDS device lain (manager/dapur) karena race condition cloud sync.
+
+### 30.1 Akar Masalah
+
+Di `triggerPostCommitTasks` (`atomicTransactionEngine.ts`), urutan eksekusi salah:
+
+```
+// SEBELUM FIX (BUG):
+1. await syncTransaction(tx)        // ← tx.kitchenTicketPrintedAt = undefined → cloud = null
+2. updateTxMeta(tx.id, { kitchenTicketPrintedAt })  // ← async, terlambat
+```
+
+Device lain load dari cloud → `kitchenTicketPrintedAt = null` → KDS filter memblokir: `if (t.txStatus === 'Pending' && !t.kitchenTicketPrintedAt) return false`
+
+### 30.2 Perubahan Kode
+
+| File | Perubahan |
+|------|----------|
+| `atomicTransactionEngine.ts` | Pindahkan stamp `kitchenTicketPrintedAt` **SEBELUM** `syncTransaction(tx)` — set langsung di `tx` object + `updateTxMeta` local store |
+| `kitchenTicketPrint.test.ts` | Tambah test cross-device: verifikasi `syncTransaction` dipanggil dengan `kitchenTicketPrintedAt` terisi (type string, bukan null/undefined) |
+
+```
+// SESUDAH FIX:
+1. tx.kitchenTicketPrintedAt = printedAt     // ← stamp di object tx
+2. updateTxMeta(tx.id, { kitchenTicketPrintedAt })  // ← local store
+3. await syncTransaction(tx)                 // ← cloud DAPAT kitchenTicketPrintedAt ✅
+```
+
+### 30.3 Validasi & Status (Fix 27.2)
+
+- `npx tsc --noEmit` → **0 error**; `npx vitest run` → **633/633 test lolos** (61 file).
+- `npm run build` → **✅ BERHASIL**.
+- **TO DO.md**: 27.2 ✅ (selesai).
+- **Commits**: `e29a1d1` (fix kode) + `dc477a3` (docs TO DO.md) di branch `develop`.
+
+### 30.4 Hasil Audit Cloud Sync Lengkap
+
+| Jalur | Sync Function | Race? |
+|-------|---------------|-------|
+| `triggerPostCommitTasks` | `syncTransaction(tx)` | ✅ FIXED (27.2) |
+| `addTransaction` | `syncTransaction(tx)` | ✅ Aman — tx lengkap |
+| `updateKitchenStatus` | `syncTransactionStatus` | ✅ Aman — smartUpdate standalone |
+| `updateItemKitchenStatus` | `syncTransactionStatus` + `syncTransactionMeta` | ✅ Aman — 2 smartUpdate sequential |
+| `updateTxStatus` | `syncTransactionTxStatus` | ✅ Aman — smartUpdate standalone |
+| `updateTxMeta` | `syncTransactionMeta` | ✅ Aman — smartUpdate partial |
+| `backupService` restore | `syncTransaction(tx)` | ✅ Aman — tx dari backup |
 
 ---
 
