@@ -264,5 +264,62 @@ describe('KDS Multi-Column Item Distribution & Delta Splitting (v4.8.4)', () => 
     expect(newList).toHaveLength(1);
     expect(newList[0].quantity).toBe(1);
   });
+
+  it('mergeKitchenItemStatus: transaksi pending yang sudah Done mempertahankan seluruh item sebagai Done saat pelunasan tanpa menu baru', () => {
+    const pendingItems: CartItem[] = [
+      {
+        lineId: 'line-1',
+        menuId: 'm-1',
+        name: 'Pecel Lele',
+        basePrice: 15000,
+        quantity: 1,
+        temperature: 'Dingin',
+        sugar: 'Normal',
+        addons: [],
+        subtotal: 15000,
+      },
+      {
+        lineId: 'line-2',
+        menuId: 'm-2',
+        name: 'Es Teh',
+        basePrice: 5000,
+        quantity: 2,
+        temperature: 'Dingin',
+        sugar: 'Normal',
+        addons: [],
+        subtotal: 10000,
+      },
+    ];
+
+    const cartItems: CartItem[] = [
+      {
+        lineId: 'line-1',
+        menuId: 'm-1',
+        name: 'Pecel Lele',
+        basePrice: 15000,
+        quantity: 1,
+        temperature: 'Dingin',
+        sugar: 'Normal',
+        addons: [],
+        subtotal: 15000,
+      },
+      {
+        lineId: 'line-2',
+        menuId: 'm-2',
+        name: 'Es Teh',
+        basePrice: 5000,
+        quantity: 2,
+        temperature: 'Dingin',
+        sugar: 'Normal',
+        addons: [],
+        subtotal: 10000,
+      },
+    ];
+
+    const merged = mergeKitchenItemStatus(cartItems, pendingItems, 'Done');
+    expect(merged).toHaveLength(2);
+    expect(merged.every((i) => i.kitchenItemStatus === 'done')).toBe(true);
+    expect(merged.some((i) => i.kitchenItemStatus === 'new')).toBe(false);
+  });
 });
 

@@ -602,6 +602,8 @@ export async function syncTransaction(tx: Transaction): Promise<boolean> {
     customer_id: tx.customerId,
     customer_name: tx.customerName,
     hpp: tx.hpp,
+    // 🏷️ v4.9: Stamp updated_at mutasi agar loadFromCloud dapat membandingkan freshness secara akurat
+    updated_at: tx.updatedAt || new Date().toISOString(),
   };
   if (!migrationNeeded.tax) {
     data.tax = tx.tax || 0;
@@ -699,6 +701,7 @@ export async function syncTransactionMeta(id: string, partial: Partial<Transacti
     data.items = partial.items;
   }
   if (Object.keys(data).length > 0) {
+    data.updated_at = partial.updatedAt || new Date().toISOString();
     await smartUpdate('transactions', data, 'id', id);
   }
 }
@@ -813,6 +816,8 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
       promoName: row.promo_name || undefined,
       promoAmount: row.promo_amount || undefined,
       kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined,
+      // 🏷️ v4.9: Map updatedAt dari database Supabase agar perbandingan freshness di loadFromCloud akurat
+      updatedAt: row.updated_at || row.date || undefined,
     })) || null;
   } catch (e) {
     console.error('[CloudSync] Fetch EXCEPTION:', e);
