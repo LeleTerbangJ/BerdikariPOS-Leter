@@ -13,6 +13,13 @@ import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
 // v4.7 TO DO 18.6: indikator "laporan belum final" saat ada data belum tersinkron (reuse badge O-5)
 import SyncFreshnessBanner from '../components/SyncFreshnessBanner';
+// H.3 Pilar 1 (v4.9.3): Manager Force Close Shift — modal + otorisasi dual-control
+import Modal from '../components/Modal';
+import PinModal from '../components/PinModal';
+import { useToastStore } from '../store/toastStore';
+import { useAuditLogStore } from '../store/auditLogStore';
+import { computeShiftStats } from '../utils/shiftStats';
+import type { CashierShift } from '../types';
 import { exportPnlPDF, exportTransactionsPDF, exportInventoryPDF, exportShiftPDF, exportCashPDF, exportPpnPDF } from '../utils/pdfExport';
 // v4.7 TO DO 11.2 (P0.1): Laporan PPN bulanan — logika murni
 import { isTaxableTransaction, toPpnRow, summarizePpn, aggregatePpnByDay } from '../utils/ppnReport';
@@ -45,6 +52,7 @@ import {
   ClipboardCheck,
   Receipt,
   Tag,
+  Lock,
 } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement);
@@ -263,6 +271,65 @@ export default function Reports() {
       return d >= dateFrom && d <= dateTo;
     });
   }, [movements, dateFrom, dateTo]);
+
+  // ============================================================
+  // H.3 Pilar 1 (v4.9.3): Manager Force Close Shift
+  // ============================================================
+  const { currentUser } = useAuthStore();
+  const [forceCloseTarget, setForceCloseTarget] = useState<CashierShift | null>(null);
+  const [forceCloseCash, setForceCloseCash] = useState('');
+  const [showForceClosePin, setShowForceClosePin] = useState(false);
+
+  const forceCloseStats = useMemo(() => {
+    if (!forceCloseTarget) return null;
+    return computeShiftStats(forceCloseTarget, transactions, movements);
+  }, [forceCloseTarget, transactions, movements]);
+
+  const executeForceClose = () => {
+    if (!currentUser || !forceCloseTarget) return;
+    // Anti-race (audit integrity): bila shift sudah ditutup dari perangkat lain selagi
+    // modal terbuka (realtime loadFromCloud memperbarui store), forceCloseShift akan
+    // silent no-op — JANGAN mencatat audit log / toast sukses untuk aksi yang tidak jalan.
+    const fresh = useShiftStore.getState().shifts.find((s) => s.id === forceCloseTarget.id);
+    if (!fresh || fresh.status !== 'open') {
+      useToastStore.getState().addToast(
+        'Shift sudah ditutup dari perangkat lain — tutup paksa dibatalkan.',
+        'warning'
+      );
+      setShowForceClosePin(false);
+      setForceCloseTarget(null);
+      setForceCloseCash('');
+      return;
+    }
+    const closingCash = parseInt(forceCloseCash.replace(/\D/g, '')) || 0;
+    useShiftStore.getState().forceCloseShift(forceCloseTarget.id, closingCash, {
+      id: currentUser.id,
+      name: currentUser.name,
+      role: currentUser.role,
+    });
+    useAuditLogStore.getState().addLog(
+      currentUser.id,
+      currentUser.name,
+      currentUser.role,
+      'force_close_shift',
+      `Tutup paksa shift ${forceCloseTarget.userName} (dibuka ${new Date(forceCloseTarget.openedAt).toLocaleString('id-ID')}) — kas fisik ${formatRupiah(closingCash)}`,
+      {
+        shiftId: forceCloseTarget.id,
+        openedBy: forceCloseTarget.userName,
+        closingCash,
+        expectedCash: forceCloseStats?.expectedCash ?? 0,
+        totalSales: forceCloseStats?.totalSales ?? 0,
+        totalTransactions: forceCloseStats?.totalTx ?? 0,
+      }
+    );
+    useToastStore.getState().addToast(
+      `Shift ${forceCloseTarget.userName} ditutup paksa. Selisih kas tercatat di laporan Shift.`,
+      'success'
+    );
+    setShowForceClosePin(false);
+    setForceCloseTarget(null);
+    setForceCloseCash('');
+  };
 
   // Filter shifts by date range
   const filteredShifts = useMemo(() => {
@@ -1396,6 +1463,24 @@ export default function Reports() {
                           </p>
                         </div>
                       </div>
+                      {/* H.3 Pilar 1 (v4.9.3): Manager force close shift gantung */}
+                      {emp.status === 'open' && currentUser?.role === 'Manager' && (() => {
+                        const targetShift = filteredShifts.find((s) => s.id === emp.id) ?? null;
+                        if (!targetShift) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForceCloseTarget(targetShift);
+                              setForceCloseCash('');
+                            }}
+                            className="btn-secondary text-xs py-2 px-3 flex items-center gap-1.5 border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 whitespace-nowrap"
+                            title="Tutup paksa shift yang tertinggal (device kasir rusak / kasir lupa tutup)"
+                          >
+                            <Lock size={14} /> Tutup Paksa
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     {/* Primary Metrics */}
@@ -1787,6 +1872,102 @@ export default function Reports() {
           </div>
         );
       })()}
+
+      {/* ============================================================
+          H.3 Pilar 1 (v4.9.3): Modal Manager Force Close Shift
+          Stats dihitung internal dari data tersinkron (computeShiftStats) —
+          kasir menginput kas fisik, otorisasi via PinModal requireManager.
+          ============================================================ */}
+      {forceCloseTarget && (
+        <Modal
+          open={!!forceCloseTarget}
+          onClose={() => { setForceCloseTarget(null); setForceCloseCash(''); }}
+          title="Tutup Paksa Shift"
+          maxWidth="max-w-md"
+        >
+          <div className="space-y-4">
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs text-amber-800 dark:text-amber-300 space-y-1">
+              <p>
+                <strong>Tutup paksa</strong> shift <strong>{forceCloseTarget.userName}</strong> (dibuka{' '}
+                {new Date(forceCloseTarget.openedAt).toLocaleString('id-ID')}).
+              </p>
+              <p>
+                Gunakan untuk shift gantung — device kasir rusak/mati atau kasir lupa tutup shift.
+                Angka dihitung dari seluruh transaksi &amp; kas tersinkron dalam window shift ini.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg">
+                <p className="text-xs text-slate-500">Modal Awal</p>
+                <p className="font-semibold">{formatRupiah(forceCloseTarget.openingCash)}</p>
+              </div>
+              <div className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg">
+                <p className="text-xs text-slate-500">Total Penjualan</p>
+                <p className="font-semibold">{formatRupiah(forceCloseStats?.totalSales ?? 0)}</p>
+              </div>
+              <div className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg">
+                <p className="text-xs text-slate-500">Jumlah Transaksi</p>
+                <p className="font-semibold">{forceCloseStats?.totalTx ?? 0} tx</p>
+              </div>
+              <div className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg">
+                <p className="text-xs text-slate-500">Expected Cash</p>
+                <p className="font-semibold text-brand-600 dark:text-brand-400">
+                  {formatRupiah(forceCloseStats?.expectedCash ?? 0)}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Kas Aktual di Laci (Rp) *</label>
+              <input
+                type="text"
+                value={forceCloseCash}
+                onChange={(e) => setForceCloseCash(e.target.value.replace(/\D/g, ''))}
+                placeholder="Hitung kas fisik di laci, lalu input di sini"
+                className="input font-semibold"
+                autoFocus
+              />
+              {forceCloseCash && forceCloseStats && (
+                <p className={`text-xs mt-1.5 font-medium ${parseInt(forceCloseCash) - forceCloseStats.expectedCash === 0 ? 'text-green-600' : 'text-red-500'}`}>
+                  Selisih kas: {formatRupiah(parseInt(forceCloseCash) - forceCloseStats.expectedCash)}
+                  {parseInt(forceCloseCash) - forceCloseStats.expectedCash === 0 ? ' (Pas)' : ''}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => { setForceCloseTarget(null); setForceCloseCash(''); }}
+                className="btn-secondary flex-1 py-2.5"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowForceClosePin(true)}
+                disabled={!forceCloseCash || parseInt(forceCloseCash) < 0}
+                className="btn-primary flex-1 py-2.5 disabled:opacity-40"
+              >
+                Lanjut — Otorisasi Manager
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Otorisasi dual-control: sesi non-Manager wajib login cepat Manager (pola 10.2) */}
+      <PinModal
+        open={showForceClosePin}
+        requireManager
+        title="Otorisasi Tutup Paksa Shift"
+        onClose={() => setShowForceClosePin(false)}
+        onSuccess={() => {
+          executeForceClose();
+          setShowForceClosePin(false);
+        }}
+      />
     </div>
   );
 }

@@ -11,7 +11,7 @@ import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
 // v4.7 TO DO 18.3: expected cash tutup shift dari SEMUA transaksi Selesai tersinkron
 import { computeShiftStats, EMPTY_SHIFT_STATS } from '../utils/shiftStats';
-import { fetchTransactionsFromCloud } from '../lib/cloudSync';
+import { fetchTransactionsFromCloud, fetchShiftsFromCloud } from '../lib/cloudSync';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   getQueueLength,
@@ -346,10 +346,24 @@ export default function Layout() {
       `Kas Aktual (Fisik): ${formatRupiah(closingCash)}`,
       `Selisih Kas: ${formatRupiah(closingCash - shiftStats.expectedCash)}`,
       ``,
+      // H.2 (v4.9.3): rekap per metode pembayaran — hemat kertas thermal (sebelumnya
+      // 1 baris per transaksi; 300 tx ≈ 1 meter kertas). Konsisten dengan shiftStats
+      // (fix 20.1): transaksi refunded di-exclude dari hitungan pelanggan.
       `--- Riwayat Transaksi ---`,
-      ...todayTx.map(
-        (t) => `#${t.queueNumber} | ${t.paymentMethod} | ${formatRupiah(t.totalAmount)}`
-      ),
+      ...(() => {
+        const salesTx = todayTx.filter((t) => !t.refunded);
+        const qris = salesTx.filter((t) => t.paymentMethod === 'QRIS').length;
+        const transfer = salesTx.filter((t) => t.paymentMethod === 'Transfer').length;
+        const cash = salesTx.filter((t) => t.paymentMethod === 'Cash').length;
+        const other = salesTx.length - (qris + transfer + cash); // fallback paymentMethod null/undefined
+        const rows = [
+          `QRIS      | ${qris} Pelanggan`,
+          `Transfer  | ${transfer} Pelanggan`,
+          `Cash      | ${cash} Pelanggan`,
+        ];
+        if (other > 0) rows.push(`Lainnya    | ${other} Pelanggan`);
+        return rows;
+      })(),
       ``,
       `===========================`,
     ];
@@ -361,14 +375,38 @@ export default function Layout() {
       console.warn('[Shift] Gagal mencetak ringkasan (shift tetap ditutup):', e);
     }
 
+    // 2b. H.3 Pilar 1 (v4.9.3) — guard konflik force close: bila shift ini SUDAH ditutup
+    // dari perangkat lain (Manager force close), jangan menimpa dengan tutup lokal.
+    // Adopsi versi cloud + kasir tetap dilepas. Offline / fetch gagal → lanjut normal.
+    let conflictClosed = false;
+    if (activeShift?.id) {
+      try {
+        const cloudShifts = await fetchShiftsFromCloud();
+        const cloudVer = cloudShifts?.find((s) => s.id === activeShift.id);
+        if (cloudVer && cloudVer.status === 'closed') {
+          conflictClosed = true;
+          addToast(
+            `Shift sudah ditutup dari perangkat lain${cloudVer.closedBy ? ` (oleh ${cloudVer.closedBy})` : ''} — data shift cloud dipakai.`,
+            'warning'
+          );
+          await useShiftStore.getState().loadFromCloud();
+        }
+      } catch {
+        // Offline — tidak bisa verifikasi; lanjut tutup lokal (perilaku lama).
+      }
+    }
+
     // 3. Tutup shift — selalu dicoba; BUG-UI-STACKED-MODAL fix: setelah printing selesai
-    try {
-      closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
-    } catch (e) {
-      // Bahkan jika store gagal (kuota persist), kasir TETAP bisa keluar — shift bisa ditutup
-      // ulang / dikoreksi via data shift yang masih ada di cloud.
-      console.error('[Shift] Gagal menutup shift di store (kasir tetap dilepas):', e);
-      addToast('Gagal menyimpan penutupan shift — coba tutup shift lagi.', 'error');
+    // (dilewati bila shift sudah ditutup device lain — guard 2b)
+    if (!conflictClosed) {
+      try {
+        closeShift(closingCash, shiftStats.totalSales, shiftStats.totalTx, shiftStats.expectedCash);
+      } catch (e) {
+        // Bahkan jika store gagal (kuota persist), kasir TETAP bisa keluar — shift bisa ditutup
+        // ulang / dikoreksi via data shift yang masih ada di cloud.
+        console.error('[Shift] Gagal menutup shift di store (kasir tetap dilepas):', e);
+        addToast('Gagal menyimpan penutupan shift — coba tutup shift lagi.', 'error');
+      }
     }
 
     // 4. Escape path — modal non-dismissible tidak boleh mengunci kasir

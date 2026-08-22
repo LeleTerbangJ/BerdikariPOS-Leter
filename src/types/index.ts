@@ -424,6 +424,11 @@ export interface CashierShift {
   totalSales: number;
   totalTransactions: number;
   status: 'open' | 'closed';
+  // H.3 Pilar 1 (v4.9.3): identitas approver Manager saat FORCE CLOSE shift
+  // (shift gantung — device kasir rusak/lupa tutup). Undefined = tutup normal oleh kasir.
+  closedBy?: string;
+  closedById?: string;
+  closedByRole?: Role;
 }
 
 
@@ -507,6 +512,8 @@ export type AuditAction =
   | 'open_shift' | 'close_shift'
   // v4.7 TO DO 18.3: melanjutkan shift yang sudah dibuka (1 shift aktif per outlet)
   | 'resume_shift'
+  // H.3 Pilar 1 (v4.9.3): Manager menutup paksa shift gantung (device kasir rusak/lupa tutup)
+  | 'force_close_shift'
   | 'update_settings' | 'create_promo' | 'update_promo' | 'delete_promo'
   | 'create_customer' | 'update_customer' | 'delete_customer'
   | 'update_cash_movement' | 'delete_cash_movement'
