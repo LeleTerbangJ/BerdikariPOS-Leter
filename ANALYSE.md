@@ -1224,6 +1224,8 @@ stateDiagram-v2
 
 ---
 
+---
+
 ### G.9 — Roadmap Eksekusi Teknis
 
 | No | File yang Dimodifikasi | Rencana Perubahan | Estimasi Dampak |
@@ -1233,6 +1235,223 @@ stateDiagram-v2
 | 3 | `src/pages/Kitchen.tsx` & `src/App.tsx` | Ubah listener `subscribeToTransactions` agar langsung mengonsumsi `payload.new` (Direct Ingestion) | Latensi KDS turun drastis dari **~5 detik menjadi < 300ms** |
 | 4 | `src/components/Layout.tsx` | Tambahkan debounce 2.5s pada `queueLength` sebelum merender banner | Menghilangkan kedipan banner saat transaksi normal |
 | 5 | `src/store/stockLogStore.ts` & `cloudSync.ts` | Gabungkan pemotongan log stok menjadi bulk insert | Mengurangi beban request HTTP checkout hingga 70% |
+
+---
+
+# H. Analisa, Audit & Solusi: POS Search, Struk Tutup Shift, dan Manajemen Shift (v4.9.3)
+
+> ⚠️ **REVISI AUDIT-OX (v4.9.3)** — seluruh bagian H telah diverifikasi ulang langsung ke kode:
+> - **H.1**: ✅ valid apa adanya (1 search input terkonfirmasi) + catatan import `X` & aria-label.
+> - **H.2**: ⚠️ arah benar, kode usulan direvisi (filter `!refunded` konsisten fix 20.1 + bucket fallback "Lainnya").
+> - **H.3**: 🔴 klaim A1 (`syncShift` hilang) & A4 (konflik shift kasir 2) **terbukti salah/stale** — keduanya sudah ada di kode; yang valid hanyalah A2 (realtime) & A3 (force close), dengan desain revisi di masing-masing pilar.
+> - **H.4**: roadmap ditulis ulang menjadi 3 wave berurutan risiko-rendah→tinggi, 2 item dibatalkan.
+>
+> ✅ **STATUS EKSEKUSI (v4.9.3) — SELURUH WAVE TUNTAS**: **Wave 1a** (tombol X search POS), **Wave 1b** (struk tutup shift ringkas + filter `!refunded` + bucket "Lainnya"), **Wave 2** (Force Close Shift: Migration 31 kolom `closed_by*`, mapping sync/fetch dengan guard offline queue, `forceCloseShift` di shiftStore yang menghitung stats internal via `computeShiftStats`, guard konflik 2b di `handleCloseShift` — kasir tidak menimpa shift yang sudah ditutup device lain, UI tombol + modal + PinModal `requireManager` di Reports tab Shift, audit log `force_close_shift` + label/filter AuditLog, SQL butir 16 di DEPLOYMENT.md §4), **Wave 3** (`subscribeToShifts` global di App.tsx — merge LWW via jalur `loadFromCloud` existing yang sudah teruji, cleanup subscription). Validasi: tsc 0 error · 645/645 test lolos · build produksi sukses (PWA generateSW). Catatan desain: entry point force close tunggal di Laporan → tab Shift (opsi kedua di OpenShiftModal sengaja tidak diduplikasi untuk memperkecil permukaan bug — Manager tetap bisa menutup paksa dari menu Laporan).
+
+Dokumen ini memuat analisa teknis, hasil audit mendalam, dan rancangan solusi arsitektur untuk 3 kebutuhan pengembangan baru:
+1. **Tombol 'X' (Clear)** pada Search Bar POS untuk kecepatan pencarian menu.
+2. **Optimalisasi Struk Tutup Shift Kasir** (penghematan kertas thermal dari 300 baris transaksi menjadi ringkasan metode pembayaran).
+3. **Audit & Solusi Komprehensif Sistem Manajemen Shift** (Manager Force Close Shift, Single Active Shift Policy, Shared Shift Session, dan Realtime Multi-Device Sync).
+
+---
+
+## H.1 — Fitur 1: Tombol 'X' (Clear Search) pada Search Bar POS
+
+### 1. Masalah & Kebutuhan
+- Saat kasir melayani konsumen pada jam sibuk (*rush hour*), kasir sering mencari menu menggunakan kata kunci di search bar POS (misal "Lele").
+- Untuk mencari menu berikutnya (misal "Es Teh"), kasir harus menekan tombol backspace berulang-ulang di keyboard atau memilih seluruh teks untuk menghapusnya.
+- **Kebutuhan**: Menyediakan tombol `X` di dalam search bar POS yang muncul otomatis saat search bar berisi teks, dan ketika diklik akan menghapus kata kunci pencarian dalam 1 klik instan.
+
+### 2. Rencana Implementasi Teknis ([`src/pages/POS.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/pages/POS.tsx))
+- Pada input pencarian di POS (L1177–L1186):
+  ```tsx
+  <div className="relative flex-1 min-w-0">
+    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+    <input
+      type="text"
+      value={search}
+      onChange={(e) => setSearch(e.target.value)}
+      placeholder="Cari menu..."
+      className={`input pl-10 ${search ? 'pr-9' : ''}`}
+    />
+    {search && (
+      <button
+        type="button"
+        onClick={() => setSearch('')}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+        title="Hapus pencarian"
+      >
+        <X size={16} />
+      </button>
+    )}
+  </div>
+  ```
+- **Dampak**: Waktu pencarian menu antar pesanan menjadi 3× lebih cepat bagi kasir.
+- ✅ **VERIFIKASI AUDIT-OX (v4.9.3)**: terkonfirmasi hanya ada **1 search input** di POS (`POS.tsx:1177-1186`, tidak ada duplikat mobile/desktop) → snippet aman, risiko bug **nol**. Catatan eksekusi: (1) jangan lupa **import `X`** dari `lucide-react`; (2) tambah `aria-label="Hapus pencarian"` pada tombol (a11y). Boleh dieksekusi langsung sesuai snippet.
+
+---
+
+## H.2 — Fitur 2: Ringkasan Riwayat Transaksi pada Struk Tutup Shift Kasir
+
+### 1. Masalah Pemborosan Kertas Thermal
+- Pada struk penutupan shift kasir saat ini ([`src/components/Layout.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/components/Layout.tsx) L349–L353), bagian paling bawah mencetak daftar detail setiap nomor antrean satu per satu:
+  ```ts
+  `--- Riwayat Transaksi ---`,
+  ...todayTx.map((t) => `#${t.queueNumber} | ${t.paymentMethod} | ${formatRupiah(t.totalAmount)}`)
+  ```
+- **Dampak Buruk**: Jika dalam 1 hari atau 1 shift terdapat **300 transaksi**, printer thermal akan mencetak **300 baris teks** ($\approx 1$ meter kertas struk). Ini membuang-buang kertas, memakan waktu cetak lama, dan struk menjadi sangat panjang serta sulit disimpan.
+
+### 2. Format Solusi Ringkas
+Mengubah bagian tersebut menjadi rekapitulasi jumlah pelanggan berdasarkan kanal pembayaran:
+
+```text
+--- Riwayat Transaksi ---
+QRIS      | 145 Pelanggan
+Transfer  |  35 Pelanggan
+Cash      | 120 Pelanggan
+```
+
+### 3. Logika Implementasi Teknis
+
+> ⚠️ **REVISI AUDIT-OX (v4.9.3)**: kode usulan awal punya **2 cacat** yang akan memunculkan angka inkonsisten di struk:
+> 1. **Tidak mengecualikan transaksi `refunded`** — sejak fix 20.1, `shiftStats.totalSales/totalTx` mengecualikan refunded. Tanpa filter ini, struk bisa menampilkan "Jumlah Transaksi: 120" tetapi rekap bawah "300 Pelanggan" pada lembar kertas yang sama → Manager akan mempertanyakan selisihnya.
+> 2. **Tidak ada fallback bucket** — transaksi dengan `paymentMethod` null/undefined tidak masuk ketiga bucket → Σ count ≠ totalTx tanpa penjelasan.
+>
+> Basis data `todayTx` (Layout.tsx:186-195) sudah benar (`Selesai && !splitParentId && >= windowStart`) — cukup tambah filter `!refunded` + bucket "Lainnya":
+
+```ts
+// Konsisten dengan shiftStats (fix 20.1): exclude refunded
+const shiftTx = todayTx.filter((t) => !t.refunded);
+const qrisCount = shiftTx.filter((t) => t.paymentMethod === 'QRIS').length;
+const transferCount = shiftTx.filter((t) => t.paymentMethod === 'Transfer').length;
+const cashCount = shiftTx.filter((t) => t.paymentMethod === 'Cash').length;
+const otherCount = shiftTx.length - (qrisCount + transferCount + cashCount); // fallback paymentMethod null/undefined
+
+const lines = [
+  // ... Header, Penjualan Menu, Expected Cash, Kas Fisik ...
+  ``,
+  `--- Riwayat Transaksi ---`,
+  `QRIS      | ${qrisCount} Pelanggan`,
+  `Transfer  | ${transferCount} Pelanggan`,
+  `Cash      | ${cashCount} Pelanggan`,
+  ...(otherCount > 0 ? [`Lainnya    | ${otherCount} Pelanggan`] : []),
+  ``,
+  `===========================`,
+];
+```
+
+- **Rekomendasi opsional**: cetak detail per-transaksi hanya bila `shiftTx.length <= 20` (shift kecil tetap punya jejak kertas untuk audit manual; shift besar hemat kertas).
+- **Dampak**: Menghemat $\approx 98\%$ penggunaan kertas thermal pada penutupan shift dan memberikan data demografi pembayaran yang langsung terbaca oleh Manager. Perubahan murni format cetak (array `lines`, Layout.tsx:349-352) — **tidak menyentuh state, sync, atau perhitungan expected cash/selisih kas** → risiko bug rendah.
+
+---
+
+## H.3 — Fitur 3: Audit & Analisa Komprehensif Sistem Shift (Shift Management Overhaul)
+
+### 1. Temuan Hasil Audit Sistem Shift Saat Ini (Audit Findings)
+
+> ⚠️ **REVISI AUDIT-OX (v4.9.3)**: klaim audit awal diverifikasi ulang langsung ke kode. **2 dari 4 temuan ternyata salah/stale** — `syncShift` sudah ada & terpakai, dan kebijakan 1-shift-per-outlet sudah terimplementasi sejak v4.7 Prioritas 18.3. Tabel berikut adalah hasil verifikasi ulang:
+
+| No | Temuan Audit (hasil verifikasi ulang) | Bukti Kode | Tingkat Risiko |
+|---|---|---|---|
+| ~~**A1**~~ | ~~**Fungsi `syncShift` Hilang di `cloudSync.ts`**~~ → ❌ **KLAIM SALAH — SKIP**: `syncShift` **ADA** di `cloudSync.ts:1179` (memakai `smartUpsert`/offline queue) dan **dipanggil aktif** di `shiftStore.ts:69` (openShift) & `shiftStore.ts:103` (closeShift). Shift **sudah tersinkron ke Supabase**. Tidak ada pekerjaan untuk item ini. | `cloudSync.ts:1179`, `shiftStore.ts:69,103` | ✅ Tidak ada gap |
+| **A2** | **Belum Ada `subscribeToShifts` (Realtime WebSocket)** → ✅ **VALID**: tidak ada subscription realtime untuk tabel `shifts`. Device lain hanya tahu perubahan shift saat fetch berikutnya (`loadFromCloud` me-restore shift terbuka paling awal, `shiftStore.ts:123-148`). Eksekusi wajib hati-hati (lihat Pilar 3 revisi) — tanpa merge LWW ada risiko ghost resurrection. | grep `subscribeToShifts` = 0 hasil | 🔴 **Tinggi** |
+| **A3** | **Orphaned Shift (device kasir rusak/mati)** → ✅ **VALID**: tidak ada `forceCloseShift`/`closedBy` di codebase. Manager belum bisa mengakhiri shift gantung dari device-nya. Fitur baru bernilai tertinggi; desain perlu revisi (lihat Pilar 1 revisi). | grep `forceClose\|closedBy` = 0 hasil | 🔴 **Tinggi** |
+| ~~**A4**~~ | ~~**Konflik Shift Baru Kasir 2**~~ → ❌ **SUDAH TERIMPLEMENTASI (v4.7 Prioritas 18.3) — SKIP rebuild**: `openShift` async dengan guard "1 shift aktif per outlet" (`shiftStore.ts:15,33`), `resumeExistingShift()` (`shiftStore.ts:73`), modal **"Lanjutkan Shift Ini"** tanpa input modal ulang (`OpenShiftModal.tsx:27,71,125`), `loadFromCloud` restore shift terbuka paling awal + warning duplikat (`shiftStore.ts:123-148`). Membangun ulang "Shared Shift Session" akan menciptakan **dobel guard/modal** yang bentrok alur 18.3 + regresi expected cash tersinkron (18.4). | `shiftStore.ts`, `OpenShiftModal.tsx` | ✅ Tidak ada gap |
+
+> **Kesimpulan verifikasi**: yang benar-benar perlu dikerjakan hanyalah **A2 (realtime)** dan **A3 (force close)** — masing-masing dengan desain revisi di bawah. A1 & A4 dibatalkan.
+
+---
+
+### 2. Rancangan Solusi Arsitektur Sistem Shift Terpadu
+
+#### Pilar 1: Manager Force Close Shift (Tutup Paksa Shift oleh Manager / Super Admin)
+
+> ⚠️ **REVISI AUDIT-OX**: 3 koreksi desain wajib agar tidak memunculkan bug baru — (1) stats DIHITUNG INTERNAL, bukan diterima sebagai parameter; (2) WAJIB migrasi kolom DB (tidak disebut sama sekali di rancangan awal); (3) otorisasi reuse `PinModal requireManager` (pola dual-control 10.2), bukan input PIN manual di dialog kustom.
+
+- **Tujuan**: Memberikan kendali penuh kepada Manager untuk menutup shift yang tertinggal/gantung akibat device kasir rusak, mati baterai, atau kasir lupa tutup shift saat pergantian jadwal.
+- **Lokasi Akses**:
+  1. **Di Halaman Laporan Shift ([`src/pages/Reports.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/pages/Reports.tsx))**: Pada kartu kasir yang berstatus `🟢 Shift Aktif`, sediakan tombol **"🔒 Tutup Paksa Shift"** (hanya terlihat oleh Manager/Super Admin).
+  2. **Di Modal Shared Shift POS ([`src/components/OpenShiftModal.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/components/OpenShiftModal.tsx))**: Jika Manager membuka menu POS saat ada shift kasir lain aktif, Manager bisa memilih antara: *"Lanjut Sesi Bersama"* atau *"Tutup Shift Ini Sekarang"*.
+- **Alur Eksekusi Tutup Paksa**:
+  1. Manager mengklik **"Tutup Paksa Shift"**.
+  2. Muncul dialog modal berisi:
+     - Nama Kasir Pembuka, Waktu Mulai, Modal Awal.
+     - Total Penjualan & Transaksi yang telah terjadi di shift tersebut.
+     - **Expected Cash** terhitung otomatis.
+     - Input **Kas Aktual (Fisik)** yang dihitung oleh Manager di laci kas.
+     - Otorisasi via **PinModal `requireManager`** (pola dual-control 10.2 — identitas approver `{id, name, role}` tercatat; BUKAN input PIN manual di dialog kustom).
+  3. ⚠️ **Stats dihitung internal** — `forceCloseShift(shiftId, closingCash, approver)` menghitung sendiri `totalSales/totalTx/expectedCash` via `computeShiftStats(activeShift, transactions, movements)` (reuse persis jalur `handleCloseShift`, Layout.tsx:201-203 + fix netting refund 20.1). **JANGAN menerima angka pre-computed dari caller** (`totalSales, totalTx, expectedCash` sebagai parameter seperti rancangan awal) — itu menduplikasi logika dan berisiko inkonsisten dengan Dashboard/Laporan.
+  4. Sistem menandai shift berstatus `'closed'`, mencatat `closed_by / closed_by_id / closed_by_role`, menghitung selisih kas, dan membuat audit log action baru **`'force_close_shift'`** (daftarkan ke `AuditAction` di `types/index.ts` + filter dropdown `AuditLog.tsx`).
+  5. Sinyal realtime `subscribeToShifts` dikirim ke seluruh perangkat untuk mereset `activeShift = null` (device yang online).
+  6. ⚠️ **Guard kasir offline**: device kasir yang offline tidak menerima event force-close → `closeShift` normal harus verifikasi status terkini dari store/cloud sebelum finalize (deteksi konflik pasca-sync), agar kasir tidak menutup ulang shift yang sudah dipaksa tutup Manager.
+
+- **⚠️ Migrasi Database (WAJIB — tidak ada di rancangan awal)**: kolom `closed_by/closed_by_id/closed_by_role` **belum ada** di tabel `shifts` (`syncShift` cloudSync.ts:1179-1195 tidak memetakannya). Tanpa langkah ini force close hanya efek lokal, tidak lintas-device:
+  ```sql
+  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by TEXT;
+  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_id TEXT;
+  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_role TEXT;
+  ```
+  + mapping `syncShift` & `fetchShiftsFromCloud` + Migration baru idempoten di `runMigrations` (self-healing, cetak SQL ke console) + blok upgrade di `DEPLOYMENT.md §4`.
+
+---
+
+#### Pilar 2: Kebijakan 1 Shift Aktif per Outlet & Shared Shift Session
+
+> ✅ **REVISI AUDIT-OX — SUDAH TERIMPLEMENTASI (v4.7 Prioritas 18.3): PILAR INI DIBATALKAN.**
+> Yang sudah ada hari ini:
+> - Guard "1 shift aktif per outlet" di `openShift` (async, cek lokal + cloud) — `shiftStore.ts:15,33`
+> - `resumeExistingShift(shift)` — device lain otomatis melanjutkan shift yang sama — `shiftStore.ts:73`
+> - Modal **"Lanjutkan Shift Ini"** tanpa input modal kas ulang — `OpenShiftModal.tsx:27,71,125`
+> - `loadFromCloud` me-restore shift terbuka **paling awal** + console warning bila ada duplikat — `shiftStore.ts:123-148`
+> - Expected cash tutup shift dari SEMUA transaksi tersinkron + peringatan belum-sync (18.4)
+>
+> Membangun ulang mekanisme ini sesuai rancangan awal akan menciptakan **dobel guard/modal** yang bentrok dengan alur 18.3 yang sudah teruji, dan berisiko meregresi expected cash tersinkron (18.4). **Satu-satunya sisa pekerjaan yang layak (opsional, kosmetik)**: perkaya banner "Lanjutkan Shift Ini" di OpenShiftModal dengan info nama kasir pembuka + nominal modal awal + jam buka (data sudah tersedia di objek shift).
+
+---
+
+#### Pilar 3: Sinkronisasi Realtime Shift Antar-Perangkat (Sub-detik)
+
+> ⚠️ **REVISI AUDIT-OX**: klaim valid (subscription shifts memang belum ada), tapi eksekusi tanpa merge rule akan memunculkan **ghost resurrection** — event realtime membawa versi lama shift dan meng-*hidupkan kembali* `activeShift` yang baru saja ditutup lokal (kelas bug sama dengan transaksi ghost yang pernah terjadi). 3 aturan wajib:
+> 1. **Merge LWW, bukan set mentah**: handler realtime HANYA boleh meng-clear `activeShift` lokal bila (a) ID shift cocok dengan activeShift lokal DAN (b) status cloud `'closed'` dengan `closedAt` lebih baru dari data lokal. Event lain → trigger `loadFromCloud` shifts saja (jalur restore 18.3 yang sudah ada yang memutuskan).
+> 2. **Cleanup subscription**: unsubscribe saat teardown — ikuti pola cleanup subscription existing (POS/Kitchen).
+> 3. **Urutan eksekusi terakhir** (setelah force close jalan via fetch/refresh dulu) karena ini item paling berisiko.
+
+- Di [`src/lib/cloudSync.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/lib/cloudSync.ts):
+  - ~~Tambahkan `syncShift(shift: CashierShift)`~~ ✅ **SUDAH ADA** (`cloudSync.ts:1179`, dipakai `shiftStore.ts:69,103` + `backupService.ts:802`) — tidak perlu dibuat.
+  - Tambahkan `subscribeToShifts(onShiftChange)` untuk mendengarkan perubahan realtime tabel `shifts` — **dengan aturan merge LWW di atas**.
+- Di [`src/App.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/App.tsx):
+  - Daftarkan `subscribeToShifts`. Begitu shift ditutup (tutup normal atau force close) di perangkat mana pun, `activeShift` di semua perangkat online ter-update seketika (< 300 ms); device offline menangkapnya saat reconnect via jalur `loadFromCloud` yang sudah ada.
+
+---
+
+## H.4 — Roadmap Eksekusi Teknis
+
+> ⚠️ **REVISI AUDIT-OX (v4.9.3)**: tabel asli memuat 7 item yang mengandaikan seluruh klaim A1–A4 valid. Setelah verifikasi kode, **2 item dibatalkan** (A1 & Pilar 2 sudah ada) dan urutan disusun dari risiko terendah ke tertinggi. Setiap wave wajib lolos `npx tsc --noEmit` + `npx vitest run` + `npm run build`, dengan unit test helper murni (konvensi project) serta update `CHANGELOG.md` / `DEPLOYMENT.md` bila ada SQL.
+
+| Wave | Modul / File | Rencana Perubahan Teknis | Risiko |
+|---|---|---|---|
+| **1a** | [`src/pages/POS.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/pages/POS.tsx) | **H.1 — Tombol 'X' clear search**: tambahkan tombol kondisional `{search && ...}` di dalam search bar (`POS.tsx:1177-1186`) sesuai snippet H.1 + import `X` dari lucide-react + `aria-label`. | 🟢 Nol — state lokal murni |
+| **1b** | [`src/components/Layout.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/components/Layout.tsx) | **H.2 — Struk tutup shift ringkas**: ganti blok riwayat per-transaksi (`Layout.tsx:349-352`) dengan rekap per metode pembayaran **versi revisi** (filter `!refunded` konsisten fix 20.1 + bucket "Lainnya" untuk paymentMethod null). Opsional: detail per-transaksi hanya bila ≤ 20 transaksi. Murni format cetak — expected cash/selisih kas tidak tersentuh. | 🟢 Rendah |
+| **2** | [`src/store/shiftStore.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/store/shiftStore.ts), [`src/lib/cloudSync.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/lib/cloudSync.ts), [`src/pages/Reports.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/pages/Reports.tsx), `supabase/schema.sql`, `DEPLOYMENT.md §4` | **A3 — Manager Force Close Shift** (desain revisi Pilar 1): (1) Migration baru idempoten — kolom `closed_by/closed_by_id/closed_by_role` di `shifts`; (2) mapping `syncShift`/`fetchShiftsFromCloud` untuk kolom baru; (3) method `forceCloseShift(shiftId, closingCash, approver)` yang menghitung stats **internal** via `computeShiftStats` (reuse jalur `handleCloseShift` + netting refund 20.1); (4) UI tombol di kartu shift aktif tab Shift Reports + opsi di OpenShiftModal; (5) otorisasi reuse `PinModal requireManager` (pola 10.2); (6) audit log action baru `'force_close_shift'` (+ daftar filter `AuditLog.tsx`); (7) guard konflik di `closeShift` normal untuk kasir offline. Test: helper stats force-close, guard offline, mapping kolom. | 🟡 Sedang — butuh migrasi DB sekali |
+| **3** | [`src/lib/cloudSync.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/lib/cloudSync.ts), [`src/App.tsx`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/App.tsx), [`src/store/shiftStore.ts`](file:///d:/Private%20File/Aba/VibeCoding/Client/LeleTerbang/BerdikariPOS-Leter/src/store/shiftStore.ts) | **A2 — Realtime shift** (desain revisi Pilar 3, eksekusi TERAKHIR): tambahkan `subscribeToShifts(onShiftChange)` dengan merge **LWW** (clear `activeShift` hanya bila ID cocok + status cloud `'closed'` lebih baru; event lain → trigger `loadFromCloud` shifts via jalur restore 18.3 existing), cleanup subscription saat teardown, daftarkan global di `App.tsx`. Test: handler LWW (event basi tidak me-resurrect shift tertutup), ID mismatch diabaikan, cleanup. | 🔴 Tinggi — paling rawan ghost resurrection; kerjakan setelah force close stabil via fetch/refresh |
+
+### Item yang DIBATALKAN dari roadmap awal
+
+| Item Asli | Alasan Pembatalan |
+|---|---|
+| ~~Tambahkan `syncShift`~~ (roadmap #3) | ❌ Sudah ada — `cloudSync.ts:1179`, dipanggil `shiftStore.ts:69,103` & `backupService.ts:802`. Redundant. |
+| ~~Pilar 2 — Shared Shift Session~~ (roadmap #4, #5) | ❌ Sudah terimplementasi penuh sejak v4.7 Prioritas 18.3 (guard 1-shift-per-outlet, `resumeExistingShift`, modal "Lanjutkan Shift Ini", restore shift terbuka paling awal). Rebuild = dobel guard/modal + regresi expected cash 18.4. Sisa pekerjaan opsional: kosmetik info kasir pembuka di banner existing. |
+
+### Urutan ringkas
+
+```
+Wave 1: H.1 (tombol X) → H.2 (struk ringkas, versi revisi)
+Wave 2: A3 Force Close (+ migration closed_by*, PinModal, audit log)
+Wave 3: A2 Realtime subscribeToShifts (merge LWW + cleanup)
+```
+
+> **Prinsip pengaman**: Wave 2 bisa berjalan tanpa Wave 3 (force close tetap efektif lintas-device melalui jalur fetch/refresh `loadFromCloud` yang sudah ada) — realtime hanyalah akselerator UX. Dengan demikian jika Wave 3 ditemukan bermasalah, bisa ditunda tanpa membatalkan nilai fitur.
+
 
 
 

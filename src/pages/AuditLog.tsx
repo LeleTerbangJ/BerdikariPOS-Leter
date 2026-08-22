@@ -23,6 +23,7 @@ const actionLabels: Record<string, string> = {
   deduct_inventory: 'Deduct Inventaris',
   open_shift: 'Buka Shift',
   close_shift: 'Tutup Shift',
+  force_close_shift: 'Tutup Paksa Shift',
   update_settings: 'Update Settings',
   create_promo: 'Tambah Promo',
   update_promo: 'Edit Promo',
@@ -46,6 +47,7 @@ const actionColors: Record<string, string> = {
   delete_user: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300',
   open_shift: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
   close_shift: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
+  force_close_shift: 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300',
 };
 
 export default function AuditLog() {

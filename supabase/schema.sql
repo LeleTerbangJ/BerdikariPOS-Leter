@@ -177,8 +177,16 @@ CREATE TABLE IF NOT EXISTS shifts (
   cash_difference FLOAT,
   total_sales FLOAT DEFAULT 0,
   total_transactions INT DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed'))
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  -- H.3 Pilar 1 (v4.9.3): identitas approver Manager force close shift gantung
+  closed_by TEXT,
+  closed_by_id TEXT,
+  closed_by_role TEXT
 );
+-- DB lama: jalankan ALTER idempoten berikut sekali di SQL Editor (juga tercetak otomatis di console app — Migration 31):
+-- ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by TEXT;
+-- ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_id TEXT;
+-- ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_role TEXT;
 
 -- 7. Promos table
 CREATE TABLE IF NOT EXISTS promos (

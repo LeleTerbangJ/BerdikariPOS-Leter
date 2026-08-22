@@ -2,12 +2,24 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { safeStorage } from '../utils/safeStorage';
 import { v4 as uuid } from 'uuid';
-import type { CashierShift } from '../types';
+import type { CashierShift, Role } from '../types';
 import { syncShift, fetchShiftsFromCloud } from '../lib/cloudSync';
+// H.3 Pilar 1 (v4.9.3): force close menghitung stats INTERNAL via computeShiftStats
+// (reuse jalur handleCloseShift + netting refund fix 20.1) — bukan menerima angka
+// pre-computed dari caller yang berisiko inkonsisten dengan Dashboard/Laporan.
+import { computeShiftStats } from '../utils/shiftStats';
+import { useTransactionStore } from './transactionStore';
+import { useCashMovementStore } from './cashMovementStore';
 
 export type OpenShiftResult =
   | { ok: true; shift: CashierShift }
   | { ok: false; reason: 'shift-exists'; existing: CashierShift };
+
+export interface ForceCloseApprover {
+  id: string;
+  name: string;
+  role: Role;
+}
 
 interface ShiftState {
   shifts: CashierShift[];
@@ -19,6 +31,10 @@ interface ShiftState {
   // berbeda) tanpa menginput modal kas ulang — dipakai OpenShiftModal saat deteksi konflik.
   resumeExistingShift: (shift: CashierShift) => void;
   closeShift: (closingCash: number, totalSales: number, totalTransactions: number, expectedCash: number) => void;
+  // H.3 Pilar 1 (v4.9.3): Manager menutup paksa shift gantung (device kasir rusak /
+  // kasir lupa tutup). Stats dihitung internal dari data tersinkron; identitas approver
+  // Manager dicatat di record + tersinkron ke cloud (closed_by*).
+  forceCloseShift: (shiftId: string, closingCash: number, approver: ForceCloseApprover) => void;
   getActiveShift: () => CashierShift | null;
   getShiftsByUser: (userId: string) => CashierShift[];
   loadFromCloud: () => Promise<void>;
@@ -99,6 +115,40 @@ export const useShiftStore = create<ShiftState>()(
         set((s) => ({
           shifts: s.shifts.map((sh) => (sh.id === closed.id ? closed : sh)),
           activeShift: null,
+        }));
+        syncShift(closed);
+      },
+
+      // H.3 Pilar 1 (v4.9.3): Manager Force Close Shift — shift gantung ditutup dengan
+      // stats yang dihitung dari SEMUA transaksi/kas tersinkron dalam window shift
+      // (konsisten 18.3 & netting refund 20.1), BUKAN angka dari caller.
+      forceCloseShift: (shiftId, closingCash, approver) => {
+        const target = get().shifts.find((sh) => sh.id === shiftId);
+        if (!target || target.status !== 'open') return;
+
+        // Stats internal dari store transaksi & kas tersinkron (bukan parameter caller)
+        const transactions = useTransactionStore.getState().transactions;
+        const movements = useCashMovementStore.getState().movements;
+        const stats = computeShiftStats(target, transactions, movements);
+
+        const closed: CashierShift = {
+          ...target,
+          closedAt: new Date().toISOString(),
+          closingCash,
+          expectedCash: stats.expectedCash,
+          cashDifference: closingCash - stats.expectedCash,
+          totalSales: stats.totalSales,
+          totalTransactions: stats.totalTx,
+          status: 'closed',
+          closedBy: approver.name,
+          closedById: approver.id,
+          closedByRole: approver.role,
+        };
+
+        set((s) => ({
+          shifts: s.shifts.map((sh) => (sh.id === closed.id ? closed : sh)),
+          // Bila device ini kebetulan masih memegang shift tsb sebagai aktif → lepas.
+          activeShift: s.activeShift?.id === closed.id ? null : s.activeShift,
         }));
         syncShift(closed);
       },

@@ -505,6 +505,26 @@ export async function runMigrations() {
       // Offline/network saat startup — jangan salah diagnosa.
     }
 
+    // Migration 31 (H.3 Pilar 1 — v4.9.3): kolom identitas approver force close di tabel shifts
+    // (`closed_by`/`closed_by_id`/`closed_by_role`). Kolom sudah ada di schema.sql CREATE TABLE;
+    // ALTER idempoten ini self-heal DB lama.
+    try {
+      const shiftFcProbe = await supabase.from('shifts').select('closed_by').limit(1);
+      if (shiftFcProbe.error) {
+        const fcMsg = shiftFcProbe.error.message || '';
+        if (fcMsg.includes('closed_by')) {
+          console.warn('[Migration] Kolom "closed_by/closed_by_id/closed_by_role" belum ada di tabel shifts (v4.9.3 — Manager Force Close Shift).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by TEXT;');
+          console.warn('  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_id TEXT;');
+          console.warn('  ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_role TEXT;');
+          migrationNeeded.shiftForceCloseColumns = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -568,7 +588,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false, kitchenItemStatus: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false, kitchenItemStatus: false, shiftForceCloseColumns: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -955,6 +975,25 @@ export function subscribeToCashMovements(callback: (payload: any) => void) {
   return channel;
 }
 
+// H.3 Pilar 3 (v4.9.3): realtime shifts — perubahan shift di perangkat mana pun
+// (tutup normal / force close Manager) langsung memicu loadFromCloud di device lain.
+// Merge LWW sudah ditangani shiftStore.loadFromCloud (restore shift terbuka paling awal +
+// clear activeShift bila versi cloud 'closed') — handler TIDAK melakukan set mentah.
+export function subscribeToShifts(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+  const channelName = `shifts-rt-${Math.random().toString(36).substring(2, 9)}`;
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'shifts' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 export function subscribeToMenuComponents(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
   const channelName = `menu-components-rt-${Math.random().toString(36).substring(2, 9)}`;
@@ -1191,6 +1230,15 @@ export async function syncShift(shift: CashierShift) {
     total_sales: shift.totalSales,
     total_transactions: shift.totalTransactions,
     status: shift.status,
+    // H.3 Pilar 1 (v4.9.3): identitas approver force close — di-guard agar DB lama
+    // yang belum menjalankan Migration 31 tidak menumpuk offline queue.
+    ...(migrationNeeded.shiftForceCloseColumns
+      ? {}
+      : {
+          closed_by: shift.closedBy ?? null,
+          closed_by_id: shift.closedById ?? null,
+          closed_by_role: shift.closedByRole ?? null,
+        }),
   });
 }
 
@@ -1614,6 +1662,10 @@ export async function fetchShiftsFromCloud(): Promise<CashierShift[] | null> {
       totalSales: row.total_sales || 0,
       totalTransactions: row.total_transactions || 0,
       status: row.status,
+      // H.3 Pilar 1 (v4.9.3): identitas approver force close
+      closedBy: row.closed_by || undefined,
+      closedById: row.closed_by_id || undefined,
+      closedByRole: row.closed_by_role || undefined,
     })) || null;
   } catch {
     return null;

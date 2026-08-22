@@ -16,7 +16,7 @@ import { useToastStore } from './store/toastStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToTransactions, unsubscribeChannel, mapCloudRowToTransaction } from './lib/cloudSync';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToShifts, subscribeToTransactions, unsubscribeChannel, mapCloudRowToTransaction } from './lib/cloudSync';
 import { startAutoBackupScheduler, stopAutoBackupScheduler } from './lib/autoBackupScheduler';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
@@ -219,12 +219,21 @@ export default function App() {
       }
     });
 
+    // H.3 Pilar 3 (v4.9.3): Global Realtime subscription untuk shifts — tutup shift
+    // (normal / force close Manager) di perangkat mana pun langsung tercermin di semua
+    // device. Merge LWW ditangani shiftStore.loadFromCloud (clear activeShift bila versi
+    // cloud 'closed' + restore shift terbuka paling awal) — TIDAK ada set mentah.
+    const shiftChannel = subscribeToShifts(() => {
+      useShiftStore.getState().loadFromCloud();
+    });
+
     return () => {
       if (userChannel) unsubscribeChannel(userChannel);
       if (settingsChannel) unsubscribeChannel(settingsChannel);
       if (menuChannel) unsubscribeChannel(menuChannel);
       if (inventoryChannel) unsubscribeChannel(inventoryChannel);
       if (cashMovementChannel) unsubscribeChannel(cashMovementChannel);
+      if (shiftChannel) unsubscribeChannel(shiftChannel);
     };
   }, [currentUser]);
 

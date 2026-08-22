@@ -331,6 +331,15 @@ ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT no
 -- 15. ⚠️ v4.7 WAJIB (Prioritas 18 — A10) — kolom status cetak tiket dapur (Migration 30)
 -- ============================================================
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIMESTAMPTZ;
+
+-- ============================================================
+-- 16. ⚠️ v4.9.3 WAJIB (ANALYSE.md H.3 Pilar 1) — kolom identitas approver
+--     Manager Force Close Shift (Migration 31). WAJIB bila memakai fitur
+--     "Tutup Paksa Shift" di Laporan → tab Shift.
+-- ============================================================
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by TEXT;
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_id TEXT;
+ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_role TEXT;
 ```
 
 > [!NOTE] **Self-healing di sisi app**
@@ -341,7 +350,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS kitchen_ticket_printed_at TIME
 > - **Migration 20 (v4.7)** mendeteksi kolom refund yang kurang di `transactions` (refunded / refunded_at / refunded_amount / refund_note / refunded_by_id / refunded_by_name) dan mencetak SQL butir 9.
 > - **Migration 21 (v4.7)** mendeteksi kolom `auto_send_digital_receipt` yang kurang di `settings` dan mencetak SQL butir 10.
 > - **Migration 22 (v4.7)** mendeteksi kolom `promo_name`/`promo_amount` yang kurang di `transactions`; **Migration 23** — `stackable` di `promos`; **Migration 24** — `min_qty`/`bogo_config` di `promos` (+ relaksasi CHECK `promos.type` agar menerima `'bogo'`); **Migration 25** — `usage_limit_per_customer`/`usage_by_customer` di `promos`; **Migration 26** — `loyalty_points` di `customers`. Semuanya mencetak SQL butir 11.
-> - **Migration 27 (v4.7 — Prioritas 18)** mendeteksi RPC `adjust_inventory_stock` belum ada (probe PGRST202) dan mencetak SQL butir 12 — proteksi oversell stok 2 kasir. **Migration 28** — tabel `queue_counters` + RPC `allocate_queue_number` belum ada → cetak SQL butir 13 (nomor antrean atomik). **Migration 29** — kolom `updated_at` di `inventory` kurang → cetak SQL butir 14 (last-write-wins stok). **Migration 30** — kolom `kitchen_ticket_printed_at` di `transactions` kurang → cetak SQL butir 15 (status cetak tiket dapur).
+> - **Migration 27 (v4.7 — Prioritas 18)** mendeteksi RPC `adjust_inventory_stock` belum ada (probe PGRST202) dan mencetak SQL butir 12 — proteksi oversell stok 2 kasir. **Migration 28** — tabel `queue_counters` + RPC `allocate_queue_number` belum ada → cetak SQL butir 13 (nomor antrean atomik). **Migration 29** — kolom `updated_at` di `inventory` kurang → cetak SQL butir 14 (last-write-wins stok). **Migration 30** — kolom `kitchen_ticket_printed_at` di `transactions` kurang → cetak SQL butir 15 (status cetak tiket dapur). **Migration 31 (v4.9.3)** — kolom `closed_by/closed_by_id/closed_by_role` di `shifts` kurang → cetak SQL butir 16 (identitas approver Manager Force Close Shift).
 > Jadi jika ada yang terlewat, console browser akan menunjukkan persis apa yang perlu dijalankan.
 
 ### 4b. (v4.7) Supabase Storage — bucket untuk Auto Backup cloud

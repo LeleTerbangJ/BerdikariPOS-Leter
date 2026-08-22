@@ -1181,8 +1181,20 @@ export default function POS() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Cari menu..."
-                className="input pl-10"
+                className={`input pl-10 ${search ? 'pr-9' : ''}`}
               />
+              {/* H.1 (v4.9.3): tombol X hapus pencarian 1-klik — muncul hanya saat search berisi teks */}
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  aria-label="Hapus pencarian"
+                  title="Hapus pencarian"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+                >
+                  <X size={16} />
+                </button>
+              )}
             </div>
             {/* Badge Pesanan Gantung (Pending Payments) */}
             <button
