@@ -1,4 +1,4 @@
-# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan (v4.4)
+# 🏪 BerdikariPOS — Daftar Fitur & Keunggulan (v4.9.3)
 
 ## Aplikasi Point of Sale Modern untuk Berbagai Jenis Usaha
 
@@ -148,4 +148,81 @@ BerdikariPOS adalah sistem kasir berbasis web multi-purpose yang dirancang untuk
 
 ---
 
-*Fitur lengkap BerdikariPOS v4.4.*
+# 🚀 FUTURES — Roadmap Fitur Komersial
+
+## 15. 🔐 Sistem Lisensi & Langganan Tahunan (Licensing Engine)
+
+> Fitur untuk mengkomersialkan BerdikariPOS secara berkelanjutan: setiap instalasi klien diikat oleh **license key** dengan masa berlaku tahunan (subscription), lengkap dengan grace period offline dan mode read-only — dirancang khusus untuk arsitektur local-first aplikasi ini.
+
+### 15.1 — Prinsip Desain (mengikuti arsitektur local-first + model deployment Opsi B)
+
+| Prinsip | Alasan |
+|---------|--------|
+| **Truth di server VENDOR, bukan di DB klien** | Model deployment Opsi B = klien memegang Supabase-nya sendiri → baris lisensi di DB klien bisa diedit bebas. Verifikasi harus ke License Server milik vendor (Supabase project terpisah / Edge Function) |
+| **Signed response, bukan plain JSON** | Payload lisensi ditandatangani HMAC-SHA256 (secret hanya di Edge Function vendor); app memverifikasi via public key/secret derivasi — klien tidak bisa memalsukan `valid_until` |
+| **Offline-first dengan grace period** | POS wajib terus jalan tanpa internet → hasil validasi di-cache lokal bertanda waktu; expired saat offline tetap diberi masa tenggang |
+| **Tidak pernah hard-block di tengah operasional** | Blokir = reputasi hancur & kesiapan operasional klien terganggu. Degradasi halus: banner → peringatan → read-only |
+| **Clock-tamper resistant** | Simpan `maxSeenValidUntil` monotonik lokal; mundurkan tanggal perangkat tidak memperpanjang lisensi |
+
+### 15.2 — Cara Kerja (Alur & State Machine)
+
+**Aktivasi:**
+1. Klien menerima `LICENSE-KEY` unik (dibuat dari portal vendor).
+2. Manager memasukkan key di Settings → Aktivasi (sekali per instalasi; key terikat pada `installationId` + nama outlet).
+3. App memanggil Vendor License Server (`POST /activate`) → server memvalidasi key, mencatat aktivasi, mengembalikan **payload bertanda tangan**: `{ plan, issuedAt, validUntil, outletName, features }`.
+
+**Siklus berjalan:**
+4. Hasil validasi dicache lokal (zustand persist, pola sama dengan store lain): `{ payload, signature, lastVerifiedAt, maxSeenValidUntil }`.
+5. Saat online: re-validate **harian** (silent, non-blocking). Saat offline: gunakan cache.
+6. State machine lisensi:
+
+| State | Kondisi | Perilaku App |
+|-------|---------|--------------|
+| ✅ `ACTIVE` | validUntil > now − 30 hari | Normal penuh |
+| ⚠️ `EXPIRING` | sisa ≤ 30 hari | Banner kuning + tombol "Perpanjang" (link WA/portal vendor) |
+| 🟠 `GRACE` | expired, offline/tidak terverifikasi ≤ 14 hari | Transaksi tetap jalan + banner merah "Lisensi kedaluwarsa — segera perpanjang" |
+| 🔒 `READ_ONLY` | expired > 14 hari tanpa verifikasi ulang | POS/KDS diblokir transaksi baru; **laporan, riwayat & export data tetap bisa** (data klien tidak disandera — etis & mengurangi resistensi perpanjang) |
+| ✅ kembali `ACTIVE` | pembayaran dikonfirmasi → `validUntil` diperpanjang di server | Otomatis pulih saat re-validate |
+
+**Renewal tahunan:** vendor perpanjang `validUntil` di portal → app otomatis pulih pada siklus re-validate berikutnya (tanpa reinstall).
+
+### 15.3 — Komponen Teknis
+
+| Komponen | Lokasi | Isi |
+|----------|--------|-----|
+| **Vendor License Server** | Project Supabase vendor terpisah + Edge Function | Tabel `licenses` (key, plan, valid_until, status, outlet_name, device_limit, activated_at, last_seen_at); Edge Function `/activate` & `/validate` (HMAC sign + cek status) |
+| **licenseStore** | `src/store/licenseStore.ts` (zustand persist) | Cache payload+signature, state machine, `maxSeenValidUntil`, aksi `activate()` / `refreshLicense()` / `computeLicenseState()` |
+| **LicenseGuard** | Boot di `App.tsx` (setelah hydration, pola `whenHydrated`) + banner global | Re-validate harian; banner reuse pola `SyncFreshnessBanner`; gate checkout di POS (`finalizeTransaction` cek state) |
+| **Env baru** | `.env` | `VITE_LICENSE_SERVER_URL`, `VITE_LICENSE_PUBLIC_SECRET` (verifikasi), `VITE_INSTALLATION_ID` |
+| **Trial Mode** | Plan `TRIAL` | 14 hari fitur penuh, countdown banner — funnel demo → jadi pelanggan |
+
+### 15.4 — Step Implementasi (bertahap, aman terhadap alur existing)
+
+**Fase 1 — Fondasi (MVP komersial):**
+- [ ] Setup Vendor License Server: tabel `licenses` + Edge Function `/activate` & `/validate` (HMAC-SHA256 signing; rate-limit per key).
+- [ ] `src/store/licenseStore.ts`: persist cache + `computeLicenseState()` (pure, mudah dites) + integrasi boot di `App.tsx`.
+- [ ] UI Aktivasi di Settings (input key, status badge lisensi, link perpanjang) + banner global per-state.
+- [ ] Gate transaksi: blok `executeCheckout`/Simpan Pending HANYA di state `READ_ONLY`; shift aktif berjalan tidak pernah diinterupsi.
+- [ ] Clock-guard: `maxSeenValidUntil` monotonik; bandingkan offset server-time vs lokal (>24 jam drift → pakai server time).
+- [ ] Unit test `computeLicenseState` (semua transisi state, tamper signature, clock rollback) — pola test murni seperti `discountEngine`.
+
+**Fase 2 — Ketahanan & Operasional:**
+- [ ] Grace period konfigurabel (default 14 hari) + perilaku offline panjang terdokumentasi di panduan klien.
+- [ ] Portal admin vendor sederhana: buat/revoke/extend key, lihat last_seen per instalasi (deteksi penggunaan ilegal/multi-instalasi satu key).
+- [ ] Audit log lokal: event aktivasi/gagal-validasi tercatat (jejak diagnostik saat support).
+- [ ] Sinkronisasi dengan model bisnis `DEPLOYMENT.md §5`: mapping paket Starter/Business/Pro → field `plan` + `features` (mis. Pro = multi-outlet nanti).
+
+**Fase 3 — Lanjutan (pasca-pilot):**
+- [ ] Self-service renewal (payment gateway QRIS → auto-extend `validUntil`).
+- [ ] Feature-flag per plan (modul yang bisa on/off per paket: multi-outlet, laporan konsolidasi).
+- [ ] Notifikasi perpanjangan proaktif via WhatsApp ke owner (H-30/H-7/H-1).
+
+### 15.5 — Batasan & Keputusan yang Sadar
+
+- Enforcement utama ada di frontend (kode minified di Vercel vendor) + signature anti-forgery — **cukup untuk melawan manipulasi kasual klien**, bukan melawan penyerang yang reverse-engineer serius. Untuk itu kombinasi terkuat tetap: lisensi + nilai layanan berkelanjutan (support/update) + data hidup di ekosistem vendor.
+- Grace period = kompromi sadar antara proteksi revenue dan kontinuitas bisnis klien (POS mati saat jam sibuk = churn).
+- Integrasi alami dengan Tahap 2 Keamanan (`AUDIT-OX.md` K3): bila nanti adopsi Supabase Auth, lisensi bisa turut diverifikasi server-side di jalur RPC yang sama.
+
+---
+
+*Fitur lengkap BerdikariPOS v4.9.3 — segmen Futures: Licensing Engine (belum dieksekusi, siap masuk TO DO sebagai Prioritas berikutnya).*

@@ -659,6 +659,9 @@ export default function Reports() {
     a.href = url;
     a.download = filename;
     a.click();
+    // D fix (AUDIT-OX): revoke tertunda — revoke instan dapat membatalkan unduhan di
+    // sebagian browser; 1 detik cukup untuk memulai unduh lalu bebaskan memori.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const getDateLabel = () => {

@@ -264,7 +264,23 @@ export function clearFailedOps() {
 
 export function addToQueue(op: Omit<QueueOperation, 'id' | 'timestamp' | 'retries'>) {
   const queue = getQueue();
-  
+
+  // S14 fix (AUDIT-OX): urutan delete lama → update/upsert baru pada record yang sama
+  // membuat edit offline LENYAP (delete dieksekusi dulu, update menyentuh 0 baris).
+  // Solusi: buang delete-op pending — record akan dibuat ulang/diperbarui oleh op baru.
+  const s14RecordId = op.data?.id || op.filter?.value;
+  if (s14RecordId && (op.action === 'upsert' || op.action === 'update')) {
+    const delIdx = queue.findIndex(
+      (q) => q.table === op.table && q.action === 'delete' && (q.filter?.value === s14RecordId || q.data?.id === s14RecordId)
+    );
+    if (delIdx !== -1) {
+      queue.splice(delIdx, 1);
+      saveQueue(queue);
+      updateQueueCount();
+      // lanjut ke alur tambah/dedup normal di bawah
+    }
+  }
+
   // BUG-M8 fix: Deduplicate — for upsert/update, replace existing pending op for same table+record
   // BUG-M3 fix: Also deduplicate inserts using data.id to prevent duplicate logs
   const recordId = op.data?.id || op.filter?.value;
@@ -405,11 +421,18 @@ export async function flushQueue(): Promise<{ success: number; failed: number; p
         case 'update':
           if (op.filter) {
             ({ error } = await supabase.from(op.table).update(op.data).eq(op.filter.column, op.filter.value));
+          } else {
+            // S13 fix (AUDIT-OX): op update TANPA filter = tidak bisa dieksekusi —
+            // jangan dihitung sukses diam-diam; masukkan ke daftar gagal permanen.
+            error = new Error('update operation missing filter (unexecutable)');
           }
           break;
         case 'delete':
           if (op.filter) {
             ({ error } = await supabase.from(op.table).delete().eq(op.filter.column, op.filter.value));
+          } else {
+            // S13 fix: idem untuk delete tanpa filter
+            error = new Error('delete operation missing filter (unexecutable)');
           }
           break;
       }

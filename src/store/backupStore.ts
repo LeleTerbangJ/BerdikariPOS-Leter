@@ -10,7 +10,8 @@ export interface BackupHistoryEntry {
   date: string; // ISO String
   type: BackupType;
   filename: string;
-  status: 'Success' | 'Failed';
+  // S4 fix (AUDIT-OX): status diperluas — riwayat mencerminkan hasil faktual per tahap
+  status: 'Success' | 'Failed' | 'Uploaded' | 'Upload Failed' | 'Created — Check Download';
   size: string; // formatted size e.g. "1.2 MB"
   sizeBytes: number;
   totalTransactions?: number;
@@ -31,7 +32,10 @@ interface BackupState {
   // v4.7 TO DO 7.6: penanda kapan auto backup terakhir SUKSES (persist) — scheduler
   // menggunakannya agar tidak mengeksekusi ulang dalam periode yang sama (Daily/Weekly).
   lastAutoBackupAt?: string;
-  addHistoryEntry: (entry: Omit<BackupHistoryEntry, 'id'>) => void;
+  addHistoryEntry: (entry: Omit<BackupHistoryEntry, 'id'>) => string;
+  // S4 fix (AUDIT-OX): perbarui status entri riwayat setelah hasil sebenarnya diketahui
+  // (mis. upload cloud berhasil/gagal) — riwayat tidak lagi mengklaim "Success" prematur.
+  updateBackupHistoryEntry: (id: string, patch: Partial<Pick<BackupHistoryEntry, 'status' | 'size'>>) => void;
   clearHistory: () => void;
   updateAutoBackupConfig: (config: Partial<AutoBackupConfig>) => void;
   setLastAutoBackupAt: (date: string) => void;
@@ -54,6 +58,13 @@ export const useBackupStore = create<BackupState>()(
           id: uuid(),
         };
         set((s) => ({ history: [newEntry, ...s.history].slice(0, 100) })); // keep last 100 entries
+        return newEntry.id;
+      },
+
+      updateBackupHistoryEntry: (id, patch) => {
+        set((s) => ({
+          history: s.history.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+        }));
       },
 
       clearHistory: () => {

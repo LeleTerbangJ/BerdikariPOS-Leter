@@ -131,7 +131,9 @@ export const useCartStore = create<CartState>()(
           }),
         })),
 
-      setDiscount: (amount) => set({ discount: amount }),
+      // S7 fix (AUDIT-OX): clamp — diskon tidak pernah negatif & bulat rupiah
+      // (input negatif sebelumnya bisa menaikkan total melebihi subtotal).
+      setDiscount: (amount) => set({ discount: Math.max(0, Math.floor(amount || 0)) }),
 
       // v4.7 TO DO 17.3: setter konteks resume pending (dipanggil handleResumePendingOrder POS)
       setResumeContext: (ctx) => set({ resumeContext: ctx }),

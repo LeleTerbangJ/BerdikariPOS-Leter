@@ -143,6 +143,27 @@ export default function SplitBillModal({
   // lain. Reopen konteks SAMA = resume sesi split (5.1) → progress dipertahankan + di-rehydrate
   // dari session (paidBills/mode/count) agar sub-bill yang sudah lunas tidak bisa dibayar ganda.
   const lastOpenCtxRef = useRef<string | null>(null);
+  // S6 fix (AUDIT-OX): GERBANG fail-closed — probe tulis localStorage saat modal dibuka.
+  // Bila penyimpanan penuh, sesi split tidak bisa persist → risiko double-deduction stok
+  // pasca-reload. Tolak masuk Split Bill DI GERBANG (checkout normal tak terpengaruh);
+  // JANGAN menolak di tengah alur (setelah engine commit = justru menciptakan kebocoran).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const probeKey = '__split_storage_probe__';
+      localStorage.setItem(probeKey, '1');
+      localStorage.removeItem(probeKey);
+    } catch {
+      useToastStore.getState().addToast(
+        'Penyimpanan perangkat penuh — Split Bill dinonaktifkan agar stok tidak berisiko. Gunakan checkout biasa.',
+        'error'
+      );
+      onCloseRef.current();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const cartSig = computeCartSignature(cartItems);

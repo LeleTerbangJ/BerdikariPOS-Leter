@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useSearchParams } from 'react-router-dom';
 import { useMenuStore } from '../store/menuStore';
@@ -203,6 +203,11 @@ export default function POS() {
   // v4.7 TO DO 21.3: flag rekonsiliasi split pending — jika true, POS.tsx skip reservedDeductions
   // saat finalisasi pending (stok sudah disesuaikan oleh SplitBillModal → anti double-adjust).
   const [pendingSplitReconciled, setPendingSplitReconciled] = useState(false);
+  // S1 fix (AUDIT-OX): flag finalisasi in-flight — Escape tidak boleh menutup modal
+  // checkout di tengah proses bayar; F1 tidak membuka checkout dari konteks lain.
+  const [finalizeInFlight, setFinalizeInFlight] = useState(false);
+  // Cermin state untuk handler keyboard global (dibaca via ref → tanpa re-subscribe listener)
+  const kbGuardRef = useRef({ checkout: false, menu: false, split: false, finalizing: false });
 
   // v4.1 TO DO 3.1: selector primitive yang stabil — hasil number, re-render hanya saat count berubah
   // (s.transactions + useMemo malah re-render pada tiap mutasi transaksi, termasuk kitchenStatus KDS).
@@ -543,13 +548,19 @@ export default function POS() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const g = kbGuardRef.current;
       if (e.key === 'F1') {
         e.preventDefault();
         e.stopPropagation();
+        // S1 fix: F1 hanya membuka checkout dari konteks POS bersih — bukan saat modal
+        // checkout/customisasi/split terbuka atau finalisasi sedang berjalan.
+        if (g.checkout || g.menu || g.split || g.finalizing) return;
         handleCheckoutCb();
       }
       if (e.key === 'Escape') {
-        setShowCheckout(false);
+        // S1 fix: Escape TIDAK menutup checkout saat finalisasi in-flight (state cart
+        // sudah berjalan — menutup di tengah bisa membingungkan/menggagalkan alur).
+        if (!g.finalizing) setShowCheckout(false);
         setSelectedMenu(null);
         setMobileCartOpen(false);
       }
@@ -574,6 +585,13 @@ export default function POS() {
   const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [checkoutTxId, setCheckoutTxId] = useState<string>(() => uuid());
+  // S1 fix: sinkronkan cermin guard keyboard setiap render
+  kbGuardRef.current = {
+    checkout: showCheckout,
+    menu: selectedMenu !== null,
+    split: showSplitModal,
+    finalizing: finalizeInFlight,
+  };
 
   // Mobile cart toggle
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
@@ -875,7 +893,18 @@ export default function POS() {
     setShowCheckout(true);
   };
 
+  // S1 fix (AUDIT-OX): wrapper anti double-submit & penanda in-flight untuk guard keyboard
   const finalizeTransaction = async () => {
+    if (finalizeInFlight) return;
+    setFinalizeInFlight(true);
+    try {
+      await finalizeTransactionImpl();
+    } finally {
+      setFinalizeInFlight(false);
+    }
+  };
+
+  const finalizeTransactionImpl = async () => {
     if (orderType === 'Dine In' && settings.tableFeaturesEnabled && !tableNumber) {
       addToast('Silakan pilih nomor meja terlebih dahulu!', 'warning');
       return;

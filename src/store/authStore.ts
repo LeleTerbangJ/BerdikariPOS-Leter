@@ -67,7 +67,12 @@ export const useAuthStore = create<AuthState>()(
 
         if (match) {
           // Multi-login check: generate new active session ID
-          const activeSessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+          // S12 fix (AUDIT-OX): CSPRNG via crypto.randomUUID (fallback Math.random hanya
+          // untuk lingkungan tanpa crypto API — praktis tidak ada di browser modern).
+          const activeSessionId =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
           const updatedUser = { ...user, activeSessionId };
 
           set({ currentUser: updatedUser });

@@ -216,7 +216,15 @@ export const usePromoStore = create<PromoState>()(
               const merged = cloudPromos.map((cp) => {
                 const local = s.promos.find((p) => p.id === cp.id);
                 if (!local?.usageKeys && !cp.usageKeys) return cp;
-                return { ...cp, usageKeys: { ...(local?.usageKeys || {}), ...(cp.usageKeys || {}) } };
+                const unionKeys = { ...(local?.usageKeys || {}), ...(cp.usageKeys || {}) };
+                // S8 fix (AUDIT-OX): usageCount di-recompute dari union ledger (setiap key =
+                // satu pemakaian nyata) sehingga increment lokal yang belum sync tidak lagi
+                // kalah LWW → batas pemakaian tidak bisa dilewati lintas device.
+                // Guard legacy: promo lama TANPA ledger sama sekali → pertahankan count LWW
+                // (recompute akan me-nol-kan data sah).
+                const keyCount = Object.keys(unionKeys).length;
+                const recomputed = keyCount > 0 ? { ...cp, usageCount: Math.max(cp.usageCount ?? 0, keyCount) } : cp;
+                return { ...recomputed, usageKeys: unionKeys };
               });
               return { promos: [...merged, ...localOnly] };
             });

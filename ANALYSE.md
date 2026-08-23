@@ -1457,3 +1457,100 @@ Wave 3: A2 Realtime subscribeToShifts (merge LWW + cleanup)
 
 
 
+
+---
+
+# O. PRODUCTION READINESS ASSESSMENT — Apakah Siap Dijual ke Client? (v4.9.3)
+
+> **Pertanyaan**: apakah aplikasi sudah siap production & dijual ke client? Apa yang harus dipastikan sebelum serah terima?
+> **Basis analisa**: seluruh riwayat audit (`AUDIT-OX.md` Bagian A–F, temuan A/E/G/H/I/J/K/L/M/N dokumen ini), status validasi teknis terkini, dan checklist komersialisasi `DEPLOYMENT.md §7`.
+> **Status validasi**: tsc 0 error · 653/653 test (63 file) · build produksi sukses · AUDIT-OX K1/K2/K6 + T1–T10 tereksekusi.
+
+## O.0 — Verdict Ringkas
+
+| Dimensi | Status | Catatan |
+|---|---|---|
+| **Fungsionalitas fitur** | ✅ SIAP | Cakupan sangat lengkap untuk POS F&B/retail: checkout atomik, pending, split bill, promo/loyalty lengkap, refund, PPN, shift & rekap kas, stock opname blind dual-control, backup/auto-backup, mode offline andal, printer thermal andal, struk digital |
+| **Stabilitas & kualitas kode** | ✅ SIAP | Engine transaksi matang (state machine, idempotency, rollback delta-based T1), offline queue disiplin, 653 test hijau, semua temuan KRITIS uang/stok (K1/K2/K6) dan TINGGI teknis (T1–T10) telah ditutup |
+| **Keamanan multi-tenant** | 🔴 **BLOCKER untuk skala komersial** | RLS "Allow all" di 13 tabel + hash password/PIN terekspos + audit log manipulable (AUDIT-OX K3/K4/K5). Layak untuk deployment single-client TERKENDALI dengan mitigasi; tidak layak dibuka luas sebelum Tahap 2 |
+| **Operasional klien tunggal** | 🟡 SIAP dengan syarat | Syaratnya = checklist O.2 di bawah (SQL upgrade, kredensial fresh, separate DB, PITR, pengujian panduan testing) |
+
+> **Kesimpulan satu kalimat**: boleh jual ke **client pertama/pilot** (1 outlet, separate Supabase project, klien dikenal, risiko keamanan diungkapkan & dimitigasi), tapi **jangan scale ke banyak klien** sebelum Tahap 2 Keamanan (Supabase Auth / RPC security definer) selesai.
+
+## O.1 — Yang Sudah Kuat (bukan penghalang jual)
+
+1. **Integritas uang & stok** — kelas bug paling berbahaya sudah ditutup: redeem loyalty commit=preview (K1), anti double-submit split bill dengan ID signature (T2), rollback delta anti over-revert (T1), reset flag rekonsiliasi (T4), backup replace fail-safe (K2), offline queue flush merge (K6), hydrate anti-wipe (T7).
+2. **Anti-race 2 kasir online** — deduksi stok lewat RPC `adjust_inventory_stock` (delta + guard level DB) & nomor antrean `allocate_queue_number`; 1 shift aktif per outlet.
+3. **Mode offline** — antrean IndexedDB, retry berkala, failed-ops list, badge belum-sync, PWA offline; data tidak hilang walau internet putus.
+4. **Akuntabilitas** — expected cash netting refund, audit log menyeluruh, force close shift ber-otorisasi Manager (v4.9.3), jejak approver opname.
+5. **Pemulihan bencana** — backup ZIP checksum isi (anti-tamper), auto-backup harian/mingguan ke cloud, restore Merge/Replace dengan pre-flight validasi (T9).
+
+## O.2 — WAJIB Dipastikan Sebelum Sampai ke Client (checklist pra-serah terima)
+
+### A. Database & Data
+- [ ] **Project Supabase TERPISAH per klien** (DEPLOYMENT.md Opsi B) — isolasi data paling penting mengingat RLS masih allow-all.
+- [ ] Jalankan `supabase/schema.sql` v-terkini untuk project BARU; untuk DB lama jalankan **blok upgrade butir 1–17** di `DEPLOYMENT.md §4` (termasuk butir 16 closed_by* & butir 17 menus.description dari sesi audit ini).
+- [ ] Aktifkan **Daily Backup / PITR Supabase** — mitigasi interim K3 (pagar pemulihan atas ekspos anon key).
+- [ ] Verifikasi publication realtime + policy "Allow all for anon" ada di SEMUA tabel (app membutuhkannya saat ini).
+
+### B. Keamanan Minimum (wajib walau Tahap 2 belum jalan)
+- [ ] **Ganti SEMUA kredensial seed**: password manager/kasir/acaraki/gudang, PIN manager (default `1234`), super admin PIN — kredensial default tercantum publik di dokumentasi.
+- [ ] Pastikan kolom password berformat bcrypt `$2*` (re-hash boot) & fallback plaintext login ditolak.
+- [ ] Jangan bagikan URL app + anon key ke pihak di luar klien; anon key hanya hidup di deployment Vercel klien tsb.
+- [ ] (Disarankan) Batasi akses dashboard Supabase klien; aktifkan 2FA akun owner Supabase.
+
+### C. Pengujian Pra-Serah Terima (jalankan pada build final)
+- [ ] `testing/TESTING-PRADEPLOY.md` — checklist utama.
+- [ ] `testing/TESTING-BAGIAN-B.md` — verifikasi fix T1–T10 (rollback delta, split idempotent, hooks, escape path Acaraki, hydrate IDB, migration description, pre-flight restore, opname live-sync).
+- [ ] `testing/TESTING-H-SHIFT.md` — tombol X search, struk tutup shift ringkas, force close shift + realtime.
+- [ ] `testing/TESTING-OFFLINE.md` + `testing/TESTING-2KASIR.md` — mode offline & dua kasir bersamaan.
+- [ ] Uji di hardware nyata klien: printer thermal kasir + dapur (Bluetooth), tablet/HP yang akan dipakai.
+
+### D. Konfigurasi & SOP Klien
+- [ ] Setup toko: nama/alamat/logo, pajak (PB1/PPN % sesuai daerah), kategori, printer & fallback browser per printer, nomor meja (bila relevan).
+- [ ] Seed data klien: menu + resep bahan (HPP akurat), stok awal via Stock Opname pertama, pelanggan/promo awal.
+- [ ] Serahkan Quick Start Guide + SOP batasan yang diketahui (O.3): void sub-bill satu per satu, cek stok pagi setelah hari offline, dsb.
+- [ ] SLA/support + kontak darurat; jadwalkan review minggu pertama.
+
+### E. Release Hygiene
+- [ ] Semua perubahan terakhir sudah lewat: `tsc --noEmit` 0 error → `vitest run` hijau → `npm run build` sukses → merge `main` (Vercel deploy) → smoke test di URL produksi (bukan dev).
+- [ ] CHANGELOG.md & RELEASE note versi terbaru tersusun (fitur + SQL wajib) untuk lampiran invoice/kontrak.
+
+## O.3 — Batasan yang DIKETAHUI & Harus Diungkapkan ke Klien (residual terdokumentasi)
+
+| # | Batasan | Mitigasi operasional |
+|---|---------|---------------------|
+| 1 | Dua device OFFLINE bersamaan bisa oversell stok bahan yang sama (fallback absolut LWW; online sudah dilindungi RPC) | SOP cek stok pagi setelah hari offline; hindari 2 kasir offline simultan untuk bahan kritis |
+| 2 | Promo berbatas/voucher bisa lolos batas bila dipakai bersamaan dari 2 device OFFLINE | Terapkan voucher dari 1 device saat offline |
+| 3 | Reserve split bill hanya diketahui device pembuatnya (sesi lokal) | Selesaikan split di device yang sama |
+| 4 | Laporan "belum final" selama ada data belum sinkron (banner sudah ada) | Tunggu badge sync habis sebelum tutup buku harian |
+| 5 | Cancel parent pending beranak split → void sub-bill satu per satu (SOP toast sudah ada) | Ikuti alur void yang diarahkan aplikasi |
+| 6 | Keamanan DB bergantung kerahasiaan URL+anon key deployment (RLS allow-all) sampai Tahap 2 | Jangan sebarkan URL; separate DB per klien; PITR aktif |
+
+## O.4 — Sisa Pekerjaan Teknis Pre-Sale (disarankan, effort kecil→sedang)
+
+✅ **PRIORITAS INI SUDAH DIEKSEKUSI** (validasi: tsc 0 error · 653/653 test · build sukses) — catatan S11 parsial: DOMPurify ter-fix; react-router v7 & uuid v14 = major breaking, ditunda sebagai tugas khusus (uuid advisory tidak menyentuh pemakaian v4):
+1. ~~**S11**~~ — upgrade `react-router-dom` & `dompurify` (advisory open redirect/XSS moderate) + `npm audit fix`. *(effort rendah)*
+2. ~~**S7**~~ — clamp diskon manual negatif di cartStore (satu baris; vektor korupsi revenue oleh salah input). *(rendah)*
+3. ~~**S10**~~ — index DB (`transactions(date DESC)`, `cash_movements(date)`, dll.) — performa laporan seiring data tumbuh. *(rendah, SQL additive)*
+4. ~~**S12**~~ — session id pakai `crypto.randomUUID()`. *(trivial)*
+5. ~~**S13/S14**~~ — hardening offline queue edge (update tanpa filter; delete→update). *(rendah)*
+6. ~~**S15**~~ — console.warn di catch fetcher cloud (diagnosa lapangan jauh lebih mudah). *(trivial)*
+7. ~~**S9**~~ — relaksasi CHECK `payment_method` (antisipasi metode bayar baru gagal sync). *(sedang)*
+8. ~~**S1/S16/S17**~~ — guard shortcut pembayaran, memo Dashboard, leak printer channel. *(rendah)*
+
+Ditunda setelah penjualan (roadmap, bukan blocker):
+- **K5 Opsi A** (audit log insert-only + SOP purge manual) — bisa kapan saja via SQL.
+- **Tahap 2 KEAMANAN** (K3/K4/K5 final): Supabase Auth atau Edge Function gateway + RPC security definer untuk delete sah + revoke policy — **prasyarat scaling multi-klien**.
+- Multi-outlet (F), E1 residual offline queue duplikat (badge sudah ada), E4 reserve lintas device.
+
+## O.5 — Kriteria "Boleh Scale ke Banyak Client"
+
+1. Tahap 2 Keamanan selesai & diverifikasi (policy ketat per tabel, kredensial keluar dari tabel publik, delete sah via RPC).
+2. Seluruh wave S selesai + test integrasi konkurensi (E-item AUDIT-OX Bagian E #8).
+3. Onboarding per klien terstandar (script SQL setup otomatis, template SOP, monitoring uptime/error).
+4. Minimal 2–3 pilot berjalan ≥ 1 bulan tanpa incident data (stok/uang) sebagai bukti lapangan.
+
+---
+
+*Kesimpulan O: fungsionalitas & stabilitas = layak jual; keamanan infrastruktur = satu-satunya blocker komersial, dengan jalur jelas: pilot tunggal (mitigasi O.2-B) → Tahap 2 → scale.*

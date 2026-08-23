@@ -851,7 +851,7 @@ export function mapCloudRowToTransaction(row: any): Transaction {
     appliedPromoId: row.applied_promo_id || undefined,
     voucherCode: row.voucher_code || undefined,
     promoName: row.promo_name || undefined,
-    promoAmount: row.promo_amount || undefined,
+    promoAmount: row.promo_amount ?? undefined, // D fix (AUDIT-OX): `??` — nilai 0 sah (bukan hilang)
     kitchenTicketPrintedAt: row.kitchen_ticket_printed_at || undefined,
     updatedAt: row.updated_at || row.date || undefined,
   };
@@ -1102,6 +1102,40 @@ export async function adjustInventoryStockCloud(
         await smartUpdate('inventory', { stock: item.stock, updated_at: item.updatedAt || new Date().toISOString() }, 'id', a.id);
       }
       result.ok.push({ id: a.id, delta: a.delta });
+    }
+    // S3 fix (AUDIT-OX): fallback absolut = bukan atomik → lost-update lintas device tetap
+    // mungkin tanpa terlihat. Dorong penanda ke `stockConflicts` (banner kuning Inventaris
+    // yang sudah ada — reuse, tanpa mekanisme baru) agar staf tahu stok perlu diverifikasi.
+    // Murni sinyal UI; tidak memicu sync balik.
+    //
+    // ⚠️ Re-audit fix — GATE: penanda HANYA pada jalur ONLINE-degraded (RPC gagal/belum ada,
+    // overwrite absolut terjadi SEKARANG). Pada offline murni, op masuk antrean & drift
+    // terdeteksi O-7 saat merge berikutnya — menandai di sini = banner menyala untuk SETIAP
+    // transaksi offline (noise, bukan sinyal).
+    const isOfflineNow = typeof navigator !== 'undefined' && navigator.onLine === false;
+    if (pending.length > 0 && !isOfflineNow) {
+      try {
+        const { useInventoryStore } = await import('../store/inventoryStore');
+        const { stockConflicts, items: currentItems } = useInventoryStore.getState();
+        const byId = new Map(stockConflicts.map((c) => [c.ingredientId, c]));
+        for (const a of pending) {
+          const item = currentItems.find((i) => i.id === a.id);
+          if (!item || byId.has(a.id)) continue;
+          byId.set(a.id, {
+            ingredientId: a.id,
+            name: item.name,
+            unit: item.unit,
+            localBefore: item.stock,
+            cloudNow: item.stock,
+            diff: 0, // nilai ditulis absolut dari device ini — penanda "perlu cek fisik"
+          });
+        }
+        useInventoryStore.setState({
+          stockConflicts: Array.from(byId.values()).sort((x, y) => y.diff - x.diff),
+        });
+      } catch (e) {
+        console.warn('[cloudSync] gagal menandai konflik degraded (UI signal dilewati):', e instanceof Error ? e.message : e);
+      }
     }
   };
 
@@ -1405,11 +1439,36 @@ export async function fetchSettingsFromCloud(): Promise<AppSettings | null> {
 
 export async function syncLoyaltySettings(ls: LoyaltySettings) {
   if (!isSupabaseConfigured) return;
+  // S2 fix (AUDIT-OX): pastikan row settings id=1 ada SEBELUM upsert parsial — bila row
+  // belum ada (DB klien baru), upsert parsial menciptakan baris sparse (kolom lain NULL)
+  // sehingga device lain membaca settings "tereset". Bootstrap penuh dulu bila perlu.
+  await ensureSettingsRowExists();
   await smartUpsert('settings', {
     id: 1,
     loyalty_enabled: ls.enabled,
     loyalty_settings: ls,
   });
+}
+
+/**
+ * S2 fix helper: pastikan row `settings` id=1 ada. Return true bila row sudah ada
+ * (atau berhasil di-bootstrap), false bila tidak bisa memastikan (offline).
+ */
+async function ensureSettingsRowExists(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.from('settings').select('id').eq('id', 1).maybeSingle();
+    if (error) return false;
+    if (data) return true;
+    // Row belum ada → bootstrap dari store lokal (syncSettings penuh menulis semua kolom).
+    // Dynamic import untuk menghindari circular static import (settingsStore → cloudSync).
+    const { useSettingsStore } = await import('../store/settingsStore');
+    const { settings } = useSettingsStore.getState();
+    await syncSettings(settings);
+    return true;
+  } catch (e) {
+    console.warn('[cloudSync] ensureSettingsRowExists gagal:', e instanceof Error ? e.message : e);
+    return false;
+  }
 }
 
 export async function fetchLoyaltySettingsFromCloud(): Promise<LoyaltySettings | null> {
@@ -1418,7 +1477,8 @@ export async function fetchLoyaltySettingsFromCloud(): Promise<LoyaltySettings |
     const { data, error } = await supabase.from('settings').select('loyalty_settings').eq('id', 1).single();
     if (error || !data?.loyalty_settings) return null;
     return data.loyalty_settings as LoyaltySettings;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1430,6 +1490,8 @@ export async function fetchLoyaltySettingsFromCloud(): Promise<LoyaltySettings |
 
 export async function syncCustomCategories(categories: string[]) {
   if (!isSupabaseConfigured) return;
+  // S2 fix (AUDIT-OX): sama dengan syncLoyaltySettings — cegah row sparse pada DB baru.
+  await ensureSettingsRowExists();
   await smartUpsert('settings', {
     id: 1,
     categories: categories,
@@ -1442,7 +1504,8 @@ export async function fetchCustomCategoriesFromCloud(): Promise<string[] | null>
     const { data, error } = await supabase.from('settings').select('categories').eq('id', 1).single();
     if (error || !data?.categories) return null;
     return data.categories as string[];
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1468,7 +1531,8 @@ export async function fetchCustomersFromCloud(): Promise<Customer[] | null> {
       lastVisit: row.last_visit || undefined,
       createdAt: row.created_at,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1499,7 +1563,8 @@ export async function fetchMenusFromCloud(): Promise<Menu[] | null> {
         : undefined,
       isBundle: row.is_bundle || false,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1519,7 +1584,8 @@ export async function fetchInventoryFromCloud(): Promise<InventoryItem[] | null>
       // v4.7 TO DO 18.8 (A5): baca timestamp cloud → last-write-wins saat merge lokal
       updatedAt: row.updated_at || undefined,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1563,7 +1629,8 @@ export async function fetchUsersFromCloud(): Promise<User[] | null> {
       createdAt: row.created_at,
       activeSessionId: row.active_session_id || undefined,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1656,7 +1723,8 @@ export async function fetchPromosFromCloud(): Promise<Promo[] | null> {
       usageByCustomer: row.usage_by_customer || undefined,
       createdAt: row.created_at,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1688,7 +1756,8 @@ export async function fetchShiftsFromCloud(): Promise<CashierShift[] | null> {
       closedById: row.closed_by_id || undefined,
       closedByRole: row.closed_by_role || undefined,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1748,7 +1817,8 @@ export async function fetchStockLogsFromCloud(): Promise<StockLogEntry[] | null>
       reason: row.reason || undefined,
       date: row.date,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1772,7 +1842,8 @@ export async function fetchAuditLogsFromCloud(): Promise<AuditLogEntry[] | null>
       timestamp: row.timestamp,
       metadata: row.metadata || undefined,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }
@@ -1828,7 +1899,8 @@ export async function fetchStockOpnamesFromCloud(): Promise<StockOpname[] | null
       adjustmentReason: row.adjustment_reason || undefined,
       notes: row.notes || undefined,
     })) || null;
-  } catch {
+  } catch (e) {
+    console.warn('[cloudSync] fetch cloud gagal (fallback null):', e instanceof Error ? e.message : e);
     return null;
   }
 }

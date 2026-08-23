@@ -346,6 +346,23 @@ ALTER TABLE shifts ADD COLUMN IF NOT EXISTS closed_by_role TEXT;
 --     Ditulis syncMenu sejak lama; tanpa kolom ini upsert menu gagal & offline queue menumpuk.
 -- ============================================================
 ALTER TABLE menus ADD COLUMN IF NOT EXISTS description TEXT;
+
+-- ============================================================
+-- 18. ⚠️ DISARANKAN (AUDIT-OX S9) — relaksasi CHECK payment_method.
+--     Metode pembayaran baru di masa depan tidak lagi membuat upsert gagal
+--     & offline queue menumpuk (validasi enum kini di sisi aplikasi). Idempoten.
+-- ============================================================
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_payment_method_check;
+
+-- ============================================================
+-- 19. ⚠️ DISARANKAN (AUDIT-OX S10) — index untuk query rutin (performa laporan
+--     seiring data tumbuh). Murni additive, aman dijalankan berulang.
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date DESC);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_date ON cash_movements(date DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_logs_date ON stock_logs(date DESC);
+CREATE INDEX IF NOT EXISTS idx_customers_created_at ON customers(created_at DESC);
 ```
 
 > [!NOTE] **Self-healing di sisi app**

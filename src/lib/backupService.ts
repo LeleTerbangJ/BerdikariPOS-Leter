@@ -327,7 +327,7 @@ export class BackupService {
   static async createBackup(
     type: BackupType,
     options: { includeAuditLogs?: boolean } = {}
-  ): Promise<{ filename: string; blob: Blob; sizeBytes: number }> {
+  ): Promise<{ filename: string; blob: Blob; sizeBytes: number; historyId: string }> {
     const zip = new JSZip();
     const settings = useSettingsStore.getState().settings;
     const users = useAuthStore.getState().users;
@@ -462,7 +462,9 @@ export class BackupService {
     const filename = `Backup_${sanitizedStoreName}_${dateStr}_${timeStr}.zip`;
 
     // Record entry in backup store history
-    useBackupStore.getState().addHistoryEntry({
+    // S4 fix (AUDIT-OX): kembalikan historyId agar pemanggil (scheduler auto-backup) bisa
+    // memperbarui status setelah hasil sebenarnya diketahui (upload cloud berhasil/gagal).
+    const historyId = useBackupStore.getState().addHistoryEntry({
       date: createdAt,
       type,
       filename,
@@ -477,6 +479,7 @@ export class BackupService {
       filename,
       blob: zipBlob,
       sizeBytes: zipBlob.size,
+      historyId,
     };
   }
 

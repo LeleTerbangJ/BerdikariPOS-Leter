@@ -73,7 +73,9 @@ CREATE TABLE IF NOT EXISTS transactions (
   subtotal FLOAT NOT NULL DEFAULT 0,
   discount FLOAT NOT NULL DEFAULT 0,
   total_amount FLOAT NOT NULL DEFAULT 0,
-  payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'QRIS', 'Transfer')),
+  -- S9 fix (AUDIT-OX): CHECK ketat dihapus — metode pembayaran baru di masa depan tidak
+  -- lagi membuat upsert gagal & offline queue menumpuk. Validasi enum dilakukan di TS.
+  payment_method TEXT NOT NULL,
   cash_received FLOAT,
   change FLOAT,
   kitchen_status TEXT NOT NULL DEFAULT 'Waiting' CHECK (kitchen_status IN ('Waiting', 'Processing', 'Done')),

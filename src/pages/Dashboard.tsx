@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTransactionStore } from '../store/transactionStore';
 // v4.7 TO DO 18.6: indikator "laporan belum final" saat ada data belum tersinkron (reuse badge O-5)
 import SyncFreshnessBanner from '../components/SyncFreshnessBanner';
@@ -61,18 +61,46 @@ export default function Dashboard() {
   const [period, setPeriod] = useState<Period>('daily');
   const [trendPeriod, setTrendPeriod] = useState<'7days' | '30days'>('7days');
 
-  const today = new Date();
-  const todayTx = transactions.filter(
-    (t) => isSameDay(new Date(t.date), today) && t.txStatus === 'Selesai' && !t.splitParentId && !t.refunded
+  // S16 fix (AUDIT-OX): ticker 1-menit — halaman yang dibiarkan terbuka melewati tengah
+  // malam otomatis berganti hari (sebelumnya `today` beku saat render pertama).
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const today = useMemo(() => new Date(nowTick), [nowTick]);
+
+  const todayTx = useMemo(
+    () =>
+      transactions.filter(
+        (t) => isSameDay(new Date(t.date), today) && t.txStatus === 'Selesai' && !t.splitParentId && !t.refunded
+      ),
+    [transactions, today]
   );
 
-  const todayGrossRevenue = todayTx.reduce((a, t) => a + t.subtotal, 0);
-  const todayDiscount = todayTx.reduce((a, t) => a + t.discount, 0);
-  const todayNetRevenue = todayGrossRevenue - todayDiscount;
-  const todayRevenue = todayTx.reduce((a, t) => a + t.totalAmount, 0); // Omset fisik (termasuk pajak) untuk display omset
-  const todayHPP = todayTx.reduce((a, t) => a + t.hpp, 0);
-  const todayProfit = todayNetRevenue - todayHPP; // Laba kotor murni (bersih dari diskon & pajak)
-  const todayCount = todayTx.length;
+  // S16 fix: agregat kartu ringkasan dimemo (dihitung ulang hanya saat data/hari berubah)
+  const {
+    todayGrossRevenue,
+    todayDiscount,
+    todayNetRevenue,
+    todayRevenue,
+    todayHPP,
+    todayProfit,
+    todayCount,
+  } = useMemo(() => {
+    const gross = todayTx.reduce((a, t) => a + t.subtotal, 0);
+    const disc = todayTx.reduce((a, t) => a + t.discount, 0);
+    const net = gross - disc;
+    return {
+      todayGrossRevenue: gross,
+      todayDiscount: disc,
+      todayNetRevenue: net,
+      todayRevenue: todayTx.reduce((a, t) => a + t.totalAmount, 0),
+      todayHPP: todayTx.reduce((a, t) => a + t.hpp, 0),
+      todayProfit: net - todayTx.reduce((a, t) => a + t.hpp, 0),
+      todayCount: todayTx.length,
+    };
+  }, [todayTx]);
 
   // Best seller
   // v4.5 TO DO 5.11: sub-bill split equal membawa semua item di setiap bagian → qty per menu
@@ -167,7 +195,9 @@ export default function Dashboard() {
         },
       ],
     };
-  }, [transactions, period]);
+    // S16 fix: sertakan `today` — sebelumnya closure `today` basi membuat chart tidak
+    // berganti hari walau ticker sudah jalan.
+  }, [transactions, period, today]);
 
   // ==========================================
   // ADVANCED ANALYTICS MODULES CALCULATION

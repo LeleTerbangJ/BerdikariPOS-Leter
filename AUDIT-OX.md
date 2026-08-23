@@ -278,23 +278,23 @@ CREATE POLICY "anon select audit" ON audit_logs FOR SELECT TO anon USING (true);
 
 | # | Temuan | Lokasi | ✅ Fix Aman Ringkas |
 |---|--------|--------|---------------------|
-| S1 | Escape/F1 mengganggu modal pembayaran in-flight | `POS.tsx:542-565` | Tambah guard di awal handler keyboard: abaikan Escape/F1 bila `finalizeTransaction` in-flight atau modal lain terbuka. Jalur normal (modal tertentu aktif → shortcut bekerja) tidak berubah. |
-| S2 | Upsert parsial settings bisa membuat row id=1 sparse | `cloudSync.ts:1337-1344` | Sebelum upsert parsial, pastikan row id=1 ada: bila `fetchSettingsFromCloud` null → jalankan `syncSettings` penuh dulu. Additive; settings yang sudah ada tidak tersentuh. |
-| S3 | Fallback absolut stok saat offline = lost-update lintas device | `cloudSync.ts:1039-1054` | Saat result `degraded`, dorong penanda rekonsiliasi (set flag/banner stok konflik yang **sudah ada** di Inventaris — reuse `stockConflict`). Tanpa perubahan logika tulis. |
-| S4 | Riwayat backup "Success" sebelum upload diketahui | `backupService.ts:421-430` | Pindahkan pencatatan history ke pemanggil setelah result diketahui, ATAU tambahkan `updateBackupHistoryEntry(id, status)` dan panggil setelah upload. Entri lama tidak tersentuh. |
-| S5 | Auto-backup Local Download diblokir browser tanpa user gesture | `autoBackupScheduler.ts:100` | Untuk scheduler, prioritaskan destinasi Supabase Storage; bila target "Local", tandai status "Siap diunduh — klik untuk simpan" (toast + badge) alih-alih klaim sukses. |
-| S6 | Persist split stock session gagal diam-diam saat kuota penuh | `splitStockSession.ts:172-182` | Saat persist gagal → tolak MEMULAI split FRESH baru (fail-closed, toast jelas). Sesi yang sudah jalan tetap berlanjut di memori. Tidak memengaruhi checkout normal. |
-| S7 | Diskon cart manual menerima nilai negatif | `cartStore.ts:134` | `setDiscount(Math.max(0, Math.floor(amount \|\| 0)))` — clamp satu baris; nilai valid (≥0) berperilaku identik. |
-| S8 | Promo `usageCount` kalah last-write-wins lintas device | `promoStore.ts:216-221` | Saat merge, hitung ulang `usageCount` dari union `usageKeys` (data sumbernya sudah di-union dengan benar). Additive di jalur merge saja. |
-| S9 | CHECK `payment_method` & `tax INT` berisiko gagal sync | `schema.sql:75,85` | SQL idempoten: relaksasi CHECK payment method (DO block pola promos.type yang sudah terbukti) + `ALTER TABLE transactions ALTER COLUMN tax TYPE FLOAT` (atau biarkan INT bila pembulatan rupiah memang disengaja — verifikasi dulu semantik). |
-| S10 | Index database hilang untuk query rutin | `schema.sql` | Murni additive, tanpa risiko: `CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date DESC); idx_cm_date ON cash_movements(date DESC); idx_al_ts ON audit_logs(timestamp DESC); idx_sl_date ON stock_logs(date DESC); idx_cust_created ON customers(created_at DESC);` |
-| S11 | Dependency usang (react-router open redirect, DOMPurify XSS ×5) | `package.json` | `npm audit fix` + upgrade `react-router-dom` (minor/major sesuai breaking changes — uji routing) & `dompurify`. Tidak menyentuh kode aplikasi bila API kompatibel. |
-| S12 | Sesi multi-login pakai `Math.random`, enforcement client-only | `authStore.ts:181-191` | Ganti generator ke `crypto.randomUUID()` (drop-in, entropy lebih baik, tanpa perubahan mekanisme). Enforcement server-side masuk Tahap 2 K3. |
-| S13 | Op update/delete offline tanpa filter dihitung sukses | `offlineQueue.ts:370-379` | Bila `op.filter` undefined → klasifikasikan sebagai error permanen (masuk failed-ops list yang sudah ada) alih-alih success. Jalur normal (filter selalu ada) tidak berubah. |
-| S14 | Delete→update offline pada record sama: edit lenyap | `offlineQueue.ts:241-267` | Di `addToQueue('update'/'upsert')`, bila ada delete pending untuk recordId sama → hapus delete-op tsb (record dibuat ulang oleh upsert). Hanya menyentuh kombinasi yang saat ini rusak. |
-| S15 | Belasan catch kosong di fetcher cloud | `cloudSync.ts:1352…1758` | Tambah `console.warn('[cloudSync]', err?.message)` di tiap catch — zero behavioral change, besar manfaat diagnosa lapangan. |
-| S16 | Dashboard chart basi lintas tengah malam + agregat tak memoized | `Dashboard.tsx:64,109-170` | Memoize `todayTx`/chartData + ticker `Date.now()` interval 1-menit (clear di unmount). Angka untuk periode berjalan identik. |
-| S17 | BroadcastChannel leak per broadcast; listener GATT menumpuk | `printer.ts:161-169,387-392` | Cache singleton module-level untuk channel; `removeEventListener` sebelum add (atau AbortController). Perilaku broadcast/re-pair tidak berubah. |
+| **S1** ✅ | Escape/F1 mengganggu modal pembayaran in-flight | `POS.tsx:542-565` | Tambah guard di awal handler keyboard: abaikan Escape/F1 bila `finalizeTransaction` in-flight atau modal lain terbuka. Jalur normal (modal tertentu aktif → shortcut bekerja) tidak berubah. |
+| **S2** ✅ | Upsert parsial settings bisa membuat row id=1 sparse | `cloudSync.ts:1337-1344` | Sebelum upsert parsial, pastikan row id=1 ada: bila `fetchSettingsFromCloud` null → jalankan `syncSettings` penuh dulu. Additive; settings yang sudah ada tidak tersentuh. |
+| **S3** ✅ | Fallback absolut stok saat offline = lost-update lintas device | `cloudSync.ts:1039-1054` | Saat result `degraded`, dorong penanda rekonsiliasi (set flag/banner stok konflik yang **sudah ada** di Inventaris — reuse `stockConflict`). Tanpa perubahan logika tulis. |
+| **S4** ✅ | Riwayat backup "Success" sebelum upload diketahui | `backupService.ts:421-430` | Pindahkan pencatatan history ke pemanggil setelah result diketahui, ATAU tambahkan `updateBackupHistoryEntry(id, status)` dan panggil setelah upload. Entri lama tidak tersentuh. |
+| **S5** ✅ | Auto-backup Local Download diblokir browser tanpa user gesture | `autoBackupScheduler.ts:100` | Untuk scheduler, prioritaskan destinasi Supabase Storage; bila target "Local", tandai status "Siap diunduh — klik untuk simpan" (toast + badge) alih-alih klaim sukses. |
+| **S6** ✅ | Persist split stock session gagal diam-diam saat kuota penuh | `splitStockSession.ts:172-182` | Saat persist gagal → tolak MEMULAI split FRESH baru (fail-closed, toast jelas). Sesi yang sudah jalan tetap berlanjut di memori. Tidak memengaruhi checkout normal. |
+| **S7** ✅ | Diskon cart manual menerima nilai negatif | `cartStore.ts:134` | `setDiscount(Math.max(0, Math.floor(amount \|\| 0)))` — clamp satu baris; nilai valid (≥0) berperilaku identik. |
+| **S8** ✅ | Promo `usageCount` kalah last-write-wins lintas device | `promoStore.ts:216-221` | Saat merge, hitung ulang `usageCount` dari union `usageKeys` (data sumbernya sudah di-union dengan benar). Additive di jalur merge saja. |
+| **S9** ✅ | CHECK `payment_method` & `tax INT` berisiko gagal sync | `schema.sql:75,85` | SQL idempoten: relaksasi CHECK payment method (DO block pola promos.type yang sudah terbukti) + `ALTER TABLE transactions ALTER COLUMN tax TYPE FLOAT` (atau biarkan INT bila pembulatan rupiah memang disengaja — verifikasi dulu semantik). |
+| **S10** ✅ | Index database hilang untuk query rutin | `schema.sql` | Murni additive, tanpa risiko: `CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date DESC); idx_cm_date ON cash_movements(date DESC); idx_al_ts ON audit_logs(timestamp DESC); idx_sl_date ON stock_logs(date DESC); idx_cust_created ON customers(created_at DESC);` |
+| **S11** 🟡 PARSIAL (DOMPurify ter-fix via npm audit fix; react-router v7 & uuid v14 = major breaking, ditunda tugas khusus - uuid advisory tidak menyentuh pemakaian v4) Dependency usang (react-router open redirect, DOMPurify XSS ×5) | `package.json` | `npm audit fix` + upgrade `react-router-dom` (minor/major sesuai breaking changes — uji routing) & `dompurify`. Tidak menyentuh kode aplikasi bila API kompatibel. |
+| **S12** ✅ | Sesi multi-login pakai `Math.random`, enforcement client-only | `authStore.ts:181-191` | Ganti generator ke `crypto.randomUUID()` (drop-in, entropy lebih baik, tanpa perubahan mekanisme). Enforcement server-side masuk Tahap 2 K3. |
+| **S13** ✅ | Op update/delete offline tanpa filter dihitung sukses | `offlineQueue.ts:370-379` | Bila `op.filter` undefined → klasifikasikan sebagai error permanen (masuk failed-ops list yang sudah ada) alih-alih success. Jalur normal (filter selalu ada) tidak berubah. |
+| **S14** ✅ | Delete→update offline pada record sama: edit lenyap | `offlineQueue.ts:241-267` | Di `addToQueue('update'/'upsert')`, bila ada delete pending untuk recordId sama → hapus delete-op tsb (record dibuat ulang oleh upsert). Hanya menyentuh kombinasi yang saat ini rusak. |
+| **S15** ✅ | Belasan catch kosong di fetcher cloud | `cloudSync.ts:1352…1758` | Tambah `console.warn('[cloudSync]', err?.message)` di tiap catch — zero behavioral change, besar manfaat diagnosa lapangan. |
+| **S16** ✅ | Dashboard chart basi lintas tengah malam + agregat tak memoized | `Dashboard.tsx:64,109-170` | Memoize `todayTx`/chartData + ticker `Date.now()` interval 1-menit (clear di unmount). Angka untuk periode berjalan identik. |
+| **S17** ✅ | BroadcastChannel leak per broadcast; listener GATT menumpuk | `printer.ts:161-169,387-392` | Cache singleton module-level untuk channel; `removeEventListener` sebelum add (atau AbortController). Perilaku broadcast/re-pair tidak berubah. |
 
 ---
 
@@ -340,26 +340,28 @@ Diurutkan dari impact ÷ effort:
 
 ```
 ✅ SELESAI (dieksekusi & tervalidasi — tsc 0 error, 653/653 test, build sukses):
-   K1 (redeem loyalty: engine param + finalizeTransaction + 6 test)
-   K2 (backup replace wipe scope berbasis isi ZIP)
-   K6 (offline queue flush merge + getQueuedOperations + 3 test konkurensi)
+   KRITIS : K1, K2, K6
+   TINGGI : T1–T10 (seluruhnya)
+   SEDANG : S1, S7, S9, S10, S12, S13, S14, S15, S16, S17
+   S11    : 🟡 PARSIAL (DOMPurify ter-fix; react-router v7 & uuid v14 = major → tugas khusus)
 
-Wave berikutnya (patch panas risiko rendah, siap dieksekusi):
-   T3 (hooks Layout) → T5/T6/T7 (guard satu titik) → S7/S15/S10 (trivial)
+✅ TAMBAHAN (S2–S6, S8 + cherry-pick D — dieksekusi & tervalidasi: tsc 0 error, 654/654 test, build sukses):
+   S2 probe settings row · S3 konflik sintetis degraded · S4 historyId+update status
+   S5 auto-backup local jujur · S6 gerbang fail-closed split · S8 usageCount=max(union)
+   D: promoAmount ?? (nilai 0 sah) · downloadCSV revokeObjectURL (delay 1 dtk)
+   [bcrypt rounds: temuan STALE — seed plaintext by-design, re-hash boot konsisten rounds 10]
 
-Wave SQL Editor sekali (koordinasikan deployment):
-   K5 Opsi A (audit insert-only + SOP purge manual) → S9/S10 (CHECK/index)
-   [T8 menus.description ✅ sudah dieksekusi — SQL butir 17 di DEPLOYMENT.md §4]
+📋 BAGIAN D (backlog pasca-penjualan): CartPanel refactor · A11y pass · CSP headers ·
+   disposeOfflineQueue · persist idempotency registry · LWW universal
 
-Wave patch terisolasi dengan test baru:
-   T1 (rollback delta) → T2 (split bill idempotent) → T4 (flag reset) → T9/T10
-   → S1–S8, S11–S14, S16–S17
+🗺️ BAGIAN E (roadmap pasca-penjualan): prioritas E3 (Tahap 2 Keamanan) + E8
+   (test integrasi konkurensi); lainnya setelah pilot berjalan.
 
-Tahap 2 KEAMANAN (proyek terstruktur — K3+K4+K5 Opsi B):
+Tahap 2 KEAMANAN (proyek terstruktur — K3+K4+K5 final):
    1. RPC security definer untuk jalur delete sah (delete tx, wipe/reset, clear logs)
       + verifikasi login via RPC dengan cache offline
    2. Verifikasi penuh TESTING-PRADEPLOY.md
-   3. BARU revoke DELETE/UPDATE dari anon per tabel → E1–E10 lanjutan
+   3. BARU revoke DELETE/UPDATE dari anon per tabel
 ```
 
 **Prosedur tiap patch** (sesuai konvensi project):
