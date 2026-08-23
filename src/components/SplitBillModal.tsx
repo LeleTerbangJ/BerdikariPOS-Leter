@@ -52,6 +52,19 @@ interface SplitBillModalProps {
 
 type SplitMode = 'equal' | 'item';
 
+/**
+ * Re-audit T2 fix: hash pendek deterministik (djb2) — menandai ISI sub-bill pada
+ * transactionId agar ID tidak hanya unik per-indeks tapi juga per-KONTEN. Ganti mode
+ * (equal ↔ item) yang mengubah komposisi bill pada indeks sama → ID berbeda → engine
+ * tidak salah menganggapnya replay dari transaksi lama; double-click bill identik →
+ * signature sama → idempotency guard tetap bekerja.
+ */
+function shortHash(input: string): string {
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36).slice(0, 8);
+}
+
 interface SubBillDraft {
   id: number;
   items: CartItem[];
@@ -303,6 +316,12 @@ export default function SplitBillModal({
   // v4.7 TO DO 15.3: opsi cetak di split bill — dua toggle independen (default: cetak semua)
   const [skipSplitReceipt, setSkipSplitReceipt] = useState(false);
   const [skipSplitKitchen, setSkipSplitKitchen] = useState(false);
+  // T2 fix (AUDIT-OX): guard anti double-submit — tombol bayar disabled selama eksekusi async
+  const [processingBillIdx, setProcessingBillIdx] = useState<number | null>(null);
+  // T2 fix: ID deterministik per sub-bill (basis sesi) — engine idempotency guard aktif
+  // di jalur split (double-click / replay tidak membuat transaksi kedua). Untuk split
+  // pending, parentTx.id yang dipakai sebagai basis (stabil lintas buka/tutup modal).
+  const sessionKeyRef = useRef<string>(Math.random().toString(36).slice(2));
 
   const activeBills = mode === 'equal' ? equalBills : itemBills;
 
@@ -311,7 +330,19 @@ export default function SplitBillModal({
   // menyelaraskan reserve stok yang terpotong saat Simpan Pending dengan isi cart sekarang.
   const reconciledPendingSplitRef = useRef<string | null>(null);
 
+  // T2 fix (AUDIT-OX): wrapper anti double-submit — selama eksekusi async berjalan,
+  // panggilan ulang diabaikan & tombol disabled (processingBillIdx).
   const handlePaySubBill = async (billIdx: number) => {
+    if (processingBillIdx !== null) return;
+    setProcessingBillIdx(billIdx);
+    try {
+      await handlePaySubBillImpl(billIdx);
+    } finally {
+      setProcessingBillIdx(null);
+    }
+  };
+
+  const handlePaySubBillImpl = async (billIdx: number) => {
     const targetBill = activeBills[billIdx];
     if (!targetBill) return;
 
@@ -429,6 +460,14 @@ export default function SplitBillModal({
 
     // Execute atomic checkout for this Sub-Bill
     const result = await AtomicTransactionEngine.executeCheckout({
+      // T2 fix (AUDIT-OX): ID deterministik per sub-bill → in-flight/idempotency guard
+      // engine AKTIF di jalur split (double-click tidak membuat transaksi kedua).
+      // Re-audit fix: + signature isi bill — ganti mode equal↔item yang mengubah komposisi
+      // pada indeks sama menghasilkan ID BERBEDA (bukan salah dianggap replay tx lama),
+      // sementara double-click bill identik tetap satu ID (guard jalan).
+      transactionId: `${parentTx?.id ?? sessionKeyRef.current}-sub-${billIdx + 1}-${shortHash(
+        computeCartSignature(targetBill.items) + ':' + targetBill.totalAmount
+      )}`,
       cartItems: targetBill.items,
       subtotal: targetBill.subtotal,
       discount: targetBill.discount,
@@ -887,9 +926,14 @@ export default function SplitBillModal({
 
                 <button
                   onClick={() => handlePaySubBill(activeBillIdx)}
-                  className="btn-primary w-full text-sm py-2.5 flex items-center justify-center gap-2"
+                  disabled={processingBillIdx !== null}
+                  className="btn-primary w-full text-sm py-2.5 flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  <span>Bayar Sub-Bill {activeBillIdx + 1} ({formatRupiah(activeBills[activeBillIdx].totalAmount)})</span>
+                  <span>
+                    {processingBillIdx !== null
+                      ? 'Memproses pembayaran…'
+                      : `Bayar Sub-Bill ${activeBillIdx + 1} (${formatRupiah(activeBills[activeBillIdx].totalAmount)})`}
+                  </span>
                   <ArrowRight size={16} />
                 </button>
               </div>

@@ -12,7 +12,7 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 // v4.7 TO DO 13.1 (O-1): antrean offline dipersist ke IndexedDB (kuota besar) dengan
 // migrasi one-time dari localStorage legacy + fallback safeStorage bila IDB tidak tersedia.
-import { idbGet, idbSet, idbRemove } from '../utils/idbStorage';
+import { idbGet, idbGetStrict, idbSet, idbRemove } from '../utils/idbStorage';
 import { safeStorage } from '../utils/safeStorage';
 
 export type QueueOperation = {
@@ -41,6 +41,16 @@ let memoryQueue: QueueOperation[] | null = null;
 // (jika tidak, antrean tersimpan dari sesi sebelumnya bisa ditimpa oleh op yang baru
 // ditambahkan sebelum hidrasi). hydrateQueue yang menggabungkan & mempersist hasil akhir.
 let hydrated = false;
+
+// T7 fix (AUDIT-OX): retry hidrasi tunggal (anti stacking) setelah kegagalan transien IDB.
+let hydrateRetryTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleHydrateRetry() {
+  if (hydrateRetryTimer) return;
+  hydrateRetryTimer = setTimeout(() => {
+    hydrateRetryTimer = null;
+    void hydrateQueue();
+  }, 5000);
+}
 
 function getQueue(): QueueOperation[] {
   return memoryQueue ?? [];
@@ -80,13 +90,17 @@ function saveQueue(queue: QueueOperation[]) {
  *   (digabung, id yang sama dimenangkan oleh memori).
  */
 export async function hydrateQueue(): Promise<QueueOperation[]> {
+  // T7 fix (AUDIT-OX): baca ketat — error/transien IDB TIDAK boleh dianggap "kosong".
+  // Sebelumnya idbGet menelan error → null → fallback localStorage (sudah dihapus
+  // pasca-migrasi) → persist '[]' MENIMPA antrean sesi sebelumnya (data hilang).
+  let idbTransientFailure = false;
   let raw: string | null = null;
   try {
-    raw = await idbGet(QUEUE_KEY);
+    raw = await idbGetStrict(QUEUE_KEY);
   } catch {
-    raw = null;
+    idbTransientFailure = true;
   }
-  if (raw === null) {
+  if (!idbTransientFailure && raw === null) {
     // Migrasi / fallback: antrean legacy di localStorage
     try {
       raw = safeStorage.getItem(QUEUE_KEY);
@@ -109,17 +123,15 @@ export async function hydrateQueue(): Promise<QueueOperation[]> {
     const memIds = new Set(memoryQueue.map((o) => o.id));
     stored = [...memoryQueue, ...stored.filter((o) => !memIds.has(o.id))];
   }
-  memoryQueue = stored;
-  hydrated = true;
 
   // Muat daftar op gagal permanen (O-3) — IDB primary, fallback localStorage.
   let failedRaw: string | null = null;
   try {
-    failedRaw = await idbGet(FAILED_KEY);
+    failedRaw = await idbGetStrict(FAILED_KEY);
   } catch {
-    failedRaw = null;
+    idbTransientFailure = true;
   }
-  if (failedRaw === null) {
+  if (!idbTransientFailure && failedRaw === null) {
     try {
       failedRaw = safeStorage.getItem(FAILED_KEY);
     } catch {
@@ -135,6 +147,21 @@ export async function hydrateQueue(): Promise<QueueOperation[]> {
     }
   }
   if (!Array.isArray(failedStored)) failedStored = [];
+
+  if (idbTransientFailure) {
+    // Gagal transien: JANGAN timpa penyimpanan dengan hasil parsial/kosong & JANGAN
+    // mengunci hydrated=true secara permanen. Op runtime tetap dipakai in-memory;
+    // coba hidrasi ulang sekali lagi nanti (timer tunggal, anti stacking).
+    // Catatan: daftar gagal runtime (memoryFailed) sengaja DIPERTAHANKAN apa adanya —
+    // hasil baca IDB yang parsial/gagal tidak boleh menimpanya.
+    console.warn('[OfflineQueue] IDB gagal transien saat hidrasi — retry 5 detik (data tersimpan tidak disentuh).');
+    updateQueueCount();
+    scheduleHydrateRetry();
+    return getQueue();
+  }
+
+  memoryQueue = stored;
+  hydrated = true;
   memoryFailed = failedStored;
   updateFailedCount();
 
@@ -280,6 +307,11 @@ export function getQueueLength(): number {
   return getQueue().length;
 }
 
+/** K6 fix (AUDIT-OX): akses read-only isi antrean — untuk debug/UI/test. Salinan array. */
+export function getQueuedOperations(): QueueOperation[] {
+  return [...getQueue()];
+}
+
 // ============================================================
 // FLUSH QUEUE (retry pending operations)
 // ============================================================
@@ -333,6 +365,9 @@ export async function flushQueue(): Promise<{ success: number; failed: number; p
   let failed = 0;
   const remaining: QueueOperation[] = [];
   const newlyFailed: FailedQueueOperation[] = [];
+  // K6 fix (AUDIT-OX): id op yang SUKSES — dipakai di akhir flush untuk membedakan
+  // "sudah tersync" vs "masih harus diantrekan ulang".
+  const succeededIds = new Set<string>();
 
   // O-3: op yang gagal permanen dipindah ke daftar gagal (bukan di-drop diam-diam);
   // error transient (jaringan) tetap di antrean tanpa menaikkan retries.
@@ -409,6 +444,7 @@ export async function flushQueue(): Promise<{ success: number; failed: number; p
         failOp(op, error);
       } else {
         success++;
+        succeededIds.add(op.id);
       }
     } catch (e) {
       failOp(op, e);
@@ -418,12 +454,48 @@ export async function flushQueue(): Promise<{ success: number; failed: number; p
   if (newlyFailed.length > 0) {
     saveFailedOps([...memoryFailed, ...newlyFailed]);
   }
-  saveQueue(remaining);
+
+  // ============================================================
+  // K6 fix (AUDIT-OX): JANGAN menimpa antrean dengan `remaining` mentah.
+  // Op baru yang masuk lewat addToQueue() SELAMA flush berjalan sudah
+  // di-persist oleh saveQueue internal addToQueue, tetapi AKAN TERHAPUS
+  // bila akhir flush menimpa dengan remaining saja → transaksi hilang.
+  //
+  // Merge dari kondisi antrean TERKINI (bukan snapshot):
+  //   1) op yang TIDAK ada di snapshot flush → masuk selama flush → simpan.
+  //   2) op sukses lalu di-replace in-place oleh addToQueue (id sama, objek
+  //      baru berisi data lebih baru) → antrekan ulang versi terbarunya.
+  //   3) op sukses tanpa perubahan → tidak diantrekan ulang (perilaku lama).
+  //   4) op gagal permanen → pindah ke daftar gagal (tidak ikut antrean).
+  //   5) op gagal transient / retries < MAX → tetap antre (pakai versi
+  //      terbaru hasil replace in-place, bukan objek basi dari snapshot).
+  // Kasus tanpa operasi konkuren (mayoritas) = identik dengan saveQueue(remaining).
+  // ============================================================
+  const snapshotById = new Map(sortedQueue.map((o) => [o.id, o] as const));
+  const permanentIds = new Set(newlyFailed.map((f) => f.id));
+  const currentQueue = getQueue();
+  const merged: QueueOperation[] = [];
+  for (const op of currentQueue) {
+    const snap = snapshotById.get(op.id);
+    if (!snap) {
+      merged.push(op); // (1) op baru saat flush
+      continue;
+    }
+    const replacedDuringFlush = op !== snap; // addToQueue replace-in-place membuat objek baru
+    if (permanentIds.has(op.id)) continue; // (4)
+    if (succeededIds.has(op.id)) {
+      if (replacedDuringFlush) merged.push(op); // (2)
+      // (3) sukses & tak berubah → lewati
+    } else {
+      merged.push(op); // (5)
+    }
+  }
+  saveQueue(merged);
   updateQueueCount();
   isFlushing = false;
 
-  console.log(`[OfflineQueue] Done. Success: ${success}, Failed: ${failed}, Remaining: ${remaining.length}, FailedList: ${newlyFailed.length}`);
-  return { success, failed, pending: remaining.length };
+  console.log(`[OfflineQueue] Done. Success: ${success}, Failed: ${failed}, Remaining: ${merged.length}, FailedList: ${newlyFailed.length}`);
+  return { success, failed, pending: merged.length };
 }
 
 export function clearQueue() {

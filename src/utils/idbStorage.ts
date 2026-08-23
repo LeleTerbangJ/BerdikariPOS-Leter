@@ -122,6 +122,26 @@ export async function idbGet(key: string): Promise<string | null> {
   }
 }
 
+/**
+ * T7 fix (AUDIT-OX): baca ketat — MEMBEDAKAN tiga kondisi yang oleh `idbGet`
+ * dicampur menjadi `null`:
+ *   - key memang kosong            → resolve `null` (aman diperlakukan kosong)
+ *   - IDB gagal PERMANEN           → resolve `null` (fallback localStorage sah)
+ *   - IDB gagal TRANSIEN (blocked) → REJECT (pemanggil HARUS tidak menimpa data
+ *     tersimpan dengan hasil kosong — cegah wipe antrean/data saat boot)
+ */
+export async function idbGetStrict(key: string): Promise<string | null> {
+  const db = await openDb();
+  if (!db) {
+    if (dbDisabled) return null; // permanen → jalur fallback legacy sah
+    throw new Error('IDB transient unavailable (blocked by another tab)');
+  }
+  const tx = db.transaction(IDB_STORE_NAME, 'readonly');
+  const req = tx.objectStore(IDB_STORE_NAME).get(key);
+  const value = await requestDone(req, tx); // error baca → reject (bukan null)
+  return typeof value === 'string' ? value : null;
+}
+
 /** Tulis ke IndexedDB. Return true jika berhasil (false = IDB tidak tersedia/gagal). */
 export async function idbSet(key: string, value: string): Promise<boolean> {
   const db = await openDb();

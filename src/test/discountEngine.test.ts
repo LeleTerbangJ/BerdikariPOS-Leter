@@ -147,3 +147,45 @@ describe('computeTotalDiscount (P-A4)', () => {
     expect(computeTotalDiscount({ ...base, promoStackable: false })).toBe(20000);
   });
 });
+
+// ============================================================
+// K1 fix (AUDIT-OX): redeem poin loyalty — additive di atas hasil mesin,
+// capped subtotal. Default (tidak dikirim) = perilaku lama 100% identik.
+// ============================================================
+
+describe('calculateDiscountBreakdown - redeemDiscount (K1 fix)', () => {
+  it('tanpa redeem → hasil identik perilaku lama', () => {
+    const r = calculateDiscountBreakdown(base);
+    expect(r.totalDiscount).toBe(35000);
+    expect(r.mode).toBe('stacked');
+  });
+
+  it('redeem ditambahkan di atas total mesin (stacked)', () => {
+    const r = calculateDiscountBreakdown({ ...base, redeemDiscount: 5000 });
+    expect(r.totalDiscount).toBe(40000); // 35000 + 5000
+  });
+
+  it('redeem ikut di-cap subtotal (35000 + 70000 → max 100000)', () => {
+    const r = calculateDiscountBreakdown({ ...base, redeemDiscount: 70000 });
+    expect(r.totalDiscount).toBe(100000);
+  });
+
+  it('redeem TIDAK ikut kompetisi best-deal promo eksklusif (ditambah setelahnya)', () => {
+    // Promo 60000 vs nonPromo 15000 → best-deal promo 60000; redeem 5000 tetap ditambahkan
+    const r = calculateDiscountBreakdown({
+      ...base,
+      manualDiscount: 5000,
+      promoDiscount: 60000,
+      promoStackable: false,
+      redeemDiscount: 5000,
+    });
+    expect(r.mode).toBe('promo-exclusive');
+    expect(r.promoApplied).toBe(60000);
+    expect(r.totalDiscount).toBe(65000);
+  });
+
+  it('redeem negatif/NaN diperlakukan 0', () => {
+    expect(calculateDiscountBreakdown({ ...base, redeemDiscount: -500 }).totalDiscount).toBe(35000);
+    expect(calculateDiscountBreakdown({ ...base, redeemDiscount: NaN }).totalDiscount).toBe(35000);
+  });
+});

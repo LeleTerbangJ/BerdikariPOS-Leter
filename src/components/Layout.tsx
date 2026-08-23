@@ -177,9 +177,10 @@ export default function Layout() {
 
   const location = useLocation();
 
-  if (!currentUser) return null;
-
-  const items = navItems[currentUser.role] || [];
+  // T3 fix (AUDIT-OX): early-return dipindah ke SETELAH semua hook (useMemo todayTx,
+  // useCashMovementStore, useMemo shiftStats, useMemo acarakiDoneOrders) — sebelumnya
+  // pelanggaran Rules of Hooks yang bisa crash ("Rendered fewer hooks") saat currentUser
+  // menjadi null di tengah sesi (race logout).
 
   // v4.7 TO DO 18.3: riwayat cetak ringkasan shift memakai window shift (SEMUA kasir,
   // bukan hanya kasir device ini) — konsisten dengan model 1 shift aktif per outlet.
@@ -224,6 +225,7 @@ export default function Layout() {
   };
 
   const handleLogout = async () => {
+    if (!currentUser) return; // T3 fix: handler berada sebelum guard render utama
     if (activeShift && (currentUser.role === 'Kasir' || currentUser.role === 'Manager')) {
       setShowCloseShift(true);
       setClosingCashInput('');
@@ -247,6 +249,10 @@ export default function Layout() {
     );
   }, [transactions]);
 
+  // T3 fix (AUDIT-OX): guard SETELAH semua hook — hook count konsisten antar render.
+  if (!currentUser) return null;
+  const items = navItems[currentUser.role] || [];
+
   const handleAcarakiPrint = async () => {
     const lines = [
       '=== RINGKASAN DAPUR ===',
@@ -261,12 +267,21 @@ export default function Layout() {
       '',
       '========================',
     ];
-    await printTextRaw(lines, settings);
-    // Reset done orders on KDS
-    clearKdsDoneOrders();
-    setShowAcarakiSummary(false);
-    logout();
-    navigate('/');
+    // T6 fix (AUDIT-OX): cetak best-effort dengan try/finally — bila printer throw
+    // (Bluetooth putus/printer mati), Acaraki TIDAK BOLEH terkunci di modal
+    // non-dismissable. Escape path (reset KDS + logout) SELALU dijalankan — pola 6.4.
+    try {
+      await printTextRaw(lines, settings);
+    } catch (e) {
+      console.warn('[Acaraki] Gagal mencetak ringkasan dapur (logout tetap jalan):', e);
+      addToast('Gagal mencetak ringkasan — logout tetap dilanjutkan.', 'warning');
+    } finally {
+      // Reset done orders on KDS
+      clearKdsDoneOrders();
+      setShowAcarakiSummary(false);
+      logout();
+      navigate('/');
+    }
   };
 
   const handleAcarakiSkip = () => {

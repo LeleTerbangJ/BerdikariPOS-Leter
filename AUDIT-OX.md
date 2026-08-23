@@ -31,14 +31,22 @@ Semua solusi di bawah dipilih dengan kriteria **paling aman, tepat, dan efisien*
 
 ### ✅ Solusi Aman (patch minimal)
 
-Tambahkan parameter opsional `redeemDiscount` ke `calculateDiscountBreakdown` sehingga hasilnya ikut masuk `totalDiscount`:
+> ✅ **SELESAI & TEREKSEKUSI** — validasi: tsc 0 error, 653/653 test, build sukses.
 
-1. Di `discountEngine.ts`: tambah field opsional ke tipe input `redeemDiscount?: number` (default `0`). Di akhir fungsi: `totalDiscount = Math.min(subtotal, manualDiscount + promoDiscount + loyaltyDiscount + (input.redeemDiscount ?? 0))`.
-   - *Mengapa aman*: parameter opsional — semua pemanggil existing yang tidak mengirim field ini berperilaku **100% identik** seperti sebelumnya. Unit test existing tidak berubah.
-2. Di `POS.tsx` saja: pada pemanggilan di `finalizeTransaction`, sertakan `redeemDiscount: parsedRedeemPoints` (nilai yang sama yang sudah dipakai preview) agar commit = preview.
-3. Jangan ubah `handleSavePending` maupun preview — mereka sudah benar.
+Tambahan hasil penelusuran ulang (sebelum eksekusi): ternyata ada **3 titik hitung totalDiscount** yang tidak konsisten, bukan hanya 2:
+- `POS.tsx:269` (`handleSavePending`) — ✅ sudah benar
+- `POS.tsx:884` (`finalizeTransaction`) — ❌ bug utama → **diperbaiki**
+- `POS.tsx:1109` (`finalizeAsDemo`) — ❌ tanpa redeem, tetapi **SENGAJA TIDAK diubah**: demo tidak mengonsumsi poin loyalty (A13), jadi tidak boleh menerapkan diskonnya — self-consistent. Menambahkan redeem di demo justru mencatat nominal diskon tanpa pemotongan poin.
+- Preview `POS.tsx:1163` — ✅ sudah benar
 
-**Verifikasi**: unit test baru untuk `discountEngine` dengan & tanpa `redeemDiscount`; uji manual: checkout dengan redeem poin → bandingkan total struk vs modal bayar vs riwayat transaksi (harus identik); pastikan semua test existing tetap hijau.
+Yang dieksekusi:
+1. `discountEngine.ts`: field opsional `redeemDiscount?: number` pada `DiscountEngineInput` — ditambahkan **DI ATAS hasil mesin** (di luar logika stacking/best-deal promo, karena redeem adalah nilai yang sudah "dibayar" pelanggan dengan poinnya), capped subtotal. Default 0 → semua pemanggil existing berperilaku identik.
+2. `POS.tsx` `finalizeTransaction`: `totalDiscount = Math.min(discountCalc.totalDiscount + redeemApplied, subtotal)` — rumus identik `handleSavePending`, commit = preview = yang dibayar.
+3. Test baru: 6 kasus `discountEngine.test.ts` (default identik, additive, cap subtotal, eksklusif best-deal + redeem, negatif/NaN → 0).
+
+**Side effect yang menjadi KOREKSI (arah benar)**: struk/digital receipt, expected cash shift, Dashboard/Laporan/PPN DPP, dan poin earn kini akurat saat redeem dipakai; data historis tidak berubah; replay idempoten aman.
+
+**Verifikasi manual tersisa**: skenario **redeem + Split Bill fresh** — pastikan alokasi sub-bill konsisten dengan total induk baru (SplitBillModal tidak memakai calculateDiscountBreakdown; alokasinya dari nilai lain).
 
 ---
 
@@ -52,15 +60,7 @@ Tambahkan parameter opsional `redeemDiscount` ke `calculateDiscountBreakdown` se
 
 ### ✅ Solusi Aman (scope wipe berbasis isi aktual ZIP)
 
-Ubah satu titik: `wipeCloudTables` menerima daftar entitas yang **benar-benar ada** di objek `data` hasil parse ZIP, dan hanya menghapus tabel yang datanya ada:
-
-```ts
-// Pseudocode — hanya contoh pola, sesuaikan nama variabel lokal
-const wipeTargets = REPLACE_SCOPE[backupType].filter(t => data[t.key] !== undefined);
-```
-
-- *Mengapa aman*: untuk backup yang saat ini berhasil di-restore (semua JSON lengkap), daftar wipe **identik dengan perilaku lama**. Yang berubah hanyalah kasus rusak/lengkap-sebagian — yang semula destruktif kini menjadi no-op pada tabel yang tidak disertakan.
-- Tambahan defensif tanpa side effect: sebelum wipe, pastikan `validateBackup` sudah dipanggil di jalur restore (guard satu baris `if (!validated) throw`).
+> ✅ **SELESAI & TEREKSEKUSI** — `restoreBackup` mode replace kini memfilter scope wipe berdasarkan kehadiran data aktual di ZIP (`presentInBackup` map per tabel: transactions, cash/shifts/movements, stock/opnames/logs, audit_logs, customers, promos, menu_components, menus, inventory, users). Backup lengkap → daftar wipe identik perilaku lama; ZIP parsial/rusak → fail-safe (tabel tak disertakan tidak disentuh). Array kosong `[]` yang ADA di ZIP tetap ter-wipe (`!== undefined`).
 
 **Verifikasi**: unit test — buat ZIP FULL tanpa `audit_logs.json`, jalankan restore replace ke mock cloud, assert tabel lain ter-replace & audit_logs **tidak tersentuh**. Test existing `backupService.test.ts` harus tetap lolos tanpa modifikasi.
 
@@ -73,27 +73,30 @@ const wipeTargets = REPLACE_SCOPE[backupType].filter(t => data[t.key] !== undefi
 | **Lokasi** | `supabase/schema.sql:430-441,488` — policy `FOR ALL USING (true) WITH CHECK (true)` di 13 tabel |
 | **Dampak** | Anon key publik di frontend → siapa pun bisa baca/tulis/hapus transaksi, data pelanggan (PII), stok, shift kas. |
 
-### ✅ Solusi Aman (bertahap, zero-downtime, tanpa refactor frontend besar)
+### ⚠️ SOLUSI DIREVISI (hasil analisis side-effect) — Tahap 1 lama DIBATALKAN
 
-Ini satu-satunya area yang **tidak bisa** diperbaiki murni additive dalam satu langkah. Urutan bertahap yang paling rendah risiko:
+> **Revisi**: rencana awal "Tahap 1 revoke DELETE dari anon" **TIDAK JADI** — penelusuran kode membuktikan aplikasi **sah menggunakan anon-key DELETE di banyak alur**, revoke akan memecah fitur existing:
 
-**Tahap 1 (aman dilakukan hari ini, tanpaubah kode):**
-- Perketat apa yang bisa dilakukan anon **tanpa memutus aplikasi**: revoke `DELETE` pada tabel historis (`audit_logs`, `stock_logs`, `transactions`) via policy terpisah:
-  ```sql
-  -- Contoh: larang delete transaksi dari anon (app jarang hard-delete; tombstone pattern sudah dipakai)
-  CREATE POLICY "anon no delete transactions" ON transactions
-    FOR DELETE TO anon USING (false);
-  ```
-  ⚠️ Uji dulu di staging: fitur yang sah-menghapus (delete transaction, reset data) harus diverifikasi masih jalan lewat jalurnya masing-masing sebelum diterapkan ke DB produksi klien.
-- Turunkan retensi: aktifkan PITR/backup harian Supabase sebagai pagar pengaman.
+| Fitur Existing yang PECAH jika DELETE direvoke | Titik Kode |
+|---|---|
+| Hapus Transaksi | `cloudSync.ts` `deleteTransactionCloud` |
+| Bersihkan Data Transaksi / Factory Reset (wipe cloud) | `dataManager.ts` `clearCloudTables` (`OPERATIONAL_WIPE_TABLES`/`FULL_WIPE_TABLES`) |
+| Restore backup mode Replace (wipe cloud) | `backupService.ts` `wipeCloudTables` |
+| Hapus Semua Audit Log | `auditLogStore.clearAllLogs` |
 
-**Tahap 2 (perlu development, jalur resmi):**
-- Adopsi Supabase Auth (login email/password per user) + policy berbasis `auth.uid()` / `store_id`, ATAU
-- Gerbang semua tulisan melalui Edge Function yang memvalidasi kredensial aplikasi (bcrypt check server-side), anon key hanya untuk realtime read.
+Faktanya hampir semua tabel punya jalur delete sah → **tidak ada revoke DELETE yang bisa dilakukan tanpa memindahkan jalur itu ke server-side (= pekerjaan Tahap 2 itu sendiri)**.
 
-**Prinsip**: Tahap 1 tidak mengubah satu baris TypeScript pun; Tahap 2 direncanakan terpisah dengan migrasi login.
+### ✅ Strategi Revisi
 
-**Verifikasi Tahap 1**: jalankan seluruh checklist `TESTING-PRADEPLOY.md` — khususnya alur void/delete transaksi, factory reset, dan restore backup (jalur yang menyentuh DELETE).
+**Interim (non-breaking, bisa dilakukan hari ini tanpa ubah kode):**
+- Aktifkan Supabase Daily Backup / PITR sebagai pagar pemulihan.
+- Monitoring usage API Supabase (alert anomali).
+- Dokumentasikan risiko ekspos pada onboarding klien sampai Tahap 2 selesai.
+
+**Fix sesungguhnya = Tahap 2 (proyek terstruktur, bukan patch panas):**
+1. Pindahkan jalur delete sah ke RPC `security definer` dengan otorisasi (pola PinModal → approver dikirim ke RPC), ATAU adopsi Supabase Auth + policy `auth.uid()`.
+2. Setelah SEMUA jalur tulis/hapus lewat server-side → baru revoke DELETE/UPDATE dari anon per tabel.
+3. Urutan aman: RPC dulu → verifikasi seluruh checklist `TESTING-PRADEPLOY.md` → revoke policy terakhir.
 
 ---
 
@@ -104,16 +107,21 @@ Ini satu-satunya area yang **tidak bisa** diperbaiki murni additive dalam satu l
 | **Lokasi** | `src/lib/cloudSync.ts:1462-1476` (syncUser menulis kolom `password`), `:1238,1248` (PIN manager/super admin), `supabase/schema.sql:515-520` (seed plaintext), `src/store/authStore.ts:61-66` & `src/utils/pinAuth.ts:40-44` (fallback plaintext masih diterima) |
 | **Dampak** | Hash bcrypt dapat dibaca anon → offline brute-force; password/PIN bisa **ditimpa** anon → account takeover Manager. |
 
-### ✅ Solusi Aman (3 langkah additive, urut prioritas)
+### ⚠️ SOLUSI DIREVISI — dipisah dua bagian (hasil analisis side-effect)
 
-1. **Matikan fallback plaintext login (tolak, jangan crash)** — di `authStore.ts` & `pinAuth.ts`: bila stored credential bukan format hash bcrypt (`$2a$`/`$2b$` prefix), tolak login + tampilkan toast "Password harus direset oleh Manager" — **jangan** auto-match plaintext.
-   - *Mengapa aman*: semua deployment yang sudah re-hash (fitur v4.x `passwordsHashed`) tidak terpengaruh sama sekali; hanya deployment lama yang belum di-hash yang berubah — dan untuk mereka ini adalah perbaikan keamanan wajib.
-2. **Force re-hash sekali lagi saat boot** jika terdeteksi kolom password berformat plaintext (mexnisme `passwordsHashed` sudah ada — tinggal pastikan dijalankan ulang).
-3. **Jangka menengah (Tahap 2 K3)**: pindahkan verifikasi kredensial ke RPC `security definer` sehingga kolom `password`/`manager_pin` tidak perlu dibaca client; sementara itu, minimal jangan pernah menulis PIN/hash via upsert anon tanpa perlu (kurangi frekuensi ekspos).
+> **Temuan penentu**: login aplikasi **bergantung pada hash di cloud** — `authStore` melakukan `fetchUsersFromCloud` lalu `bcrypt.compareSync(password, user.password)` (authStore.ts:59-66, loadFromCloud :145). Hash tersinkron adalah **mekanisme kerja** untuk: login lintas device, bootstrap device baru (fetch users pertama kali), dan **login offline** (cache lokal).
 
-**Jangan lakukan sekarang**: menghapus kolom `password` dari schema (breaking). Itu bagian Tahap 2.
+**❌ TIDAK BOLEH dilakukan sekarang (akan memecah login):**
+- Menghentikan sync kolom `password` → device baru/kedua tidak bisa verifikasi login.
+- Memindah verifikasi ke RPC server-side saja → **login offline mati** (butuh network) — regresi arsitektur local-first.
 
-**Verifikasi**: login semua 4 role demo; ganti password → login ulang; cek DB bahwa kolom password berformat `$2*`; pastikan akun seed plaintext lama ditolak sampai di-reset.
+**✅ Bagian yang tereksekusi sekarang (aman):**
+1. Tolak fallback plaintext: kredensial tanpa prefix bcrypt (`$2a$`/`$2b$`) → tolak login + toast "Password harus direset oleh Manager" (deployment yang sudah re-hash tidak terpengaruh).
+2. Force re-hash saat boot bila terdeteksi plaintext (mekanisme `passwordsHashed` existing).
+
+**⏳ Bagian ekspos hash/PIN → masuk Tahap 2 K3**: Supabase Auth atau RPC `security definer` dengan cache offline; kolom password/PIN keluar dari jangkauan anon hanya setelah jalur verifikasi baru live di semua device.
+
+**Verifikasi bagian yang dieksekusi**: akun seed plaintext lama ditolak sampai di-reset; setelah re-hash, semua role login normal; kolom password berformat `$2*`.
 
 ---
 
@@ -124,22 +132,26 @@ Ini satu-satunya area yang **tidak bisa** diperbaiki murni additive dalam satu l
 | **Lokasi** | `schema.sql:437` (policy ALL pada `audit_logs`) + `cloudSync.ts:1201-1214`; idem field approver di `stock_opnames` |
 | **Dampak** | Log palsu bisa dibuat, jejak fraud bisa diedit/dihapus dari browser siapa pun → "dual-control" opname hanya kosmetik. |
 
-### ✅ Solusi Aman (insert-only policy — additive, idempoten)
+### ⚠️ SOLUSI DIREVISI — insert-only punya side effect, perlu keputusan sadar
 
-Ganti policy ALL pada `audit_logs` menjadi split insert-only:
+> **Temuan penelusuran**: policy insert+select-only pada `audit_logs` akan mem-break 2 fitur existing:
+> 1. **"Hapus Semua Log Audit"** (`auditLogStore.clearAllLogs` — `supabase.from('audit_logs').delete()`)
+> 2. **Factory Reset** — `FULL_WIPE_TABLES` mencakup `audit_logs`; jika cloud tidak ikut terhapus, log lama **resurrect** saat device lain loadFromCloud (melanggar tujuan reset itu sendiri)
 
+**Dua opsi (pilih satu secara sadar):**
+- **Opsi A — terapkan sekarang + ubah SOP**: kedua aksi menjadi local-only; purge cloud dilakukan manual via SQL Editor sekali-sekali (catat di panduan klien). Keamanan log naik signifikan dengan effort minimal.
+- **Opsi B — tunda sampai Tahap 2**: purge via RPC ber-otorisasi Manager, baru policy diperketat.
+
+SQL (untuk Opsi A, saat dieksekusi):
 ```sql
 DROP POLICY IF EXISTS "Allow all for anon" ON audit_logs;
 CREATE POLICY "anon insert audit" ON audit_logs FOR INSERT TO anon WITH CHECK (true);
 CREATE POLICY "anon select audit" ON audit_logs FOR SELECT TO anon USING (true);
 -- UPDATE & DELETE: tidak diberi policy → otomatis ditolak untuk anon
 ```
++ masukkan blok ke `DEPLOYMENT.md §4` + deteksi di `runMigrations` (pola Migration 18) + catat perubahan perilaku clearAllLogs/factory reset di CHANGELOG.
 
-- *Mengapa aman*: aplikasi hanya INSERT & SELECT audit log (verifikasi: grep `syncAuditLog`/fetch di `cloudSync.ts` — tidak ada update/delete audit). Fitur "Export CSV" & tampilan riwayat hanya butuh SELECT. Perilaku app **tidak berubah**; yang hilang hanyalah kemampuan ilegal mengedit/menghapus log.
-- Terapkan pola serupa ke kolom otorisasi opname di jangka menengah (approver hanya boleh ditulis via RPC).
-- Masukkan blok SQL ini ke `DEPLOYMENT.md §4` + deteksi di `runMigrations` (cetak SQL bila policy lama masih ALL — pola Migration 18 yang sudah terbukti).
-
-**Verifikasi**: buat transaksi → lihat audit log tampil; export CSV jalan; coba UPDATE manual via Supabase REST sebagai anon → harus ditolak.
+**Verifikasi**: buat transaksi → audit log tampil; export CSV jalan; UPDATE/DELETE manual sebagai anon → ditolak; factory reset → pesan jelas bahwa purge cloud log dilakukan manual.
 
 ---
 
@@ -150,21 +162,19 @@ CREATE POLICY "anon select audit" ON audit_logs FOR SELECT TO anon USING (true);
 | **Lokasi** | `src/lib/offlineQueue.ts:313` (ambil referensi queue), `:421` (`saveQueue(remaining)` menimpa seluruh memory+storage) |
 | **Dampak** | Operasi yang masuk selama flush panjang (kasir terus menjual) di-persist oleh `addToQueue`, lalu **terhapus** oleh `saveQueue(remaining)` di akhir flush → transaksi tidak pernah tersync. |
 
-### ✅ Solusi Aman (gabungkan berdasarkan ID op — tidak menyentuh eksekutor flush)
+### ✅ Solusi Aman (merge antrean berdasarkan kondisi terkini)
 
-Di akhir `flushQueue`, jangan simpan `remaining` mentah. Simpan gabungan: op-op yang belum dieksekusi **plus** op-op baru yang masuk selama flush berjalan:
-
-```ts
-// Pseudocode pola
-const flushedIds = new Set(sortedQueue.map(o => o.id));
-const freshOps = getQueue().filter(o => !flushedIds.has(o.id));
-saveQueue([...remaining, ...freshOps]);
-```
-
-- *Mengapa aman*: pada kasus tanpa operasi konkuren (mayoritas waktu), `freshOps` kosong → hasil identik dengan kode lama. Dedup by-id mencegah duplikasi karena `addToQueue` yang sudah jalan sendiri tidak dobel-tulis.
-- Patch ini **tidak menyentuh** urutan kronologis, klasifikasi error, retry, maupun failed-ops list.
-
-**Verifikasi**: unit test simulasi — mulai flush lambat (mock fetch delay), panggil `addToQueue` di tengah flush, assert op baru masih ada di storage setelah flush selesai. Test existing `offlineQueueStorage.test.ts` & `offlineQueueFailed.test.ts` harus lolos tanpa perubahan.
+> ✅ **SELESAI & TEREKSEKUSI** — implementasi final lebih kuat dari pseudocode awal: merge dilakukan dari **kondisi antrean terkini** (`getQueue()`) dibanding snapshot flush, dengan 5 aturan:
+> 1. Op yang TIDAK ada di snapshot (masuk selama flush) → disimpan ✓
+> 2. Op sukses lalu di-replace in-place oleh addToQueue saat flush (id sama, objek baru) → **versi terbaru diantrekan ulang** (data baru belum tersync)
+> 3. Op sukses tanpa perubahan → tidak diantrekan ulang (perilaku lama)
+> 4. Op gagal permanen → pindah ke failed-ops list (tidak ikut antrean)
+> 5. Op transient/retries<MAX → tetap antre, memakai versi terbaru hasil replace
+>
+> Deteksi replace via identitas objek (`op !== snap`) — addToQueue mempertahankan id tapi membuat objek baru. Kasus tanpa konkurensi = hasil identik `saveQueue(remaining)` lama.
+> + accessor read-only `getQueuedOperations()` (untuk debug/UI/test).
+>
+> **Test baru** `offlineQueueFlushMerge.test.ts` (3 kasus, mock supabase ber-gate): op baru mid-flush selamat; op sukses+replace diantrekan ulang versi baru; tanpa konkurensi = perilaku lama. Test existing offlineQueue* lolos tanpa modifikasi.
 
 ---
 
@@ -172,14 +182,17 @@ saveQueue([...remaining, ...freshOps]);
 
 ---
 
-## T1. Rollback stok berbasis snapshot diff global → over-revert saat checkout konkuren
+## T1. Rollback stok berbasis snapshot diff global - over-revert saat checkout konkuren
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `src/lib/atomicTransactionEngine.ts:123,269-284`
 - **Masalah**: rollback menghitung `originalStock − current` untuk semua item. Checkout device lain di antara snapshot & rollback ikut "dipulihkan" (deduksi orang lain dibatalkan).
 - **✅ Fix aman**: simpan **delta yang engine ini sendiri terapkan** (hasil `computeDeductions` per item) saat commit, dan revert persis delta tersebut — bukan diff global. Patch lokal di engine; transaksi tunggal (jalur utama) berperilaku identik karena delta = diff ketika tidak ada konkurensi.
 - **Verifikasi**: unit test rollback dengan mutasi paralel antara commit & rollback.
 
-## T2. Double-submit "Bayar Sub-Bill" Split Bill mencatat dua transaksi nyata
+## T2. Double-submit Bayar Sub-Bill Split Bill mencatat dua transaksi nyata
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
+> **Re-audit fix**: ID sub-bill kini menyertakan signature isi bill (shortHash computeCartSignature + totalAmount) - ganti mode equal/item pada indeks sama menghasilkan ID berbeda (tidak salah dianggap replay tx lama); double-click bill identik tetap satu ID (guard jalan). Residual hanya bila paidState rehydrate GAGAL dan sesi hilang bersamaan (kelas 5.7, berlapis terjaga).
 
 - **Lokasi**: `src/components/SplitBillModal.tsx:888,431` + `atomicTransactionEngine.ts:43`
 - **Masalah**: tombol tidak di-disable saat async, dan engine dipanggil **tanpa** `transactionId` → guard idempotency engine tidak pernah aktif di jalur split.
@@ -189,31 +202,37 @@ saveQueue([...remaining, ...freshOps]);
 - **Mengapa aman**: checkout utama POS sudah memakai pola ID stabil (`checkoutTxId`) — kita hanya meniru pola yang sudah terbukti di jalur split.
 - **Verifikasi**: double-click cepat tombol sub-bill → hanya SATU transaksi tercatat.
 
-## T3. Pelanggaran Rules of Hooks di Layout → crash saat logout race
+## T3. Pelanggaran Rules of Hooks di Layout - crash saat logout race
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `src/components/Layout.tsx:180` — early-return `if (!currentUser) return null` SEBELUM beberapa hook.
 - **✅ Fix aman**: pindahkan early-return ke SETELAH semua hook dipanggil (tambahkan `if (!currentUser) return null;` setelah hook terakhir, hapus yang lama). Perilaku render untuk semua state normal **identik** — hanya urutan pemanggilan hook yang dikonsisten.
 - **Verifikasi**: login → logout → login ulang berkali-kali; tidak ada crash "Rendered fewer hooks".
 
-## T4. Flag `pendingSplitReconciled` basi → deduksi stok salah finalisasi normal
+## T4. Flag pendingSplitReconciled basi - deduksi stok salah finalisasi normal
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `src/pages/POS.tsx:205,2562`
 - **✅ Fix aman**: reset flag juga di `onClose` SplitBillModal dan saat `currentPendingTx` berubah/clearCart. Reset flag adalah operasi no-op bagi alur yang flag-nya memang false.
 - **Verifikasi**: bayar 1 dari N sub-bill pending → tutup modal → lunasi via checkout normal → stok terpotong tepat 1×.
 
-## T5. Promo & input redeem bocor ke order berikutnya setelah split selesai
+## T5. Promo dan input redeem bocor ke order berikutnya setelah split selesai
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `src/pages/POS.tsx:2546-2559` (`onCompleteSplit`)
 - **✅ Fix aman**: tambahkan `clearPromo(); setRedeemPointsInput('');` di `onCompleteSplit`. Bagi order tanpa promo, kedua panggilan ini no-op — tidak ada perubahan perilaku.
 - **Verifikasi**: order A pakai promo + split bill sampai lunas → order B baru TIDAK membawa promo A.
 
 ## T6. Acaraki terkunci di modal non-dismissable jika printer gagal saat logout
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `src/components/Layout.tsx:250-270,889-894`
 - **✅ Fix aman**: bungkus `await printTextRaw(...)` dengan `try { ... } catch { toast error } finally { clearKdsDoneOrders(); logout(); navigate(); }` — **replikasi persis pola 6.4 yang sudah terbukti** di `handleCloseShift` (escape path wajib). Alur sukses tidak berubah sama sekali.
 - **Verifikasi**: matikan Bluetooth → logout Acaraki → tetap ter-logout dengan pesan jelas.
 
-## T7. Hydrate offline queue: error IDB dianggap "kosong" → antrean bisa ter-wipe saat boot
+## T7. Hydrate offline queue: error IDB dianggap kosong - antrean bisa ter-wipe saat boot
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
+> **Re-audit fix**: baris redundan `memoryFailed = memoryFailed ?? failedStored` dihapus (operand kiri tak pernah null) + komentar eksplisit bahwa daftar gagal runtime sengaja dipertahankan dari hasil baca parsial.
 
 - **Lokasi**: `src/lib/offlineQueue.ts:84-104,142-145` + `src/utils/idbStorage.ts:120-122`
 - **Masalah**: `idbGet` menelan error → return `null` (= kosong) → fallback localStorage yang sudah dihapus pasca-migrasi → persist `'[]'` menimpa antrean sesi sebelumnya.
@@ -221,7 +240,8 @@ saveQueue([...remaining, ...freshOps]);
 - **Mengapa aman**: jalur normal (IDB sehat) tidak berubah; hanya jalur error yang semula merusak data kini menjadi retry-aman.
 - **Verifikasi**: unit test — mock `idbGet` throw saat boot dengan antrean tersimpan → assert antrean tidak tertimpa `'[]'`.
 
-## T8. Mismatch kolom `menus.description` — ditulis sync tapi tidak ada di schema.sql aktif
+## T8. Mismatch kolom menus.description - ditulis sync tapi tidak ada di schema.sql aktif
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
 
 - **Lokasi**: `cloudSync.ts:1117,1422` vs `schema.sql:29-45`
 - **✅ Fix aman (murni aditif di DB)**:
@@ -232,6 +252,8 @@ saveQueue([...remaining, ...freshOps]);
 - **Verifikasi**: edit deskripsi menu → sinkron ke cloud → device lain menerima deskripsi.
 
 ## T9. Wipe cloud restore tidak atomik (kegagalan tengah jalan = kondisi campuran)
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
+> **Re-audit fix**: `wipeCloudTables` kini mengecek `error` hasil delete - collector hanya mencatat tabel yang BENAR-BENAR terhapus (bukan sekadar dicoba), sehingga pesan kegagalan tengah jalan akurat.
 
 - **Lokasi**: `backupService.ts:197-206,677+`
 - **✅ Fix aman (tanpa restrukturisasi besar)**:
@@ -242,6 +264,8 @@ saveQueue([...remaining, ...freshOps]);
 - **Verifikasi**: simulate network drop mid-restore → pesan jelas + restore ulang berhasil membersihkan kondisi campuran.
 
 ## T10. Form Stock Opname memakai snapshot stok basi dari mount time
+> [x] **SELESAI & TEREKSEKUSI** - lihat catatan eksekusi di bawah (validasi: tsc 0 error, 653/653 test, build sukses).
+> **Re-audit fix**: toast agregat (debounce 3 dtk, anti double-fire StrictMode) bila perubahan stok mengenai baris yang SUDAH diisi kasir - pratinjau selisih bergeser tidak lagi tanpa kabar.
 
 - **Lokasi**: `src/pages/StockOpname.tsx:51-57`
 - **✅ Fix aman**: sinkronkan field `systemStock` baris saat store `inventory` berubah (via `useEffect` merge), **sambil mempertahankan input `actualStock` yang sedang diketik kasir**. Guard drift yang ada (`findDriftedOpnameItems`) tetap jalan sebagai lapisan kedua.
@@ -312,20 +336,30 @@ Diurutkan dari impact ÷ effort:
 
 # BAGIAN F — URUTAN EKSEKUSI YANG DISARANKAN
 
+> **REVISI**: setelah analisis side-effect (lihat revisi K3/K4/K5 di Bagian A), cluster keamanan tidak bisa dipatch lokal tanpa memecah fitur — strateginya digabung ke Tahap 2 terstruktur.
+
 ```
-Wave 1 (patch panas, risiko rendah, hari ini):
-  K1 (loyalty redeem) → K6 (queue flush) → K2 (backup wipe scope) → T3 (hooks)
-  → T5/T6/T7 (guard satu titik) → S7/S15/S10 (clamp/warn/index — trivial)
+✅ SELESAI (dieksekusi & tervalidasi — tsc 0 error, 653/653 test, build sukses):
+   K1 (redeem loyalty: engine param + finalizeTransaction + 6 test)
+   K2 (backup replace wipe scope berbasis isi ZIP)
+   K6 (offline queue flush merge + getQueuedOperations + 3 test konkurensi)
 
-Wave 2 (perlu SQL Editor sekali, koordinasikan dengan deployment):
-  K5 (audit insert-only) → T8 (menus.description) → S9 (CHECK constraints)
+Wave berikutnya (patch panas risiko rendah, siap dieksekusi):
+   T3 (hooks Layout) → T5/T6/T7 (guard satu titik) → S7/S15/S10 (trivial)
 
-Wave 3 (patch terisolasi dengan test baru):
-  T1 (rollback delta) → T2 (split bill idempotent) → T4 (flag reset) → T9/T10
-  → S1–S8, S11–S14, S16–S17
+Wave SQL Editor sekali (koordinasikan deployment):
+   K5 Opsi A (audit insert-only + SOP purge manual) → S9/S10 (CHECK/index)
+   [T8 menus.description ✅ sudah dieksekusi — SQL butir 17 di DEPLOYMENT.md §4]
 
-Wave 4 (roadmap terstruktur):
-  Keamanan Tahap 2 (K3/K4) → E1–E10
+Wave patch terisolasi dengan test baru:
+   T1 (rollback delta) → T2 (split bill idempotent) → T4 (flag reset) → T9/T10
+   → S1–S8, S11–S14, S16–S17
+
+Tahap 2 KEAMANAN (proyek terstruktur — K3+K4+K5 Opsi B):
+   1. RPC security definer untuk jalur delete sah (delete tx, wipe/reset, clear logs)
+      + verifikasi login via RPC dengan cache offline
+   2. Verifikasi penuh TESTING-PRADEPLOY.md
+   3. BARU revoke DELETE/UPDATE dari anon per tabel → E1–E10 lanjutan
 ```
 
 **Prosedur tiap patch** (sesuai konvensi project):

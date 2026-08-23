@@ -120,7 +120,14 @@ export class AtomicTransactionEngine {
 
     // 3. Staging Snapshot Recipe & HPP (PROCESSING)
     this.registerState(txId, 'PROCESSING');
-    const inventorySnapshot = InventoryEngine.captureSnapshot(inventory);
+    // T1 fix (AUDIT-OX): lacak efek stok yang DITERAPKAN engine ini sendiri. Rollback
+    // mengembalikan PERSIS delta tersebut — bukan diff snapshot global, yang bila ada
+    // checkout device lain di antara commit & rollback ikut "dipulihkan" (over-revert:
+    // deduksi orang lain ikut dikembalikan → stok menggelembung).
+    const appliedStockEffects: {
+      deducted: Record<string, number>;
+      reverted: Record<string, number>;
+    } = { deducted: {}, reverted: {} };
 
     try {
       // v4.7 TO DO 18.8 (A13): transaksi DEMO dicatat TANPA mengonsumsi nomor antrean
@@ -220,12 +227,15 @@ export class AtomicTransactionEngine {
         }
         if (Object.keys(deltaDeduct).length > 0) {
           useInventoryStore.getState().deductStock(deltaDeduct, `Transaksi #${queueNum} (Delta Pending)`);
+          Object.assign(appliedStockEffects.deducted, deltaDeduct);
         }
         if (Object.keys(deltaRevert).length > 0) {
           useInventoryStore.getState().revertStock(deltaRevert, `Transaksi #${queueNum} (Koreksi Pending)`);
+          Object.assign(appliedStockEffects.reverted, deltaRevert);
         }
       } else if (!isDemo) {
         useInventoryStore.getState().deductStock(deductions, `Transaksi #${queueNum}`);
+        Object.assign(appliedStockEffects.deducted, deductions);
       }
       useTransactionStore.getState().addTransaction(tx);
 
@@ -252,7 +262,7 @@ export class AtomicTransactionEngine {
     } catch (err: any) {
       // ROLLBACK ENGINE
       console.error('[AtomicEngine] Transaction failed during processing, rolling back:', err);
-      await this.executeRollback(txId, inventorySnapshot);
+      await this.executeRollback(txId, appliedStockEffects);
       return {
         success: false,
         error: err.message || 'Gagal memproses transaksi. Perubahan telah dibatalkan.',
@@ -261,26 +271,27 @@ export class AtomicTransactionEngine {
   }
 
   /**
-   * Rollback local state mutations using inventory snapshot.
+   * Rollback local state mutations — T1 fix (AUDIT-OX): mengembalikan PERSIS delta stok
+   * yang engine ini terapkan (`appliedStockEffects`), bukan diff snapshot global. Sebelumnya
+   * `originalStock − current` untuk semua item snapshot: checkout device lain di antara
+   * commit & rollback ikut "dipulihkan" → over-revert (stok menggelembung diam-diam).
    * v4.5 TO DO 6.5: rollback kini await penghapusan cloud + tombstone lokal (anti ghost) —
-   * sebelumnya deleteTransactionCloud fire-and-forget → baris cloud bisa tersisa → transaksi
-   * yang "gagal" muncul lagi setelah reload / device lain via loadFromCloud.
+   * sebelumnya deleteTransactionCloud fire-and-forget → baris cloud bisa tersisa.
    */
-  private static async executeRollback(txId: string, inventorySnapshot: Map<string, number>) {
+  private static async executeRollback(
+    txId: string,
+    applied: { deducted: Record<string, number>; reverted: Record<string, number> }
+  ) {
     try {
-      // 1. Restore Inventory — v4.7 TO DO 18.8 (A3): pakai `revertStock` (log 'add' + sync bulk),
-      // BUKAN `updateItem(stock, { skipLog: true })` — sebelumnya stok kembali tapi stock log
-      // menunjukkan 'deduct' tanpa 'add' balasan → jejak audit stok tidak seimbang untuk
-      // transaksi yang gagal (log "dipotong" padahal batal). Delta dihitung dari snapshot.
+      // 1. Restore Inventory — v4.7 TO DO 18.8 (A3): pakai `revertStock`/`deductStock`
+      // (log 'add'/'deduct' + sync bulk) sehingga jejak audit stok tetap seimbang.
       const inventoryStore = useInventoryStore.getState();
-      const revertDeltas: Record<string, number> = {};
-      inventorySnapshot.forEach((originalStock, invId) => {
-        const current = inventoryStore.items.find((i) => i.id === invId)?.stock ?? originalStock;
-        const diff = originalStock - current;
-        if (diff > 0) revertDeltas[invId] = diff;
-      });
-      if (Object.keys(revertDeltas).length > 0) {
-        inventoryStore.revertStock(revertDeltas, 'Rollback transaksi gagal (stok dikembalikan)');
+      if (Object.keys(applied.deducted).length > 0) {
+        inventoryStore.revertStock(applied.deducted, 'Rollback transaksi gagal (stok dikembalikan)');
+      }
+      if (Object.keys(applied.reverted).length > 0) {
+        // Jalur delta pending: revert yang sempat diterapkan engine harus dibatalkan balik
+        inventoryStore.deductStock(applied.reverted, 'Rollback transaksi gagal (koreksi pending dibatalkan)');
       }
 
       // 2. Remove Staged Transaction if present

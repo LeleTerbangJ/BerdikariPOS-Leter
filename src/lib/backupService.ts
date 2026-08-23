@@ -193,16 +193,60 @@ const REPLACE_SCOPE: Record<BackupType, string[]> = {
 /**
  * Hapus SEMUA baris pada tabel cloud (mode Replace = snapshot penuh).
  * Gagal satu tabel tidak menghentikan proses (di-warn saja).
+ * T9 fix (AUDIT-OX): collector opsional mencatat tabel yang berhasil dikirim perintah
+ * hapusnya — dipakai pesan kegagalan restore di tengah jalan (cloud kondisi campuran).
  */
-async function wipeCloudTables(tables: string[]): Promise<void> {
+async function wipeCloudTables(tables: string[], wipedCollector?: string[]): Promise<void> {
   if (!isSupabaseConfigured || tables.length === 0) return;
   for (const t of tables) {
     try {
-      await supabase.from(t).delete().neq('id', '');
+      // Re-audit T9 fix: cek `error` hasil delete (bukan hanya exception) — collector
+      // hanya mencatat tabel yang BENAR-BENAR terhapus, bukan sekadar dicoba.
+      const { error } = await supabase.from(t).delete().neq('id', '');
+      if (!error) {
+        wipedCollector?.push(t);
+      } else {
+        console.warn(`[BackupService] Replace: hapus tabel ${t} ditolak:`, error.message);
+      }
     } catch (e) {
       console.warn(`[BackupService] Replace: gagal menghapus tabel ${t}:`, e);
     }
   }
+}
+
+/**
+ * T9 fix (AUDIT-OX): helper murni — validasi struktur minimum RestorableBackupData
+ * SEBELUM wipe/restore dieksekusi. Return pesan error bila tidak valid, null bila OK.
+ */
+export function assertRestorableStructure(data: RestorableBackupData): string | null {
+  if (!data || typeof data !== 'object') return 'data backup kosong / bukan objek';
+  if (!data.manifest || typeof data.manifest !== 'object') return 'manifest tidak ditemukan';
+  const arrayFields: Array<[string, unknown]> = [
+    ['users', data.users],
+    ['menus', data.menus],
+    ['menuComponents', data.menuComponents],
+    ['inventory', data.inventory],
+    ['customers', data.customers],
+    ['promos', data.promos],
+    ['transactions', data.transactions],
+    ['auditLogs', data.auditLogs],
+  ];
+  for (const [name, value] of arrayFields) {
+    if (value !== undefined && !Array.isArray(value)) {
+      return `field "${name}" harus berupa array`;
+    }
+  }
+  if (data.cash !== undefined) {
+    if (typeof data.cash !== 'object' || data.cash === null) return 'field "cash" harus berupa objek';
+    if (data.cash.shifts !== undefined && !Array.isArray(data.cash.shifts)) return '"cash.shifts" harus berupa array';
+    if (data.cash.cashMovements !== undefined && !Array.isArray(data.cash.cashMovements)) return '"cash.cashMovements" harus berupa array';
+  }
+  if (data.stock !== undefined) {
+    if (typeof data.stock !== 'object' || data.stock === null) return 'field "stock" harus berupa objek';
+    if (data.stock.stockOpnames !== undefined && !Array.isArray(data.stock.stockOpnames)) return '"stock.stockOpnames" harus berupa array';
+    if (data.stock.stockLogs !== undefined && !Array.isArray(data.stock.stockLogs)) return '"stock.stockLogs" harus berupa array';
+  }
+  return null;
 }
 
 // ============================================================
@@ -657,7 +701,18 @@ export class BackupService {
     onProgress?: (stepName: string, percent: number) => void,
     mode: 'merge' | 'replace' = 'merge'
   ): Promise<{ success: boolean; error?: string }> {
+    // T9 fix (AUDIT-OX): jejak tabel yang sudah di-wipe — scope luar try agar bisa
+    // dirujuk catch (pesan kegagalan restore di tengah jalan).
+    const wipedTables: string[] = [];
     try {
+      // T9 fix (AUDIT-OX) — PRE-FLIGHT WAJIB sebelum menyentuh cloud (khususnya sebelum
+      // wipe mode Replace): validasi struktur data backup. Kegagalan parse/struktur yang
+      // lolos sampai titik wipe meninggalkan cloud kosong/campuran tanpa rollback.
+      const structureError = assertRestorableStructure(data);
+      if (structureError) {
+        return { success: false, error: `Backup tidak valid: ${structureError}` };
+      }
+
       // 1. PIN verification
       const settingsStore = useSettingsStore.getState();
       const currentPin = settingsStore.settings.managerPin;
@@ -672,12 +727,31 @@ export class BackupService {
       if (!safety.safe) {
         return { success: false, error: safety.reason };
       }
-
       // 7.2 (Replace): kosongkan tabel cloud di luar backup (anak dulu) sebelum insert — snapshot penuh
       if (mode === 'replace') {
         onProgress?.('Mode Replace: menghapus data cloud di luar backup...', 8);
-        const scope = REPLACE_SCOPE[data.manifest.backupType] || [];
-        await wipeCloudTables(scope);
+        const scopeAll = REPLACE_SCOPE[data.manifest.backupType] || [];
+        // K2 fix (AUDIT-OX): batasi wipe HANYA ke tabel yang benar-benar ada datanya di
+        // file backup. Sebelumnya scope ditentukan backupType saja → restore FULL tanpa
+        // audit_logs.json MENGHAPUS audit_logs cloud tanpa mengisi apa pun (destruksi
+        // permanen). Backup lengkap → daftar wipe identik dengan perilaku lama; yang
+        // berubah hanya kasus ZIP parsial/rusak (kini fail-safe, bukan fail-destructive).
+        const presentInBackup: Record<string, boolean> = {
+          transactions: data.transactions !== undefined,
+          cash_movements: data.cash?.cashMovements !== undefined,
+          stock_opnames: data.stock?.stockOpnames !== undefined,
+          stock_logs: data.stock?.stockLogs !== undefined,
+          shifts: data.cash?.shifts !== undefined,
+          audit_logs: data.auditLogs !== undefined,
+          customers: data.customers !== undefined,
+          promos: data.promos !== undefined,
+          menu_components: data.menuComponents !== undefined,
+          menus: data.menus !== undefined,
+          inventory: data.inventory !== undefined,
+          users: data.users !== undefined,
+        };
+        const scope = scopeAll.filter((t) => presentInBackup[t] === true);
+        await wipeCloudTables(scope, wipedTables);
       }
 
       onProgress?.('Memulihkan Pengaturan (Settings)...', 10);
@@ -858,7 +932,11 @@ export class BackupService {
       return { success: true };
     } catch (err: any) {
       console.error('[BackupService] Restore error:', err);
-      return { success: false, error: err.message || 'Terjadi kesalahan tidak terduga saat memulihkan data.' };
+      // T9 fix (AUDIT-OX): bila restore gagal di tengah setelah wipe, laporkan tabel yang
+      // sudah terkena agar user tahu cloud dalam kondisi campuran — restore ULANG (idempoten,
+      // full upsert) membersihkannya.
+      const wipedInfo = wipedTables.length > 0 ? ` Tabel yang sudah dikosongkan: ${wipedTables.join(', ')}. Jalankan restore ulang dengan file backup yang sama untuk melengkapi pemulihan.` : '';
+      return { success: false, error: (err.message || 'Terjadi kesalahan tidak terduga saat memulihkan data.') + wipedInfo };
     }
   }
 }
