@@ -355,6 +355,7 @@ export default function POS() {
       setTableNumber('');
       setCheckoutTxId(uuid());
       setCurrentPendingTx(null);
+      setPendingSplitReconciled(false); // T4 fix: konteks pending baru → flag rekonsiliasi lama basi
       addToast(`Pesanan #${result.transaction?.queueNumber} berhasil disimpan ke Pesanan Gantung! ⏳`, 'success');
     } else {
       addToast(result.error || 'Gagal menyimpan pesanan gantung!', 'error');
@@ -438,6 +439,7 @@ export default function POS() {
     const maxExistingBatch = Math.max(...(tx.items || []).map((i) => i.batch || 1), 1);
     cartStore.setActiveBatch(maxExistingBatch + 1);
     setCurrentPendingTx(tx);
+    setPendingSplitReconciled(false); // T4 fix: resume konteks baru → flag rekonsiliasi lama basi
     setCheckoutTxId(tx.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -881,7 +883,12 @@ export default function POS() {
     const subtotal = Math.round(cart.getSubtotal());
     // LOGIC-2 & LOGIC-05 fix: Cap total discount to never exceed subtotal & round to whole integer
     // v4.7 TO DO 12.2.3 (P-A4): total diskon dari discount engine (stacking / best-deal promo eksklusif)
-    const totalDiscount = discountCalc.totalDiscount;
+    // K1 fix (AUDIT-OX): sertakan diskon redeem poin loyalty agar yang dicommit = preview =
+    // nominal yang benar-benar dibayar kasir (rumus identik handleSavePending). Sebelumnya
+    // transaksi tercatat lebih besar dari pembayaran; poin tetap terpotong.
+    // Catatan: finalizeAsDemo SENGAJA tidak menyertakan redeem — demo tidak mengonsumsi poin,
+    // jadi tidak boleh menerapkan diskonnya (self-consistent).
+    const totalDiscount = Math.min(discountCalc.totalDiscount + redeemApplied, subtotal);
     const netSubtotal = Math.round(Math.max(0, subtotal - totalDiscount));
     
     // GAP-3 & LOGIC-05 fix: Calculate tax rounded to whole integer Rupiah
@@ -1067,6 +1074,7 @@ export default function POS() {
     // Selesai → order BARU berikutnya ikut overrideQueueNumber/reservedDeductions lama
     // (stok terpotong salah) dan Simpan Pending bisa memakai ID transaksi lama.
     setCurrentPendingTx(null);
+    setPendingSplitReconciled(false); // T4 fix: flag rekonsiliasi tidak boleh bocor ke order berikutnya
 
     setPayMethod('Cash');
     clearPromo();
@@ -1148,6 +1156,7 @@ export default function POS() {
     setTableNumber('');
     setCheckoutTxId(uuid());
     setCurrentPendingTx(null);
+    setPendingSplitReconciled(false); // T4 fix: demo baru tidak boleh mewarisi flag split lama
     setPayMethod('Cash');
     setOrderType('Dine In');
     addToast(`Transaksi demo #${result.transaction?.queueNumber} dicatat — tidak memotong stok & tidak masuk laporan.`, 'info');
@@ -2541,7 +2550,14 @@ export default function POS() {
       {/* Split Bill Modal */}
       <SplitBillModal
         open={showSplitModal}
-        onClose={() => setShowSplitModal(false)}
+        onClose={() => {
+          setShowSplitModal(false);
+          // T4 fix (AUDIT-OX): tutup modal di tengah sesi split → flag rekonsiliasi basi.
+          // Finalisasi normal berikutnya harus memakai delta engine dari deduksi ORIGINAL
+          // parent (reservedDeductions), bukan melewati delta — mencegah stok terpotong
+          // ganda/kurang diam-diam. Kasus umum (cart == parent) → delta 0 = tepat.
+          setPendingSplitReconciled(false);
+        }}
         cartItems={cart.items}
         subtotal={cart.getSubtotal()}
         discount={cappedPreviewDiscount}
@@ -2561,6 +2577,11 @@ export default function POS() {
           setDiscountInput('');
           setDiscountType('rp');
           setVoucherCode('');
+          // T5 fix (AUDIT-OX): promo & input redeem TIDAK boleh bocor ke order berikutnya —
+          // tanpa ini, appliedPromoId lama ter-aplikasi otomatis ke cart baru dan metadata
+          // promoName/promoAmount transaksi berikutnya salah atribusi (laporan performa promo keliru).
+          clearPromo();
+          setRedeemPointsInput('');
           setCashReceived('');
           setSelectedCustomerId(null);
           setCustomCustomerName('');

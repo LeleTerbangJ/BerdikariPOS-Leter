@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS menus (
   name TEXT NOT NULL,
   category TEXT NOT NULL,
   price FLOAT NOT NULL,
+  description TEXT,
   image TEXT,
   is_best_seller BOOLEAN DEFAULT false,
   is_available BOOLEAN DEFAULT true,

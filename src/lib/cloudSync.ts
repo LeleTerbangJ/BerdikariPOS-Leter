@@ -525,6 +525,24 @@ export async function runMigrations() {
       // Offline/network saat startup — jangan salah diagnosa.
     }
 
+    // Migration 32 (T8 — AUDIT-OX): kolom `description` di tabel menus — ditulis syncMenu
+    // sejak lama tapi belum ada di schema aktif → upsert gagal & offline queue menumpuk.
+    // Kolom sudah ada di schema.sql CREATE TABLE; ALTER idempoten ini self-heal DB lama.
+    try {
+      const menuDescProbe = await supabase.from('menus').select('description').limit(1);
+      if (menuDescProbe.error) {
+        const descMsg = menuDescProbe.error.message || '';
+        if (descMsg.includes('description')) {
+          console.warn('[Migration] Kolom "description" belum ada di tabel menus (AUDIT-OX T8).');
+          console.warn('[Migration] Please run this SQL ONCE in Supabase SQL Editor (idempoten):');
+          console.warn('  ALTER TABLE menus ADD COLUMN IF NOT EXISTS description TEXT;');
+          migrationNeeded.menusDescription = true;
+        }
+      }
+    } catch (e) {
+      // Offline/network saat startup — jangan salah diagnosa.
+    }
+
     // Verify cash_movements table (label asli "Migration 15" sudah dipakai 2x — dinormalisasi agar
     // urutan migrasi 15/16/17 tidak membingungkan, lihat TO DO 5.5)
     const { error: cmError } = await supabase.from('cash_movements').select('id').limit(1);
@@ -588,7 +606,7 @@ export async function runMigrations() {
 }
 
 // Track which migrations are needed so sync functions can adapt
-const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false, kitchenItemStatus: false, shiftForceCloseColumns: false };
+const migrationNeeded = { manualHpp: false, activeSessionId: false, tax: false, kitchenTarget: false, kitchenPrinters: false, showSugarLevel: false, themeColor: false, themeShades: false, showTemperature: false, orderType: false, tableFeatures: false, tableNumber: false, taxEnabled: false, demoMode: false, tableName: false, isPending: false, pendingNotes: false, splitParentId: false, splitIndex: false, totalSplitCount: false, paidAmount: false, appliedPromoId: false, voucherCode: false, receiptAsciiOnly: false, autoPrintReceipt: false, receiptHeader: false, receiptFooter: false, cashMovementPolicy: false, opnameApprover: false, refunded: false, autoSendDigitalReceipt: false, promoName: false, promoAmount: false, promoStackable: false, promoMinQty: false, promoBogoConfig: false, promoUsagePerCustomer: false, loyaltyPoints: false, inventoryStockRpc: false, queueCounterRpc: false, inventoryUpdatedAt: false, kitchenTicketPrintedAt: false, pendingPrintOption: false, kitchenItemStatus: false, shiftForceCloseColumns: false, menusDescription: false };
 export function isMigrationNeeded(key: keyof typeof migrationNeeded) {
   return migrationNeeded[key];
 }
@@ -1153,9 +1171,12 @@ export async function syncMenu(menu: Menu) {
     is_available: menu.isAvailable !== false,
     ingredients: menu.ingredients,
     available_addons: menu.availableAddons,
-    description: menu.description,
     is_bundle: menu.isBundle || false,
   };
+  // T8 fix (AUDIT-OX): Only include description if the column exists in DB
+  if (!migrationNeeded.menusDescription) {
+    data.description = menu.description;
+  }
   // Only include manual_hpp if the column exists in DB
   if (!migrationNeeded.manualHpp) {
     data.manual_hpp = menu.manualHpp || 0;

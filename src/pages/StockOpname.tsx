@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { v4 as uuid } from 'uuid';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useStockLogStore } from '../store/stockLogStore';
@@ -57,6 +57,57 @@ export default function StockOpname() {
   );
   const [notes, setNotes] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
+  // Re-audit T10: debounce toast sinkronisasi (anti double-fire StrictMode & burst realtime)
+  const lastSyncToastRef = useRef(0);
+
+  // T10 fix (AUDIT-OX): sinkronkan stok sistem & cost baris saat inventory berubah
+  // (realtime lintas device / mutasi POS di device sama). Sebelumnya snapshot hanya di-mount →
+  // form memakai dasar basi: dialog drift muncul untuk hampir semua item, atau lebih buruk,
+  // opname menimpa stok terkini dengan dasar basi. Input kasir (actualStock & alasan) TIDAK disentuh.
+  // Re-audit fix: toast agregat bila perubahan mengenai baris yang SUDAH diisi kasir —
+  // pratinjau selisihnya bergeser, jangan biarkan tanpa kabar.
+  useEffect(() => {
+    setRows((prevRows) => {
+      if (prevRows.length === 0) {
+        // Mount pertama — cukup bangun dari inventory (tanpa toast)
+        return inventory.map((i) => ({
+          inventoryId: i.id, name: i.name, unit: i.unit,
+          systemStock: i.stock, costPerUnit: i.costPerUnit,
+          actualStock: '', reason: '',
+        }));
+      }
+      const prevById = new Map(prevRows.map((r) => [r.inventoryId, r]));
+      let affectedInputs = 0;
+      const refreshed = inventory.map((i) => {
+        const prev = prevById.get(i.id);
+        const row = {
+          inventoryId: i.id,
+          name: i.name,
+          unit: i.unit,
+          systemStock: i.stock,
+          costPerUnit: i.costPerUnit,
+          actualStock: prev?.actualStock ?? '',
+          reason: prev?.reason ?? '',
+        };
+        // Baris sudah diisi kasir DAN dasar pembandingnya berubah → masuk hitungan notifikasi
+        if (prev && row.actualStock !== '' && prev.systemStock !== row.systemStock) affectedInputs++;
+        return row;
+      });
+      // Debounce 3 dtk: StrictMode dev memanggil updater 2x & burst realtime tidak menumpuk toast
+      if (affectedInputs > 0 && Date.now() - lastSyncToastRef.current > 3000) {
+        lastSyncToastRef.current = Date.now();
+        addToast(
+          `Stok sistem ${affectedInputs} item berubah selagi form terbuka — pratinjau selisih diperbarui dengan dasar terbaru.`,
+          'info'
+        );
+      }
+      // Pertahankan ketikan kasir untuk item yang sudah tidak ada di inventory (tidak ikut commit)
+      const invIds = new Set(inventory.map((i) => i.id));
+      const orphans = prevRows.filter((r) => !invIds.has(r.inventoryId));
+      return [...refreshed, ...orphans];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventory]);
   const [unitFilter, setUnitFilter] = useState('all');
   const [opnamePerPage, setOpnamePerPage] = useState(10);
   const [opnamePage, setOpnamePage] = useState(1);
