@@ -136,6 +136,9 @@ export interface PrintJobResult {
  * - '<kitchen-printer-uuid>' → Kitchen/bar printer
  */
 const printerRegistry = new Map<string, BluetoothConnection>();
+// S17 fix (AUDIT-OX): registry handler disconnect per printerId — re-pair pada device
+// Bluetooth yang sama tidak lagi menumpuk listener `gattserverdisconnected`.
+const disconnectedHandlers = new Map<string, () => void>();
 export const CASHIER_PRINTER_ID = '__cashier__';
 
 // ============================================================
@@ -149,10 +152,17 @@ export type PrinterEvent =
   | { type: 'connected'; printerId: string; deviceName?: string }
   | { type: 'disconnected'; printerId: string };
 
+// S17 fix (AUDIT-OX): SATU channel bersama + ref-count listener.
+// Sebelumnya: broadcastPrinterEvent membuat channel BARU tiap panggilan tanpa close
+// (kebocoran akumulatif), dan cleanup subscribe menutup channel milik subscriber lain.
+let sharedChannel: BroadcastChannel | null = null;
+let sharedChannelRefs = 0;
+
 function getPrinterChannel(): BroadcastChannel | null {
   try {
     if (typeof BroadcastChannel === 'undefined') return null;
-    return new BroadcastChannel('rempah-printer-events');
+    if (!sharedChannel) sharedChannel = new BroadcastChannel('rempah-printer-events');
+    return sharedChannel;
   } catch {
     return null;
   }
@@ -175,6 +185,7 @@ function broadcastPrinterEvent(event: PrinterEvent) {
 export function subscribePrinterEvents(listener: (event: PrinterEvent) => void): () => void {
   const ch = getPrinterChannel();
   if (!ch) return () => {};
+  sharedChannelRefs++;
   const handler = (e: MessageEvent) => {
     try {
       listener(e.data as PrinterEvent);
@@ -185,7 +196,17 @@ export function subscribePrinterEvents(listener: (event: PrinterEvent) => void):
   ch.addEventListener('message', handler);
   return () => {
     ch.removeEventListener('message', handler);
-    ch.close();
+    sharedChannelRefs--;
+    // Tutup channel hanya saat subscriber TERAKHIR pergi (bukan milik orang lain)
+    if (sharedChannelRefs <= 0 && sharedChannel) {
+      try {
+        sharedChannel.close();
+      } catch {
+        // abaikan
+      }
+      sharedChannel = null;
+      sharedChannelRefs = 0;
+    }
   };
 }
 
@@ -383,13 +404,19 @@ async function establishConnection(printerId: string, device: BluetoothDevice): 
             deviceId: device.id,
           });
 
-          // Listen for disconnection
-          device.addEventListener('gattserverdisconnected', () => {
+          // Listen for disconnection — S17 fix: hapus handler lama sebelum pasang (anti tumpuk)
+          const prevHandler = disconnectedHandlers.get(printerId);
+          if (prevHandler) {
+            device.removeEventListener('gattserverdisconnected', prevHandler);
+          }
+          const disconnectedHandler = () => {
             printerRegistry.delete(printerId);
             console.log(`[PrinterRegistry] ${printerId} disconnected (${device.name})`);
             // TO DO 14.4: beri tahu tab lain (mis. halaman Kitchen) bahwa printer terputus
             broadcastPrinterEvent({ type: 'disconnected', printerId });
-          });
+          };
+          device.addEventListener('gattserverdisconnected', disconnectedHandler);
+          disconnectedHandlers.set(printerId, disconnectedHandler);
 
           // P-2: tandai sesi agar banner pasca-refresh tahu printer ini pernah tersambung
           markPrinterSession(printerId, device.id, device.name || 'Unknown Printer');

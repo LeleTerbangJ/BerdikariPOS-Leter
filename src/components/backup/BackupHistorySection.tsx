@@ -65,13 +65,17 @@ export default function BackupHistorySection() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {entry.status === 'Success' ? (
+                    {entry.status === 'Success' || entry.status === 'Uploaded' ? (
                       <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <CheckCircle2 size={14} /> Sukses
+                        <CheckCircle2 size={14} /> {entry.status === 'Uploaded' ? 'Terunggah ke Cloud' : 'Sukses'}
+                      </span>
+                    ) : entry.status === 'Created — Check Download' ? (
+                      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold">
+                        <AlertCircle size={14} /> Dibuat — Cek Unduhan
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold">
-                        <AlertCircle size={14} /> Gagal
+                        <AlertCircle size={14} /> {entry.status === 'Upload Failed' ? 'Gagal Upload' : 'Gagal'}
                       </span>
                     )}
                   </td>

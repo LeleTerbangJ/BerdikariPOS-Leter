@@ -86,21 +86,34 @@ export async function runAutoBackupNow(): Promise<{ ok: boolean; error?: string 
     if (config.destination === 'Supabase Storage') {
       const up = await uploadBackupToSupabase(result.blob, result.filename);
       if (!up.ok) {
+        // S4 fix (AUDIT-OX): riwayat diperbarui — jangan biarkan tercatat "Success" palsu.
+        if (result.historyId) {
+          useBackupStore.getState().updateBackupHistoryEntry(result.historyId, { status: 'Upload Failed' });
+        }
         useToastStore.getState().addToast(
           `Auto Backup gagal diunggah ke cloud: ${up.error}`,
           'error'
         );
         return { ok: false, error: up.error };
       }
+      // S4 fix: status akhir faktual setelah upload diketahui.
+      if (result.historyId) {
+        useBackupStore.getState().updateBackupHistoryEntry(result.historyId, { status: 'Uploaded' });
+      }
       useToastStore.getState().addToast(
         `Auto Backup (${formatBytes(result.sizeBytes)}) terunggah ke cloud ✔`,
         'success'
       );
     } else {
+      // S5 fix (AUDIT-OX): unduhan programmatic tanpa user gesture sering DIBLOKIR
+      // browser — jangan klaim "diunduh otomatis ✔". Gunakan bahasa netral + arahan.
       triggerLocalDownload(result.blob, result.filename);
+      if (result.historyId) {
+        useBackupStore.getState().updateBackupHistoryEntry(result.historyId, { status: 'Created — Check Download' });
+      }
       useToastStore.getState().addToast(
-        `Auto Backup (${formatBytes(result.sizeBytes)}) diunduh otomatis ✔`,
-        'success'
+        'Backup otomatis dibuat — jika file tidak terunduh, ekspor manual dari Settings → Backup.',
+        'info'
       );
     }
 

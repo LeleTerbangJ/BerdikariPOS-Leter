@@ -151,7 +151,9 @@ describe('promoStore.loadFromCloud — merge ledger usageKeys UNION lintas devic
     expect(replayLocal.idempotent).toBe(true);
     const replayOther = usePromoStore.getState().reservePromoUsage('p1', undefined, 'tx-2');
     expect(replayOther.idempotent).toBe(true);
-    expect(usePromoStore.getState().promos[0].usageCount).toBe(1); // tidak ada increment tambahan
+    // S8 fix: usageCount di-recompute dari union ledger — 2 key = 2 pemakaian nyata
+    // (sebelumnya kalah LWW → angka 1 = salah; voucher berbatas bisa lolos lintas device)
+    expect(usePromoStore.getState().promos[0].usageCount).toBe(2);
   });
 
   it('tanpa usageKeys di kedua sisi → promo tidak berubah (perilaku lama)', async () => {
@@ -164,5 +166,16 @@ describe('promoStore.loadFromCloud — merge ledger usageKeys UNION lintas devic
     const p = usePromoStore.getState().promos[0];
     expect(p.usageCount).toBe(2);
     expect(p.usageKeys).toBeUndefined();
+  });
+
+  it('S8: union ledger lebih kecil dari usageCount cloud - ambil MAX (anti regressi hitungan)', async () => {
+    const cloud = [{ ...makePromo('p1'), usageCount: 5, usageKeys: { 'tx-1': true as const } }];
+    (fetchPromosFromCloud as ReturnType<typeof vi.fn>).mockResolvedValue(cloud);
+    usePromoStore.setState({ promos: [makePromo('p1')] });
+
+    await usePromoStore.getState().loadFromCloud(true);
+
+    const p = usePromoStore.getState().promos[0];
+    expect(p.usageCount).toBe(5); // max(5, 1) - tidak menurunkan hitungan sah
   });
 });
