@@ -8,11 +8,16 @@ import { fetchComponentsFromCloud, syncComponentToCloud, deleteComponentFromClou
 import { useAuditLogStore } from './auditLogStore';
 import { useAuthStore } from './authStore';
 import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
+// v4.10 PRIORITAS 28.1: guard push seed murni + 28.3: tombstone deletedMenuIds
+import { isPureSeedCatalog, setCatalogTouched } from '../utils/seedGuard';
+import { filterTombstoned, pruneConfirmedTombstones, DEFAULT_TOMBSTONE_CAP } from '../utils/storagePrune';
+import { useToastStore } from './toastStore';
 
 interface MenuState {
   menus: Menu[];
   menuComponents: MenuComponent[];
   customCategories: string[];
+  deletedMenuIds: string[]; // 28.3: tombstone untuk menus (anti re-hidrasi menu terhapus)
   addMenu: (menu: Menu) => void;
   updateMenu: (id: string, data: Partial<Menu>) => void;
   deleteMenu: (id: string) => void;
@@ -25,7 +30,7 @@ interface MenuState {
   updateComponent: (id: string, data: Partial<MenuComponent>) => void;
   deleteComponent: (id: string) => void;
   getComponentsByParent: (parentMenuId: string) => MenuComponent[];
-  loadFromCloud: (fullSync?: boolean) => Promise<void>;
+  loadFromCloud: (fullSync?: boolean) => Promise<boolean>; // 28.2: return true=bisa dipakai, false=gagal
 }
 
 export const useMenuStore = create<MenuState>()(
@@ -34,13 +39,16 @@ export const useMenuStore = create<MenuState>()(
       menus: seedMenus,
       menuComponents: [],
       customCategories: ['Jamu Murni', 'Wedang', 'Signature', 'Segar', 'Paket Combo'],
+      deletedMenuIds: [],
 
       addMenu: (menu) => {
+        setCatalogTouched(); // 28.1: user menambah menu → bukan seed murni
         set((s) => ({ menus: [...s.menus, menu] }));
         syncMenu(menu);
       },
 
       updateMenu: (id, data) => {
+        setCatalogTouched(); // 28.1: user edit menu → bukan seed murni
         set((s) => ({
           menus: s.menus.map((m) => (m.id === id ? { ...m, ...data } : m)),
         }));
@@ -49,12 +57,18 @@ export const useMenuStore = create<MenuState>()(
       },
 
       deleteMenu: (id) => {
+        setCatalogTouched(); // 28.1: user hapus menu → bukan seed murni
         deleteMenuCloud(id);
-        set((s) => ({ menus: s.menus.filter((m) => m.id !== id) }));
+        set((s) => ({
+          menus: s.menus.filter((m) => m.id !== id),
+          // 28.3: tombstone id yang dihapus → jangan re-hidrasi dari cloud
+          deletedMenuIds: [...s.deletedMenuIds, id].slice(-DEFAULT_TOMBSTONE_CAP),
+        }));
       },
 
       importMenus: (menus) => {
-        set({ menus });
+        setCatalogTouched(); // 28.1: import = user aksi → bukan seed murni
+        set({ menus, deletedMenuIds: [] });
         // Sync all imported menus to cloud
         for (const menu of menus) {
           syncMenu(menu);
@@ -173,42 +187,65 @@ export const useMenuStore = create<MenuState>()(
         const cloudMenus = await fetchMenusFromCloud();
         const cloudComponents = await fetchComponentsFromCloud();
 
-        if (cloudMenus !== null) {
-          if (cloudMenus.length > 0) {
-            set((s) => {
-              const cloudIds = new Set(cloudMenus.map((m) => m.id));
-              let localOnly: Menu[];
-              if (fullSync) {
-                localOnly = [];
-              } else {
-                localOnly = s.menus.filter((m) => !cloudIds.has(m.id));
-              }
-              const componentsList = cloudComponents !== null ? cloudComponents : s.menuComponents;
-              const mergedMenus = cloudMenus.map((cm) => {
-                const local = s.menus.find((lm) => lm.id === cm.id);
-                const parentComps = componentsList.filter((c) => c.parentMenuId === cm.id);
-                return {
-                  ...cm,
-                  components: parentComps,
-                  showSugarLevel: cm.showSugarLevel !== undefined
-                    ? cm.showSugarLevel
-                    : (local?.showSugarLevel !== undefined ? local.showSugarLevel : true),
-                  showTemperature: cm.showTemperature !== undefined
-                    ? cm.showTemperature
-                    : (local?.showTemperature !== undefined ? local.showTemperature : true),
-                };
-              });
+        // 28.2: indikasi fetch gagal — return boolean, toast peringatan
+        if (cloudMenus === null) {
+          try {
+            useToastStore.getState().addToast(
+              'Katalog gagal dimuat dari cloud — menampilkan data lokal.',
+              'warning',
+              5000
+            );
+          } catch { /* toast belum siap */ }
+          return false;
+        }
+
+        if (cloudMenus.length > 0) {
+          set((s) => {
+            const cloudIds = new Set(cloudMenus.map((m) => m.id));
+            // 28.3: filter tombstone dari cloudMenus SAAT MERGE (bukan hanya localOnly)
+            // agar menu terhapus tidak kembali via cloudMenus (fullSync=true → localOnly=[]
+            // tapi cloudMenus tetap perlu di-filter)
+            const tombstoned = new Set(s.deletedMenuIds);
+            const cloudFiltered = filterTombstoned(cloudMenus, s.deletedMenuIds);
+            let localOnly: Menu[];
+            if (fullSync) {
+              localOnly = [];
+            } else {
+              localOnly = s.menus.filter((m) => !cloudIds.has(m.id) && !tombstoned.has(m.id));
+            }
+            const componentsList = cloudComponents !== null ? cloudComponents : s.menuComponents;
+            const mergedMenus = cloudFiltered.map((cm) => {
+              const local = s.menus.find((lm) => lm.id === cm.id);
+              const parentComps = componentsList.filter((c) => c.parentMenuId === cm.id);
               return {
-                menus: [...mergedMenus, ...localOnly],
-                menuComponents: componentsList,
+                ...cm,
+                components: parentComps,
+                showSugarLevel: cm.showSugarLevel !== undefined
+                  ? cm.showSugarLevel
+                  : (local?.showSugarLevel !== undefined ? local.showSugarLevel : true),
+                showTemperature: cm.showTemperature !== undefined
+                  ? cm.showTemperature
+                  : (local?.showTemperature !== undefined ? local.showTemperature : true),
               };
             });
-          } else if (isFactoryResetSeedSkip()) {
-            // v4.7 TO DO 12.1.3: setelah Factory Reset, jangan push seed demo lokal ke
-            // cloud (cloud sengaja dikosongkan dari katalog demo). Flag dipakai sekali.
-            clearFactoryResetSeedSkip();
-          } else {
-            const localMenus = get().menus;
+            // 28.3: prune tombstone — id yang sudah tidak ada di cloud = delete terkonfirmasi
+            const prunedTombstones = pruneConfirmedTombstones(s.deletedMenuIds, cloudIds);
+            return {
+              menus: [...mergedMenus, ...localOnly],
+              menuComponents: componentsList,
+              deletedMenuIds: prunedTombstones,
+            };
+          });
+        } else if (isFactoryResetSeedSkip()) {
+          clearFactoryResetSeedSkip();
+        } else {
+          // 28.1: cloud kosong — jangan push seed murni ke cloud.
+          // Hanya push bila katalog lokal BUKAN seed murni (user sudah tambah/edit/hapus/import
+          // → catalogTouched flag diset → isPureSeedCatalog=false → push diperbolehkan).
+          // Onboarding fresh deployment tetap jalan: device pertama dgn katalog user → push.
+          // Seed demo TIDAK ter-upload → menu demo tidak bandel.
+          const localMenus = get().menus;
+          if (!isPureSeedCatalog(localMenus)) {
             for (const menu of localMenus) {
               await syncMenu(menu);
             }
@@ -221,12 +258,22 @@ export const useMenuStore = create<MenuState>()(
           if (cloudCategories.length > 0) {
             set({ customCategories: cloudCategories });
           } else {
+            // 28.1: konsisten — jangan push kategori seed bila katalog lokal seed murni
             const localCategories = get().customCategories;
-            await syncCustomCategories(localCategories);
+            const localMenus = get().menus;
+            if (!isPureSeedCatalog(localMenus)) {
+              await syncCustomCategories(localCategories);
+            }
           }
         }
+        return true;
       },
     }),
-    { name: 'rempah-menus', storage: createJSONStorage(() => safeStorage) }
+    {
+      name: 'rempah-menus',
+      storage: createJSONStorage(() => safeStorage),
+      // 28.3: persist deletedMenuIds bersama menus (tombstone lintas reload)
+      partialize: (s) => ({ menus: s.menus, customCategories: s.customCategories, deletedMenuIds: s.deletedMenuIds }),
+    }
   )
 );

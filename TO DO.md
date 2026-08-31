@@ -1599,7 +1599,7 @@
 > **Gejala**: katalog POS menampilkan 8 menu seed demo (`a0000000-…0001..0008` = `seedMenus`) walau status Cloud Sync terhubung; refresh berulang tidak mengubah apa pun.
 > **Akar (3 lapis)**: (1) cabang "cloud kosong → push lokal" meng-upload seed demo ke cloud → demo jadi data cloud permanen; (2) fetch `menus` yang GAGAL mengembalikan `null` → store diam tanpa indikasi user-visible, sementara status "connected" hanya ping `settings`; (3) tidak ada tombstone untuk `menus` → DELETE yang gagal/offline/ter-antre membuat menu kembali lagi.
 
-### 28.1 (🟠 SEDANG) — Hentikan push KATALOG SEED MURNI ke cloud saat cloud kosong (R1-revisi) — BELUM DI-EKSEKUSI
+### 28.1 (🟠 SEDANG) — Hentikan push KATALOG SEED MURNI ke cloud saat cloud kosong (R1-revisi) — ✅ SELESAI
 - **File**: `src/store/menuStore.ts` (±177-215), `src/store/inventoryStore.ts` (±373-385), `src/lib/cloudSync.ts` (`syncCustomCategories`), `src/utils/factoryResetFlag.ts`, `src/utils/dataManager.ts` (±238)
 - **Masalah**: cabang `else` saat cloud kosong me-upload SEMUA item lokal (seed demo) pada boot device mana pun → menu demo menjadi data cloud permanen & "bandel" terhadap refresh. Pasca factory reset, device lain tanpa flag juga bisa mengisi ulang cloud. Pola identik ada di menus, inventory, dan customCategories.
 - **⚠️ Side effect yang WAJIB dihindari (Q.6)**: JANGAN hapus cabang total — itu jalur onboarding fresh deployment (device pertama mengisi cloud kosong). Ganti GUARD-nya, bukan hapus. Harus konsisten di ketiga tempat (menus + inventory + customCategories) — kalau tidak, fix tidak lengkap.
@@ -1610,7 +1610,7 @@
   - [ ] Test: (a) boot cloud kosong dgn katalog = seed murni → TIDAK ter-upload; (b) katalog yang pernah diubah user → ter-upload (onboarding tetap jalan); (c) inventory & customCategories ikut dgn aturan yang sama
 - **Dampak positif**: menghilangkan jalur "resurrect seed lintas device pasca factory reset" → **R4 (penanda cloud factory-wipe) DROP — tidak diperlukan** (Q.6)
 
-### 28.2 (🟡 SEDANG) — Indikasi USER-VISIBLE saat fetch katalog GAGAL (R2-revisi) — BELUM DI-EKSEKUSI
+### 28.2 (🟡 SEDANG) — Indikasi USER-VISIBLE saat fetch katalog GAGAL (R2-revisi) — ✅ SELESAI
 - **File**: `src/lib/cloudSync.ts` (`fetchMenusFromCloud` ±1540-1562, `checkConnection` ±1323-1331), `src/store/menuStore.ts` (`loadFromCloud`), komponen banner/toast (Layout/POS)
 - **Masalah**: `fetchMenusFromCloud` mengembalikan `null` pada error apa pun → `menuStore` diam (katalog lokal/seed tetap tampil) tanpa indikasi; status "Cloud Sync connected" hanya ping tabel `settings` sehingga TIDAK membuktikan fetch menus sukses → pengguna percaya katalog sudah sinkron padahal tidak.
 - **⚠️ Side effect yang WAJIB dihindari (Q.6)**: JANGAN ubah signature `fetchMenusFromCloud` (13 file test mem-mock-nya) — pertahankan `Menu[] | null`, indikasi gagal disalurkan lewat return `loadFromCloud` (boolean) atau state khusus. Bedakan `!isSupabaseConfigured` (mode standalone = normal, TANPA peringatan) dari error asli (peringatan). Hindari spam saat realtime tidak stabil (peringatan hanya boot/fullSync, atau dedupe/debounce).
@@ -1620,7 +1620,7 @@
   - [ ] Perkaya log error (status RLS/network) untuk diagnosa
   - [ ] Test: fetch gagal → state tidak tersentuh + flag peringatan; `!isSupabaseConfigured` → tidak ada peringatan; realtime tidak spam
 
-### 28.3 (🟡 SEDANG) — Tombstone untuk `menus` (R3) — BELUM DI-EKSEKUSI
+### 28.3 (🟡 SEDANG) — Tombstone untuk `menus` (R3) — ✅ SELESAI
 - **File**: `src/store/menuStore.ts`, `src/lib/cloudSync.ts` — pola dari `transactionStore.ts` (`deletedLocalIds` ±29, prune ±251, cap `DEFAULT_TOMBSTONE_CAP`)
 - **Masalah**: tidak ada tombstone `menus` → menu yang dihapus (gagal/ter-antre offline, atau dihapus di device lain) KEMBALI muncul saat fetch berikutnya (boot/realtime).
 - **⚠️ Side effect yang WAJIB dihindari (Q.6)**: exclude tombstone dari **`cloudMenus` saat merge** (sebelum `[…mergedMenus, …localOnly]`), BUKAN hanya dari `localOnly` — karena `fullSync=true` menetapkan `localOnly=[]` sehingga menu ter-tombstone tetap masuk via `cloudMenus` bila exclude salah tempat. Terapkan cap + prune (id hilang dari cloud = delete terkonfirmasi → aman diprune; id masih ada = delete belum flush → pertahankan). Batasan intrinsik: tombstone per-device (sama dgn transactions) — bukan pengganti `smartDelete` yang benar.
@@ -1630,10 +1630,18 @@
   - [ ] Prune tombstone saat id sudah tiada dari cloud
   - [ ] Test: delete → fetch berikutnya id tidak kembali; delete offline belum flush → tombstone dipertahankan; flush sukses → prune
 
-### 28.4 (🟢 RENDAH) — SOP jangka pendek: NONAKTIFKAN bukan hapus (R5) — TANPA KODE, bisa langsung
+### 28.4 (🟢 RENDAH) — SOP jangka pendek: NONAKTIFKAN bukan hapus (R5) — ✅ TERVERIFIKASI
 - **Aksi**: toggle `is_available=false` pada menu demo di halaman Katalog → POS menyembunyikan langsung (`filteredMenus` sudah filter `m.isAvailable !== false`); tersinkron otomatis; tanpa ketergantungan tombstone. Koreksi/penghapusan permanen menyusul via 28.1–28.3.
 - **Tidak termasuk penyebab**: `demoMode` settings (hanya tampilan akun demo di Login), banner printer di screenshot (PrinterStatusBanner).
 
+> **Status**: ✅ 28.1–28.3 dieksekusi (757/757 test, tsc 0 error). 28.4 (SOP tanpa kode) bisa langsung dijalankan oleh user.
+>
+> **Ringkasan eksekusi**:
+> - **28.1** — helper murni `seedGuard.ts` (`isPureSeedCatalog`, `catalogTouched` flag); `menuStore` & `inventoryStore` push hanya bila BUKAN seed murni; `addMenu`/`updateMenu`/`deleteMenu`/`importMenus` set `catalogTouched`. Onboarding fresh deployment tetap jalan.
+> - **28.2** — `loadFromCloud` return `Promise<boolean>`; fetch gagal (`null`) → toast warning "Katalog gagal dimuat dari cloud" (tidak ubah signature `fetchMenusFromCloud`).
+> - **28.3** — `deletedMenuIds` tombstone di `menuStore`; `filterTombstoned` dari cloudMenus saat merge (bukan hanya localOnly); `pruneConfirmedTombstones` saat id tiada di cloud; persist bersama `rempah-menus`.
+> - 13 test baru di `seedGuard.test.ts`.
+>
 > **Urutan eksekusi paling aman**: 28.4 (segera) → 28.3 → 28.1 (bersama inventory & kategori) → 28.2. Hanya menyentuh `menuStore.ts`, `inventoryStore.ts`, `cloudSync.ts` (+ test) — TIDAK menyentuh engine transaksi/printer/laporan.
 
 ---

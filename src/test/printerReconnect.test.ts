@@ -205,3 +205,70 @@ describe('isPrinterSessionRecent (R-B2) — klasifikasi penyebab putus', () => {
     expect(mod.isPrinterSessionRecent('kp-baru', connectedAtBaru + 30_000)).toBe(true);
   });
 });
+
+// =====================================================================
+// U-F3 — sanitizeForThermalPrint: strip emoji/simbol non-Latin
+// =====================================================================
+describe('sanitizeForThermalPrint (U-F3) — anti simbol aneh di struk', () => {
+  it('teks ASCII murni tidak berubah', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint('Kasir: Budi')).toBe('Kasir: Budi');
+    expect(mod.sanitizeForThermalPrint('Rp 10.000')).toBe('Rp 10.000');
+  });
+
+  it('emoji diganti dengan representasi ASCII', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint('Kopi ☕ Senja')).toBe('Kopi (kopi) Senja');
+    expect(mod.sanitizeForThermalPrint('Burger 🍔')).toBe('Burger (burger)');
+  });
+
+  it('simbol unicode umum diganti', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint('Best ★')).toBe('Best *');
+    expect(mod.sanitizeForThermalPrint('Done ✓')).toBe('Done v');
+    expect(mod.sanitizeForThermalPrint('Arah →')).toBe('Arah ->');
+  });
+
+  it('karakter non-Latin-1 yang tidak punya replacement → ?', async () => {
+    const mod = await loadPrinterModule();
+    // CJK / huruf arab / dll → strip ke ? (spasi tetap dipertahankan)
+    const result = mod.sanitizeForThermalPrint('안녕 مرحبا');
+    // Hanya berisi ? dan spasi — tidak ada karakter CJK yang lolos
+    expect(result).toMatch(/^[\?\s]+$/);
+    expect(result).not.toMatch(/[\u0100-\uFFFF]/);
+  });
+
+  it('rentetan emoji multi-codepoint tidak menghasilkan ??? berlebihan', async () => {
+    const mod = await loadPrinterModule();
+    // Emoji dengan ZWJ → multiple codepoints → diganti lalu ? berlebihan di-clean
+    const result = mod.sanitizeForThermalPrint('Hello 🛒🛒🛒 World');
+    // Tidak ada ?? lebih dari 1 berturut-turut
+    expect(result).not.toMatch(/\?{2,}/);
+  });
+
+  it('null/undefined → string kosong', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint(null)).toBe('');
+    expect(mod.sanitizeForThermalPrint(undefined)).toBe('');
+  });
+
+  it('smart quotes diganti dengan ASCII quotes', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint('“test”')).toBe('"test"');
+    expect(mod.sanitizeForThermalPrint("apos’")).toBe("apos'");
+  });
+
+  it('garis em/en dash diganti dengan ASCII dash', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.sanitizeForThermalPrint('A—B')).toBe('A-B');
+    expect(mod.sanitizeForThermalPrint('C–D')).toBe('C-D');
+  });
+
+  it('campuran: nama menu dengan emoji + teks normal', async () => {
+    const mod = await loadPrinterModule();
+    const result = mod.sanitizeForThermalPrint('🍕 Pizza Margherita ★ Best Seller');
+    expect(result).toBe('(pizza) Pizza Margherita * Best Seller');
+    // Tidak ada karakter non-ASCII yang tersisa
+    expect(result).not.toMatch(/[\u0100-\uFFFF]/);
+  });
+});

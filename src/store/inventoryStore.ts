@@ -12,6 +12,8 @@ import { syncInventoryItem, syncInventoryStock, deleteInventoryCloud, fetchInven
 // menimpa mutasi lokal yang lebih baru (race sync stok burst multi-device).
 import { isLocalNewer } from '../utils/inventoryFreshness';
 import { isFactoryResetSeedSkip, clearFactoryResetSeedSkip } from '../utils/factoryResetFlag';
+// v4.10 PRIORITAS 28.1: guard push seed inventaris murni ke cloud
+import { setCatalogTouched, isCatalogTouched } from '../utils/seedGuard';
 import { findNegativeStocksAfterDeduction, type NegativeStockAlert } from '../utils/stockCheck';
 import { planCsvImportRow, type ParsedImportRow } from '../utils/stockImport';
 // v4.7 TO DO 13.5 (O-7): deteksi potensi konflik stok lintas device saat sync
@@ -95,6 +97,7 @@ export const useInventoryStore = create<InventoryState>()(
       clearStockConflicts: () => set({ stockConflicts: [] }),
 
       addItem: (item, options) => {
+        setCatalogTouched(); // 28.1: user tambah item → bukan seed murni
         // v4.7 TO DO 18.8 (A5): stamp updatedAt saat pembuatan (last-write-wins lintas device)
         const stamped = { ...item, updatedAt: item.updatedAt || new Date().toISOString() };
         if (!options?.skipSync) syncInventoryItem(stamped); // Cloud sync
@@ -129,6 +132,7 @@ export const useInventoryStore = create<InventoryState>()(
       },
 
       deleteItem: (id) => {
+        setCatalogTouched(); // 28.1: user hapus item → bukan seed murni
         deleteInventoryCloud(id); // Cloud sync
         set((s) => ({ items: s.items.filter((i) => i.id !== id) }));
       },
@@ -375,10 +379,17 @@ export const useInventoryStore = create<InventoryState>()(
             // cloud (cloud sengaja dikosongkan). Flag dipakai sekali.
             clearFactoryResetSeedSkip();
           } else {
-            // Cloud is empty, seed it with local items
+            // 28.1: cloud kosong — jangan push seed murni ke cloud.
+            // Hanya push bila inventaris lokal BUKAN seed murni.
             const localItems = get().items;
-            for (const item of localItems) {
-              await syncInventoryItem(item);
+            // Inventaris seed punya id 'seed-*' — cek langsung
+            const isPureInventorySeed = localItems.every((i) =>
+              seedInventory.some((si) => si.id === i.id)
+            ) && !isCatalogTouched();
+            if (!isPureInventorySeed) {
+              for (const item of localItems) {
+                await syncInventoryItem(item);
+              }
             }
           }
         }

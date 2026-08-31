@@ -549,15 +549,34 @@ async function writeToPrinter(printerId: string, data: Uint8Array): Promise<void
     throw new Error(`Koneksi Bluetooth ke printer "${conn.deviceName}" terputus.`);
   }
 
-  const chunkSize = 20;
-  for (let i = 0; i < data.length; i += chunkSize) {
-    const chunk = data.slice(i, i + chunkSize);
+  // U-F2: chunk aman multi-byte — jangan potong di tengah karakter UTF-8.
+  // Chunk size lebih besar (180 byte, di bawah MTU Web Bluetooth umum 180-512)
+  // untuk mengurangi jumlah write + peluang potong karakter multi-byte.
+  // Boundary detection: byte 0x80-0xBF = continuation byte (bagian karakter
+  // multi-byte sebelumnya). Bila chunk berakhir di continuation byte, mundurkan
+  // boundary ke sebelum start byte (0xC0-0xFF) karakter itu.
+  const chunkSize = 180;
+  let i = 0;
+  while (i < data.length) {
+    let end = Math.min(i + chunkSize, data.length);
+    // Bila belum di akhir data, cek apakah kita memotong di tengah karakter multi-byte
+    if (end < data.length) {
+      // Mundur ke sebelum karakter multi-byte yang terpotong
+      while (end > i && (data[end] & 0xC0) === 0x80) {
+        end--;
+      }
+      // Bila mundur ke i (edge case: seluruh chunk continuation bytes), paksa maju 1
+      // untuk mencegah loop infinite — karakter korup memang akan terkirim apa adanya.
+      if (end === i) end = Math.min(i + chunkSize, data.length);
+    }
+    const chunk = data.slice(i, end);
     if (conn.characteristic.properties.writeWithoutResponse) {
       await conn.characteristic.writeValueWithoutResponse(chunk);
     } else {
       await conn.characteristic.writeValue(chunk);
     }
     await new Promise((r) => setTimeout(r, 20));
+    i = end;
   }
 }
 
@@ -905,6 +924,9 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
 
   // Initialize printer
   commands.push(ESC, 0x40);
+  // U-F1: set codepage ke default (CP437/USA) sebelum encode teks — mencegah printer
+  // menafsirkan byte UTF-8 multi-byte sebagai command CJK/kanji → simbol aneh.
+  commands.push(ESC, 0x74, 0x00); // ESC t 0 = select default codepage
 
   // 1. Monochromatic Logo Printing (converted to B&W 1-bit raster image)
   if (data.showLogoOnReceipt !== false && data.storeLogo) {
@@ -927,14 +949,14 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   // Center align + Bold store name
   commands.push(ESC, 0x61, 0x01);
   commands.push(ESC, 0x45, 0x01);
-  commands.push(...encoder.encode(data.storeName + '\n'));
+  commands.push(...encoder.encode(sanitizeForThermalPrint(data.storeName) + '\n'));
   commands.push(ESC, 0x45, 0x00);
 
   if (data.storeAddress) {
-    commands.push(...encoder.encode(data.storeAddress + '\n'));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(data.storeAddress) + '\n'));
   }
   if (data.receiptHeader) {
-    commands.push(...encoder.encode(data.receiptHeader + '\n'));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(data.receiptHeader) + '\n'));
   }
 
   // Left align
@@ -953,15 +975,15 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   const line2 = leftRight(dateLeft, rightTag, width);
   commands.push(...encoder.encode(line2 + '\n'));
 
-  commands.push(...encoder.encode(`Kasir: ${data.cashierName}\n`));
+  commands.push(...encoder.encode(sanitizeForThermalPrint(`Kasir: ${data.cashierName}`) + '\n'));
   if (data.customerName) {
-    commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\n`));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(`Pelanggan: ${data.customerName}`) + '\n'));
   }
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\n'));
 
   // 4. Items List (Exact Left/Right Alignment)
   for (const item of data.items) {
-    commands.push(...encoder.encode(`${item.name}\n`));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(`${item.name}`) + '\n'));
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
@@ -986,7 +1008,7 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
   // v4.7 TO DO 12.2.7 (P-A7): nama promo/voucher di struk thermal (ESC/POS) — potong bila panjang
   if (data.promoName) {
     const promoLabel = `Promo: ${data.promoName}${data.promoCode ? ` (${data.promoCode})` : ''}`;
-    commands.push(...encoder.encode(promoLabel.slice(0, maxChars) + '\n'));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(promoLabel.slice(0, maxChars)) + '\n'));
   }
   if (data.tax && data.tax > 0) {
     commands.push(...encoder.encode(leftRight('Pajak', formatRupiah(data.tax), width) + '\n'));
@@ -1012,7 +1034,7 @@ async function buildReceiptESCPOS(data: ReceiptData, width: '58mm' | '80mm'): Pr
 
   // 6. Footer (Centered & Wrapped to prevent line overflow)
   commands.push(ESC, 0x61, 0x01); // Center align
-  const rawFooter = data.receiptFooter || 'Terima kasih atas kunjungan Anda!';
+  const rawFooter = sanitizeForThermalPrint(data.receiptFooter || 'Terima kasih atas kunjungan Anda!');
   const wrappedFooterLines = wrapCenterLines(rawFooter, width);
   commands.push(...encoder.encode('\n' + wrappedFooterLines.join('\n') + '\n\n'));
 
@@ -1152,6 +1174,8 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
 
   // Reset printer & center align
   commands.push(ESC, 0x40);
+  // U-F1: set codepage default setelah init — anti simbol CJK/kanji
+  commands.push(ESC, 0x74, 0x00);
   commands.push(ESC, 0x61, 0x01);
 
   // 1. Header (Scoped bold and explicit CRLF line feeds to prevent buffer overlap)
@@ -1175,7 +1199,7 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   commands.push(ESC, 0x45, 0x00);
 
   commands.push(ESC, 0x45, 0x01);
-  commands.push(...encoder.encode(`${kp.name.toUpperCase()}\r\n`));
+  commands.push(...encoder.encode(sanitizeForThermalPrint(kp.name.toUpperCase()) + '\r\n'));
   commands.push(ESC, 0x45, 0x00);
 
   if (data.isReprint) {
@@ -1188,9 +1212,9 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
   commands.push(ESC, 0x61, 0x00);
   commands.push(...encoder.encode('-'.repeat(maxChars) + '\r\n'));
   commands.push(...encoder.encode(`Tgl: ${new Date(data.date).toLocaleString('id-ID')}\r\n`));
-  commands.push(...encoder.encode(`Kasir: ${data.cashierName}\r\n`));
+  commands.push(...encoder.encode(sanitizeForThermalPrint(`Kasir: ${data.cashierName}`) + '\r\n'));
   if (data.customerName) {
-    commands.push(...encoder.encode(`Pelanggan: ${data.customerName}\r\n`));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(`Pelanggan: ${data.customerName}`) + '\r\n'));
   }
   if (data.orderType) {
     commands.push(...encoder.encode(`Tipe: ${data.orderType}${data.tableNumber ? ` (${data.tableNumber})` : ''}\r\n`));
@@ -1199,7 +1223,7 @@ async function buildKitchenESCPOS(data: ReceiptData, items: CartItem[], kp: Kitc
 
   // Items list
   for (const item of items) {
-    commands.push(...encoder.encode(`${item.name}\r\n`));
+    commands.push(...encoder.encode(sanitizeForThermalPrint(`${item.name}`) + '\r\n'));
     const addonStr = item.addons.length > 0 ? ` +${item.addons.map(a => (a.price > 0 ? a.name : a.name + '(Gratis)')).join(',')}` : '';
     const sugarStr = item.showSugarLevel !== false ? `/${item.sugar}` : '';
     const tempStr = item.showTemperature !== false ? item.temperature : '';
@@ -1385,6 +1409,8 @@ export async function testPrintBluetooth(
   const commands: number[] = [];
 
   commands.push(ESC, 0x40); // Initialize
+  // U-F1: set codepage default setelah init
+  commands.push(ESC, 0x74, 0x00);
   commands.push(ESC, 0x61, 0x01); // Center
 
   commands.push(ESC, 0x45, 0x01); // Bold on
@@ -1446,17 +1472,20 @@ export async function printTextRaw(lines: string[], settings: AppSettings): Prom
     }
 
     const maxChars = settings.printerWidth === '58mm' ? 32 : 42;
-    const encoder = new TextEncoder();
-    const ESC = 0x1B;
-    const GS = 0x1D;
-    const commands: number[] = [];
+  const encoder = new TextEncoder();
+  const ESC = 0x1B;
+  const GS = 0x1D;
+  const commands: number[] = [];
 
-    commands.push(ESC, 0x40);
-    commands.push(ESC, 0x61, 0x00);
+  commands.push(ESC, 0x40);
+  // U-F1: set codepage default setelah init — anti simbol aneh/garis/cJK
+  commands.push(ESC, 0x74, 0x00);
+  commands.push(ESC, 0x61, 0x00);
 
-    for (const line of lines) {
-      commands.push(...encoder.encode(line + '\n'));
-    }
+  for (const line of lines) {
+    // U-F3: sanitasi teks user sebelum encode — strip emoji/simbol non-Latin
+    commands.push(...encoder.encode(sanitizeForThermalPrint(line) + '\n'));
+  }
 
     commands.push(ESC, 0x64, 0x04);
     commands.push(GS, 0x56, 0x00);
@@ -1558,6 +1587,48 @@ function fallbackBrowserPrintText(lines: string[], width: '58mm' | '80mm') {
 // ============================================================
 // HELPERS
 // ============================================================
+
+/**
+ * U-F3: Sanitasi teks untuk printer thermal ESC/POS.
+ * Printer thermal umumnya codepage CP437/Latin-1 — tidak mendukung emoji
+ * atau simbol Unicode di luar 0x00-0xFF. Tanpa sanitasi, karakter multi-byte
+ * UTF-8 dapat ditafsirkan printer sebagai command byte → simbol aneh /
+ * mode CJK / cetakan berhenti.
+ * - Normalisasi NFKD (decompose karakter kompatibilitas).
+ * - Ganti simbol umum ke representasi ASCII.
+ * - Strip karakter di luar Latin-1 (0x00-0xFF) → fallback '?'.
+ * Pure function (bisa diuji tanpa printer).
+ */
+export function sanitizeForThermalPrint(text: string | undefined | null): string {
+  if (!text) return '';
+  // 1. NFKD normalize → decompose kompatibilitas (mis. ² → 2, ﬁ → fi)
+  let result = text.normalize('NFKD');
+  // 2. Ganti simbol umum ke ASCII
+  const replacements: Record<string, string> = {
+    '★': '*', '☆': '*', '✓': 'v', '✔': 'v', '✗': 'x', '✘': 'x',
+    '♡': '<3', '♥': '<3', '❤': '<3', '→': '->', '←': '<-', '↑': '^', '↓': 'v',
+    '•': '-', '·': '-', '—': '-', '–': '-', '…': '...',
+    '“': '"', '”': '"', '‘': "'", '’': "'",
+    '₹': 'Rs', '€': 'EUR', '£': 'GBP', '¥': 'JPY',
+    '℃': 'C', '℉': 'F', '№': 'No', '™': '(TM)', '®': '(R)', '©': '(C)',
+    '±': '+/-', '×': 'x', '÷': ':', '≥': '>=', '≤': '<=', '≠': '!=', '≈': '~',
+    '²': '2', '³': '3', '°': ' deg',
+    '☕': '(kopi)', '🍔': '(burger)', '🍕': '(pizza)', '🍟': '(kentang)',
+    '🍰': '(kue)', '🍦': '(es krim)', '🥤': '(minuman)', '🍺': '(bir)',
+    '☕️': '(kopi)', '🛒': '(keranjang)', '💳': '(kartu)', '💰': '(uang)',
+    '✅': 'OK', '❌': 'X', '⚠': '!', '📌': '*', '🏷': '*',
+    '📦': '[box]', '🧾': '[struk]',
+  };
+  for (const [sym, repl] of Object.entries(replacements)) {
+    result = result.split(sym).join(repl);
+  }
+  // 3. Strip karakter di luar Latin-1 (0x00-0xFF) → '?'
+  // Tangkap emoji/simbol ZWJ yang lolos dari replacements.
+  result = result.replace(/[^\x00-\xFF]/g, '?');
+  // 4. Bersihkan rentetan '?' yang berlebihan (mis. emoji multi-codepoint → ???)
+  result = result.replace(/\?{2,}/g, '?');
+  return result;
+}
 
 export function formatDateShort(dateStr: string): string {
   const d = new Date(dateStr);
