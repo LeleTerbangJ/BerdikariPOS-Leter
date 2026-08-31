@@ -9,6 +9,9 @@ import { useToastStore } from '../store/toastStore';
 import { useCloudStatus } from '../hooks/useCloudStatus';
 import { formatRupiah, formatDate } from '../utils/format';
 import { printTextRaw } from '../utils/printer';
+// v4.10 P.4: item non-menu (Item Manual) — bucket "Item Non-Menu" + laba kotor di ringkasan shift
+import { CUSTOM_ITEM_BUCKET_NAME } from '../utils/customItem';
+import { buildMenuSalesSummary } from '../utils/menuSalesSummary';
 // v4.7 TO DO 18.3: expected cash tutup shift dari SEMUA transaksi Selesai tersinkron
 import { computeShiftStats, EMPTY_SHIFT_STATS } from '../utils/shiftStats';
 import { fetchTransactionsFromCloud, fetchShiftsFromCloud } from '../lib/cloudSync';
@@ -240,6 +243,17 @@ export default function Layout() {
     }
   };
 
+  // Manager boleh keluar TANPA menutup shift yang sedang berjalan — shift tetap
+  // aktif (lokal & cloud) dan bisa dilanjutkan kasir berikutnya via resumeExistingShift.
+  const handleLogoutWithoutClose = () => {
+    setShowCloseShift(false);
+    if (currentUser) {
+      addLog(currentUser.id, currentUser.name, currentUser.role, 'logout', 'Keluar tanpa menutup shift kasir — shift tetap aktif untuk dilanjutkan');
+    }
+    logout();
+    navigate('/');
+  };
+
   // Acaraki done orders for summary
   const acarakiDoneOrders = useMemo(() => {
     const today = new Date();
@@ -306,21 +320,10 @@ export default function Layout() {
       console.warn('[Shift] Gagal mencatat audit log saat tutup shift (dilewati):', e);
     }
 
-    // v4.7: Agregasi penjualan per menu dari SEMUA transaksi shift
-    const menuSalesMap: Record<string, { qty: number; revenue: number }> = {};
-    let totalItemQty = 0;
-    todayTx.forEach((t) => {
-      t.items.forEach((item) => {
-        if (item.isBundle) return; // skip bundle parent, ambil child saja
-        const key = item.name;
-        if (!menuSalesMap[key]) menuSalesMap[key] = { qty: 0, revenue: 0 };
-        menuSalesMap[key].qty += item.quantity;
-        menuSalesMap[key].revenue += item.subtotal;
-        totalItemQty += item.quantity;
-      });
-    });
-    const menuSalesSorted = Object.entries(menuSalesMap)
-      .sort((a, b) => b[1].qty - a[1].qty); // terlaris di atas
+    // v4.7 + v4.10 P.4: Agregasi penjualan per menu dari SEMUA transaksi shift — helper murni
+    // (menu by nama; item non-menu → bucket "Item Non-Menu" dengan hpp = customHpp → profit)
+    const menuSalesSorted = buildMenuSalesSummary(todayTx);
+    const totalItemQty = menuSalesSorted.reduce((a, r) => a + r.qty, 0);
 
     const now = new Date();
     const lines = [
@@ -347,12 +350,18 @@ export default function Layout() {
       ...(menuSalesSorted.length > 0
         ? [
             `--- Penjualan Menu ---`,
-            ...menuSalesSorted.flatMap(([name, data]) => {
+            ...menuSalesSorted.flatMap((data) => {
               const unitPrice = data.qty > 0 ? Math.round(data.revenue / data.qty) : 0;
-              return [
-                `${name}`,
+              const rows = [
+                `${data.name}`,
                 `  ${data.qty} x ${formatRupiah(unitPrice)}          ${formatRupiah(data.revenue)}`,
               ];
+              // v4.10 P.4: baris bucket "Item Non-Menu" menampilkan LABA KOTOR
+              // (revenue − customHpp) — akuntansi modal dagangan non-menu di struk shift.
+              if (data.name === CUSTOM_ITEM_BUCKET_NAME) {
+                rows.push(`  Laba Kotor: ${formatRupiah(data.profit)}`);
+              }
+              return rows;
             }),
             ``,
           ]
@@ -935,6 +944,23 @@ export default function Layout() {
           >
             Print Ringkasan & Tutup Shift
           </button>
+
+          {/* Manager boleh keluar tanpa menutup shift — shift tetap aktif & bisa
+              dilanjutkan kasir berikutnya (resumeExistingShift). */}
+          {currentUser.role === 'Manager' && (
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={handleLogoutWithoutClose}
+                className="btn-secondary w-full"
+              >
+                Keluar Tanpa Menutup Shift
+              </button>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 text-center mt-2">
+                Shift tetap aktif — kasir lain dapat melanjutkan shift ini saat login.
+              </p>
+            </div>
+          )}
         </div>
       </Modal>
 

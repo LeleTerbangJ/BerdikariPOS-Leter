@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { idbStorage } from '../utils/idbStorage';
 import { pruneTransactionsForStorage, filterTombstoned, pruneConfirmedTombstones, DEFAULT_TOMBSTONE_CAP } from '../utils/storagePrune';
-import type { Transaction, KitchenStatus, TxStatus } from '../types';
+import type { Transaction, KitchenStatus, TxStatus, CartItem } from '../types';
 
 // v4.1 TO DO 3.1/3.2: predicate tunggal pesanan pending — satu sumber kebenaran agar
 // angka konsisten di POS, Layout, PendingPaymentsModal & Transactions (paritas angka).
@@ -17,6 +17,7 @@ export const hasPendingSplitChildren = (allTxs: Transaction[], parentId: string)
 import { syncTransaction, syncTransactionStatus, syncTransactionKitchenStatus, syncTransactionTxStatus, syncTransactionMeta, deleteTransactionCloud, fetchMaxQueueNumberCloud, allocateQueueNumberCloud } from '../lib/cloudSync';
 import { localMaxQueueNumber, toLocalDateKey } from '../utils/queueNumber';
 import { calculateItemDeductions } from '../utils/hpp';
+import { shouldShowInKitchen } from '../utils/customItem';
 import { useMenuStore } from './menuStore';
 import { useInventoryStore } from './inventoryStore';
 
@@ -143,10 +144,14 @@ export const useTransactionStore = create<TransactionState>()(
             const updatedItems = t.items.map((item) =>
               item.lineId === lineId ? { ...item, kitchenItemStatus: status } : item
             );
-            // Hitung effective kitchenStatus berdasarkan item status
-            const allDone = updatedItems.filter((i) => !i.isBundle).every((i) => i.kitchenItemStatus === 'done');
-            const hasNew = updatedItems.some((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new');
-            const hasProcessing = updatedItems.some((i) => !i.isBundle && i.kitchenItemStatus === 'processing');
+            // Hitung effective kitchenStatus berdasarkan item status.
+            // v4.10 R-A3: item non-menu TANPA target dapur tidak tampil di KDS dan tidak
+            // pernah diberi kitchenItemStatus — kecualikan dari perhitungan agar tidak
+            // menahan transaksi macet di 'Waiting' selamanya (allDone=false, hasNew=true).
+            const kitchenVisible = (i: CartItem) => !i.isBundle && shouldShowInKitchen(i);
+            const allDone = updatedItems.filter(kitchenVisible).every((i) => i.kitchenItemStatus === 'done');
+            const hasNew = updatedItems.some((i) => kitchenVisible(i) && (i.kitchenItemStatus || 'new') === 'new');
+            const hasProcessing = updatedItems.some((i) => kitchenVisible(i) && i.kitchenItemStatus === 'processing');
             let newKitchenStatus = t.kitchenStatus;
             if (allDone) newKitchenStatus = 'Done';
             else if (hasNew) newKitchenStatus = 'Waiting';

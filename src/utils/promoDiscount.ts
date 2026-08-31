@@ -15,11 +15,21 @@
 //   item target >= minQty.
 // ============================================================
 import type { Promo, CartItem, Menu, Customer } from '../types';
+import { isCustomItem } from './customItem';
 
 export interface PromoContext {
   cartItems: CartItem[];
   menus: Menu[];
   selectedCustomer?: Customer | null;
+}
+
+/**
+ * v4.10 P.4: item non-menu dikecualikan dari promo BERBASIS MENU (scope menu/kategori &
+ * BOGO) karena tidak punya menuId katalog. Diskon transaksi/keranjang (scope 'all')
+ * tetap berlaku atas subtotal — item custom adalah revenue riil.
+ */
+function isItemEligibleForMenuScope(item: CartItem): boolean {
+  return !isCustomItem(item);
 }
 
 /** Harga satuan satu line item (base + addons) */
@@ -37,6 +47,8 @@ export function eligibleItemQty(promo: Promo, ctx: PromoContext): number {
       const menu = ctx.menus.find((m) => m.id === item.menuId);
       return acc + (menu && menu.category === promo.scopeTarget ? item.quantity : 0);
     }
+    // P.4: diskon transaksi/keranjang (scope 'all') berlaku atas SELURUH keranjang —
+    // item custom ikut dihitung dalam gate minQty (bukan promo berbasis menu).
     return acc + (promo.scope === 'all' ? item.quantity : 0);
   }, 0);
 }
@@ -64,13 +76,14 @@ export function isPromoApplicable(promo: Promo, subtotal: number, ctx: PromoCont
   }
   if (promo.scope === 'category' && promo.scopeTarget) {
     const has = ctx.cartItems.some((item) => {
+      if (!isItemEligibleForMenuScope(item)) return false; // P.4: item custom tidak memenuhi scope menu
       const menu = ctx.menus.find((m) => m.id === item.menuId);
       return menu && menu.category === promo.scopeTarget;
     });
     if (!has) return false;
   }
   if (promo.scope === 'menu' && promo.scopeTarget) {
-    const has = ctx.cartItems.some((item) => item.menuId === promo.scopeTarget);
+    const has = ctx.cartItems.some((item) => isItemEligibleForMenuScope(item) && item.menuId === promo.scopeTarget);
     if (!has) return false;
   }
 
@@ -96,6 +109,9 @@ export function calculateBogoDiscount(promo: Promo, ctx: PromoContext): number {
 
   const prices: number[] = [];
   ctx.cartItems.forEach((item) => {
+    // P.4: BOGO adalah promo berbasis item/menu — item non-menu tidak ikut serta
+    // (tidak punya referensi katalog untuk "beli N gratis M" dari item yang sama).
+    if (!isItemEligibleForMenuScope(item)) return;
     const menu = ctx.menus.find((m) => m.id === item.menuId);
     const match =
       promo.scope === 'all'

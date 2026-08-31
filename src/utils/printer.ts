@@ -13,6 +13,7 @@ import type { AppSettings, Transaction, CartItem, KitchenPrinterConfig } from '.
 import { formatRupiah } from './format';
 import { buildEqualSplitReceipt } from './splitAllocation';
 import { useToastStore } from '../store/toastStore';
+import { isCustomItem } from './customItem';
 
 // ============================================================
 // UNIFIED PRINT FALLBACK (TO DO 14.2) — satu kebijakan untuk semua
@@ -246,6 +247,31 @@ export function markPrinterSession(printerId: string, deviceId?: string, deviceN
   const state = readSessionState();
   state[printerId] = { deviceId, deviceName, connectedAt: Date.now() };
   writeSessionState(state);
+}
+
+/**
+ * Jendela usia sesi (ms) yang dianggap "baru selesai refresh" (R-B2).
+ * connectedAt dalam jendela ini → putus hampir pasti akibat page refresh
+ * (koneksi Web Bluetooth in-memory hilang). Lebih tua dari ini → printer
+ * putus di tengah sesi (mati listrik / kehilangan jarak) → pesan netral.
+ */
+export const PRINTER_SESSION_REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Apakah printer tercatat tersambung BARU SAJA (dalam jendela refresh)?
+ * Dipakai banner reconnect untuk membedakan penyebab putus:
+ * - true  → "Refresh memutus koneksi" (banner agresif, butuh user gesture re-pair).
+ * - false → pesan netral "terputus" (printer mati/jauh) + bisa di-dismiss.
+ * `now`/`windowMs` bisa di-inject untuk test murni.
+ */
+export function isPrinterSessionRecent(
+  printerId: string,
+  now: number = Date.now(),
+  windowMs: number = PRINTER_SESSION_REFRESH_WINDOW_MS
+): boolean {
+  const s = getPrinterSessionState()[printerId];
+  if (!s) return false;
+  return now - s.connectedAt <= windowMs;
 }
 
 /**
@@ -1284,6 +1310,12 @@ export async function printReceipt(
           if (item.isBundle) return false;
           const itemTarget = (item.kitchenTarget || '').trim().toLowerCase();
           const printerTarget = (kp.targetCategory || '').trim().toLowerCase();
+          // v4.10 P.4 + R-A2: ITEM NON-MENU (Item Manual) tanpa kitchenTarget eksplisit TIDAK
+          // dicetak ke dapur mana pun — perilaku default item tanpa target ("semua printer dapur
+          // aktif") justru salah untuk kasus ini (kasir menjual sambal, dapur tidak perlu tahu).
+          // R-A2: pakai isCustomItem (flag ATAU menuId prefix 'custom:') — row lama/build lain
+          // yang flag-nya hilang tetap terdeteksi (sebelumnya hanya cek item.isCustom).
+          if (isCustomItem(item) && !itemTarget) return false;
           // v4.7: kitchenTarget 'ALL' ("Semua Dapur" di form Edit Menu) → tiket dicetak
           // ke SEMUA printer dapur yang aktif (item ini tampil di semua target dapur).
           if (!itemTarget || itemTarget === 'all' || itemTarget === 'semua dapur' || itemTarget === '*') {

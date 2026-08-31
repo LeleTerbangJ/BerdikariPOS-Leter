@@ -34,8 +34,6 @@ export interface PrinterMonitorStatus {
   }>;
   /** Whether all configured Bluetooth printers are connected */
   allConnected: boolean;
-  /** Printer IDs yang tersambung di sesi sebelum refresh terakhir (untuk banner pasca-refresh) */
-  previouslyConnected?: string[];
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -44,7 +42,7 @@ export function usePrinterMonitor(): {
   status: PrinterMonitorStatus;
   reconnect: (printerId: string) => Promise<boolean>;
   reconnectSilent: (printerId: string) => Promise<boolean>;
-  reconnectAll: () => Promise<void>;
+  reconnectAll: () => Promise<boolean>;
 } {
   const { settings } = useSettingsStore();
 
@@ -91,11 +89,6 @@ export function usePrinterMonitor(): {
   }, [settings]);
 
   const [status, setStatus] = useState<PrinterMonitorStatus>(computeStatus);
-
-  // TO DO 14.1 P-2: daftar printer yang tersambung di sesi SEBELUM refresh
-  const [previouslyConnected, setPreviouslyConnected] = useState<string[]>(() =>
-    Object.keys(getPrinterSessionState())
-  );
 
   // Poll at interval
   useEffect(() => {
@@ -171,27 +164,23 @@ export function usePrinterMonitor(): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reconnect all offline printers
-  const reconnectAll = useCallback(async () => {
+  // R-B1: fallback "Sambungkan Semua" (banner cap >3 printer offline) — reconnect
+  // semua printer offline satu per satu (picker Bluetooth hanya satu pada satu waktu).
+  // Mengembalikan true bila setidaknya satu printer berhasil tersambung.
+  const reconnectAll = useCallback(async (): Promise<boolean> => {
     const current = computeStatus();
+    let anySuccess = false;
     for (const printer of current.offlinePrinters) {
       try {
-        await connectBluetoothPrinter(printer.id);
+        const r = await connectBluetoothPrinter(printer.id);
+        if (r.success) anySuccess = true;
       } catch {
-        // Continue with next printer
+        // lanjut printer berikutnya
       }
     }
     setStatus(computeStatus());
+    return anySuccess;
   }, [computeStatus]);
-
-  // TO DO 14.1 P-2: hapus tanda sesi setelah semua printer tersambung lagi (banner sukses)
-  useEffect(() => {
-    if (status.active && status.allConnected && previouslyConnected.length > 0) {
-      setPreviouslyConnected([]);
-      // sessionStorage dibersihkan di printer.ts via markPrinterSession — di sini cukup
-      // menandai bahwa tidak perlu prompt reconnect lagi.
-    }
-  }, [status.active, status.allConnected, previouslyConnected.length]);
 
   return { status, reconnect, reconnectSilent, reconnectAll };
 }

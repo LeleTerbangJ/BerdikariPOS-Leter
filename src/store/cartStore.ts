@@ -54,6 +54,15 @@ export const useCartStore = create<CartState>()(
         // tergabung dengan item Batch 2 (tambahan baru)
         const existingIdx = s.items.findIndex((i) => {
           if ((i.batch || 1) !== itemBatch) return false;
+          // v4.10 P.4: ITEM NON-MENU — menuId sintetis unik per baris (`custom:<uuid>`), jadi
+          // merge TIDAK by menuId; merge by (isCustom, nama, harga) seperti item biasa agar
+          // "Sambal 10.000" x2 + x1 menjadi satu baris qty 3. Tidak pernah merge dengan item menu.
+          if (normalizedItem.isCustom || i.isCustom) {
+            return !!i.isCustom && !!normalizedItem.isCustom &&
+              i.name === normalizedItem.name &&
+              i.basePrice === normalizedItem.basePrice &&
+              (i.itemDiscount || 0) === (normalizedItem.itemDiscount || 0);
+          }
           if (i.menuId !== normalizedItem.menuId) return false;
           if (i.temperature !== normalizedItem.temperature) return false;
           if (i.sugar !== normalizedItem.sugar) return false;

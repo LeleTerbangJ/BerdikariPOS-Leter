@@ -1554,3 +1554,458 @@ Ditunda setelah penjualan (roadmap, bukan blocker):
 ---
 
 *Kesimpulan O: fungsionalitas & stabilitas = layak jual; keamanan infrastruktur = satu-satunya blocker komersial, dengan jalur jelas: pilot tunggal (mitigasi O.2-B) → Tahap 2 → scale.*
+
+---
+
+# 🧾 P. ANALISA FITUR — Item Non-Menu / Custom (qty & harga bebas)
+
+> **Pertanyaan klien**: *"konsumen kadang ingin membeli menu custom dengan jumlah/harga custom — misal hanya mau beli sambal seharga Rp 10.000. Bagaimana sebaiknya menangani kasus ini? Fitur apa yang cocok?"*
+> **Metode**: pembacaan ulang `types/index.ts` (Menu/CartItem), `store/cartStore.ts`, `utils/hpp.ts`, `utils/printer.ts` (routing tiket dapur), engine & laporan yang sudah diketahui.
+> **Status**: ✅ **SELESAI (Opsi A, eksekusi P.4)** — tombol "➕ Item Manual" di POS + flag `isCustom` + guard tiket dapur + bucket laporan "Item Non-Menu" + exclude promo berbasis menu. 22 unit test (`src/test/customItem.test.ts`). Upgrade Opsi B/C ditunda (P.6-5/6-6).
+
+---
+
+## P.1 — Kasus nyata yang harus didukung
+
+1. **Pelengkap di luar menu** — konsumen minta "sambal saja" / "nasi saja" / "es batu saja" yang tidak terdaftar sebagai menu, harga bebas (Rp 10.000, Rp 5.000, dst).
+2. **Item musiman / lokal** — barang dagangan hari itu (mis. kerupuk, lalapan, minuman kemasan sekali dua) yang belum dimasukkan ke katalog dan tidak ingin mengotori katalog permanen.
+3. **Harga nego / khusus** — harga jual berbeda dari katalog untuk konsumen tertentu (bukan sekadar markup add-on).
+4. **Qty / porsi custom** — ½ porsi, 3 porsi, satuan ganjil.
+
+---
+
+## P.2 — Kondisi saat ini (fakta kode)
+
+| Fakta | Lokasi | Implikasi |
+|---|---|---|
+| `Menu.price` tetap + `availableAddons`; **tidak ada field harga bebas / item non-menu** | `src/types/index.ts:71-84` | Kasir tidak punya cara menjual barang tanpa menu. |
+| `itemDiscount` (diskon Rp per item) **di-clamp `>= 0`** — hanya bisa MENURUNKAN harga, tidak bisa menaikkan di atas `basePrice` | `src/store/cartStore.ts` `setItemDiscount` (`Math.max(0, …)`) | Workaround "diskon negatif" tidak mungkin; harga custom > harga menu tidak bisa. |
+| `createSnapshotForCartItems` → `menus.find(m => m.id === item.menuId)`; bila menu tidak ditemukan → `recipeSnapshot: []` → **HPP = 0 & tanpa deduksi stok** (aman secara bawaan) | `src/utils/hpp.ts:62-105, 126-139` | Item custom yang menu-nya tidak ada **tidak memotong stok dan HPP 0** tanpa perubahan engine. |
+| `calculateItemDeductions` — fallback `menu` undefined → dilewati, tanpa throw | `src/utils/hpp.ts:166-217` | Aman untuk item tanpa menuId. |
+| **Routing tiket dapur**: item TANPA `kitchenTarget` (kosong) dicetak ke **SEMUA printer dapur aktif** (`return true`) | `src/utils/printer.ts:1286-1292` | Item custom tanpa penanganan eksplisit akan **mencetak tiket ke semua dapur** — harus di-exclude/guard. |
+| `Transaction.items` = snapshot JSONB (nama, basePrice, qty, subtotal tersimpan) | `src/types/index.ts` `CartItem` | Item custom tercatat & tersinkron seperti item biasa — **tanpa migrasi DB**. |
+| Pending/split/refund/void bekerja atas `items` (snapshot) bukan lookup menu | engine + `refund.ts` | Alur tersebut mendukung item custom secara struktural. |
+
+**Workaround yang dipakai saat ini**: kasir/manager membuat menu baru "Sambal" (harga 10.000, tanpa bahan) di Katalog — berfungsi tapi **kaku**: setiap variasi harga/nama butuh setup menu manual, mengotori katalog & laporan "Menu Terlaris", dan harga tidak bisa diubah per transaksi.
+
+---
+
+## P.3 — Opsi solusi & perbandingan
+
+| Opsi | Deskripsi | Pro | Kontra |
+|---|---|---|---|
+| **A. Item Non-Menu di POS (DIREKOMENDASIKAN)** | Tombol **"➕ Item Manual"** di POS → modal: nama (opsional), harga jual bebas, qty → baris keranjang ber-flag `isCustom` (menuId sintetis `custom:<uuid>`, tanpa resep). **Tersimpan di transaksi, tidak di katalog.** | Menjawab SEMUA kasus P.1; nol migrasi DB; offline-safe (snapshot); tidak mengotori menu/laporan per-menu; bisa ditingkatkan jadi menu sungguhan bila sering dipakai | Tidak reusable lintas transaksi (dapat diatasi: opsi "Simpan sebagai Menu") |
+| **B. Override harga per baris keranjang** | Ubah input diskon item menjadi input **harga jual bebas** (boleh naik/turun) per baris; tetap memakai menuId asli | Sangat sederhana; resep/stok/HPP/kt dapur tetap mengikuti menu asli; cocok untuk "Sambal 2.000 padahal katalog 1.000" | MenuId tetap item menu → **distorsi laporan per menu** (harga tidak sesuai katalog) & tidak menyelesaikan item yang memang TIDAK ada di menu |
+| **C. Kreasi menu instan dari POS** | Form di POS membuat `Menu` baru (nama, harga, tanpa bahan) → tersimpan `menus` + sinkron | Reusable; tampil di laporan per menu; bisa dikelola di Katalog | Butuh sinkron/tombstone (offline → muncul belakangan di device lain); mengotori katalog tanpa kategori khusus; lebih berat |
+
+**Rekomendasi: A sebagai inti** (menjawab contoh "sambal 10.000" dan semua varian), **B opsional sebagai pelengkap** (harga nego untuk item yang memang ada di menu), **C sebagai upgrade lanjutan** (tombol "Simpan sebagai Menu" pada baris item manual).
+
+---
+
+## P.4 — Desain rekomendasi (Opsi A) — rincian
+
+1. **Tombol**: `➕ Item Manual` di area menu POS (dekat tombol kategori / di header keranjang).
+2. **Modal input**: Nama item (kosong → default `"Item Custom"`), **Harga jual bebas (wajib > 0, boleh berapa pun)**, Qty (default 1), opsional: catatan/`kitchenTarget` untuk cetak tiket dapur (default: TIDAK cetak).
+3. **Model**: `CartItem` + flag `isCustom?: boolean` (eksplisit — lebih robust daripada derive `menuId` tidak ada di `menus`, karena menu bisa dihapus di kemudian hari). `menuId = 'custom:' + uuid()` (unik per baris, tidak bentrok dengan id menu UUID v4). `recipeSnapshot: []`, HPP 0; opsional field `manualHpp` bila ingin mencatat modal.
+4. **`cartStore.addItem`**: item custom **tidak di-merge** dengan aturan `menuId` biasa untuk baris yang sama? — keputusan: merge hanya bila `lineId` sama atau nama+sama harga eksplisit; paling aman merge by (isCustom, name, basePrice) seperti item biasa.
+5. **Tiket dapur**: item custom **tidak dicetak ke dapur** secara default — guard eksplisit di `printer.ts` routing (`if (item.isCustom && !item.kitchenTarget) return false`), karena perilaku saat ini (tanpa kitchenTarget → semua dapur) justru salah untuk kasus ini. Struk kasir tetap normal (nama + harga tercetak).
+6. **Laporan**: masuk ke **total penjualan / PPN / shift / kas** seperti item biasa (revenue riil). Pada laporan per-menu (Dashboard "Menu Terlaris", ringkasan shift per menu, laporan menu): dikelompokkan sebagai satu bucket **"Item Non-Menu"** (nama item bisa ditampilkan sekunder) — keputusan P.6-3.
+7. **Promo**: item custom **dikecualikan dari promo berbasis menu** (BOGO, diskon item per menu) karena tidak punya `menuId` katalog; diskon transaksi (keranjang) tetap berlaku. Loyalty/poin tetap jalan (berbasis totalAmount).
+8. **Pending / split / refund / void / demo**: bekerja tanpa perubahan — semua jalur memakai snapshot `items`; split mengalokasikan via `basePrice` (sudah benar).
+
+---
+
+## P.5 — Dampak per subsistem (grounded di kode)
+
+| Subsistem | Perubahan | Risiko / catatan |
+|---|---|---|
+| `src/types/index.ts` | + `CartItem.isCustom?`, opsional `customHpp?` | Aditif, non-breaking |
+| `src/pages/POS.tsx` | Tombol + modal item manual; validasi harga > 0 | UI-only |
+| `src/store/cartStore.ts` | Aturan merge item custom (opsional) | Uji merge qty |
+| Engine/HPP (`hpp.ts`, `validateStockAvailability`) | **Tidak perlu ubah** — item tanpa menu sudah aman (P.2); tambahkan unit test eksplisit | Pastikan validasi stok tidak melempar untuk `menuId` custom (verifikasi test) |
+| `src/utils/printer.ts` | Guard `isCustom` pada filter item tiket dapur (now: custom tanpa target → semua dapur) | **Wajib** — kalau tidak, tiket nyasar ke semua printer dapur |
+| Laporan (Dashboard `menu terlaris`, Reports, shift summary `menuSalesMap`) | Kelompokkan item custom ke bucket "Item Non-Menu" | Hindari 100 nama acak membanjiri "Menu Terlaris" |
+| Promo (`discountEngine`, `promoDiscount`) | Exclude `isCustom` dari promo per-menu | Keputusan P.6-2 |
+| `cloudSync`, migration | **Tidak ada perubahan** (isCustom di dalam JSONB `items`; transaksi lama tanpa flag = perilaku lama) | Nol migrasi |
+| Test | ±10 unit test: input validasi, merge cart, HPP/deduksi 0, guard tiket dapur, bucket laporan, exclude promo | Ikuti pola `itemDiscount.test.ts` / `stockCheck.test.ts` |
+
+**Estimasi**: ~8–12 file tersentuh (mayoritas UI + guard kecil), effort **rendah–sedang**.
+
+---
+
+## P.6 — Keputusan desain yang perlu diambil sebelum eksekusi
+
+- [x] **P.6-1** — Lokasi tombol & alur UI: tombol ➕ Item Manual di baris pencarian/kategori POS (terlihat mobile & desktop) + modal (nama, harga wajib > 0, qty default 1, target dapur opsional, modal/HPP opsional).
+- [x] **P.6-2** — Promo: exclude item custom dari promo berbasis MENU (scope menu/kategori & BOGO); diskon transaksi/keranjang (scope all) tetap berlaku atas subtotal.
+- [x] **P.6-3** — Laporan per-menu: bucket **"Item Non-Menu"** (Dashboard Top Menu, Menu Profitability, ringkasan shift) — nama item custom tetap tampil di struk.
+- [x] **P.6-4** — HPP manual: field opsional `customHpp` (modal) disertakan — tercatat sebagai `manual_custom_*` di snapshot HPP (masuk laba kotor, TIDAK memotong stok); kosong = HPP 0.
+- [ ] **P.6-5** — Upgrade path "Simpan sebagai Menu" pada baris item manual (Opsi C) — fase lanjutan, belum dibuat.
+- [ ] **P.6-6** — Opsi B (harga override per baris untuk item menu) — nanti, belum dibuat.
+
+---
+
+## P.7 — Kesimpulan
+
+Fitur yang cocok: **Item Non-Menu / Manual di POS (Opsi A)** — kasir mengetik nama & harga bebas (contoh: sambal Rp 10.000), baris masuk keranjang ber-flag `isCustom`, tanpa potong stok/HPP, tanpa tiket dapur (default), tercatat normal di laporan sebagai bucket "Item Non-Menu". Struktur transaksi yang sudah snapshot-based membuat fitur ini **murah & aman**: nyaris tanpa sentuhan engine/sync/migrasi — yang kritis hanya **guard routing tiket dapur** (`printer.ts`) dan **klasifikasi laporan**. Opsi B dan C bisa ditambahkan bertahap sesuai kebutuhan operasional.
+
+*Panduan eksekusi lanjutan bisa dituangkan ke `TO DO.md` setelah keputusan P.6.*
+
+
+---
+
+# 🐞 Q. ANALISA BUG — POS Menampilkan MENU DEMO walau Cloud Sync "Connected" & Sudah Di-Refresh
+
+> **Laporan user**: katalog POS terkadang menampilkan menu demo (lihat lampiran: 8 kartu = persis seed demo), walau status Cloud Sync menunjukkan terhubung & sudah di-refresh berkali-kali.
+> **Metode**: pembacaan ulang alur data menu lengkap — `menuStore` (state awal/persist/merge), `cloudSync` (`fetchMenusFromCloud`, `checkConnection`, `syncMenu`, `deleteMenuCloud`, realtime `subscribeToMenus`), `dataManager` (reset/factory reset), `seed.ts`, filter POS.
+> **Status**: 🔎 **ANALISA — belum ada perubahan kode** (rekomendasi fix siap dieksekusi di Q.5).
+
+---
+
+## Q.1 — Fakta kode (jalur data menu dari awal sampai layar POS)
+
+| # | Fakta | Lokasi | Implikasi |
+|---|---|---|---|
+| F1 | State awal store = **`menus: seedMenus`** (8 menu demo `a0000000-…0001..0008`) + persist `rempah-menus` (IndexedDB/localStorage) | `src/store/menuStore.ts:34`, `src/utils/seed.ts` | **Seed demo = baseline lokal permanen** tiap perangkat; terlihat bahkan sebelum login bila cloud tidak pernah menimpa |
+| F2 | `loadFromCloud(fullSync=true)`: fetch sukses & cloud ≥ 1 menu → `menus = cloudMenus + localOnly` (fullSync → `localOnly = []`) | `menuStore.ts:176-205` | Boot/realtime/refresh memakai fullSync=true → cloud otoritatif **bila fetch sukses** |
+| F3 | **Fetch sukses & cloud KOSONG (0 menu) → PUSH SEMUA local (seed demo) ke cloud** (`syncMenu` per menu), kecuali flag `isFactoryResetSeedSkip()` | `menuStore.ts:206-215` | Cloud yang kosong **diisi ulang seed demo dari device mana pun** — sekali ter-push, seed menjadi data cloud abadi (Q.2-A) |
+| F4 | **Fetch GAGAL → return `null` → `menuStore` DIAM** (tidak merge, tidak ada peringatan) → seed lokal tetap tampil selamanya | `cloudSync.ts:1540-1562` (`return null` pada error apa pun) + `menuStore.ts:176` guard `if (cloudMenus !== null)` | Gagal fetch (RLS/network/table error) = layar POS **diam-diam menampilkan seed demo** tanpa indikasi |
+| F5 | **Status "Cloud Sync connected" = ping `settings` saja** (`select id limit 1`) | `cloudSync.ts:1323-1331` (`checkConnection`), `hooks/useCloudStatus.ts` | "Connected" **tidak membuktikan** fetch `menus` sukses/sinkron — Q.2-B lolos deteksi ini |
+| F6 | DELETE menu = `deleteMenuCloud` → `smartDelete('menus',…)` + filter lokal; **TIDAK ada tombstone untuk `menus`** (tombstone `deletedLocalIds` hanya milik transactions) | `menuStore.ts:72-76`, `cloudSync.ts:1233-1236`, `transactionStore.ts:29` | DELETE yang gagal/ter-antre offline atau dihapus di device lain → menu demo **kembali lagi** pada fetch berikutnya (Q.2-C) |
+| F7 | Realtime `subscribeToMenus` → `loadFromCloud(true)` — cabang yang sama (kosong → push; null → diam) | `cloudSync.ts:951-965`, `App.tsx:199-205` | Perubahan di device mana pun mengulangi potensi F3/F4 |
+| F8 | `factoryReset` men-set `setFactoryResetSeedSkip()` **HANYA di device yang menjalankan reset** | `utils/dataManager.ts:238`, `utils/factoryResetFlag.ts` | **Device lain** tetap punya seed lokal & tanpa flag → boot berikutnya melihat cloud kosong → **mem-push seed demo balik** (resurrect lintas device) |
+| F9 | `resetToDefault` sengaja me-restore seed demo penuh (jalur sah demo/testing) — bukan bug | `utils/dataManager.ts:140-163` | Perlu dicek apakah user/developer pernah memakai ini |
+| F10 | Filter POS hanya `m.isAvailable !== false` — menu `is_available=false` disembunyikan | `pages/POS.tsx` `filteredMenus` | Jika menonaktifkan (bukan menghapus) menu demo dengan toggle Katalog, POS tidak akan menampilkannya — SOP jangka pendek yang aman |
+| F11 | `demoMode` (settings) hanya mengontrol tampilan akun demo di halaman Login — **tidak** menentukan isi katalog | `Login.tsx:68`, `types/index.ts:373` | Bukan penyebab; jangan salah arah |
+
+---
+
+## Q.2 — Analisis penyebab (peringkat kemungkinan)
+
+### 🟠 Q.2-A — Cloud SANGAT MUNGKIN sudah berisi menu seed demo (paling sesuai gejala)
+- Boot pertama perangkat mana pun dengan cloud kosong → cabang F3 **meng-upload 8 seed menu** → cloud kini punya baris demo.
+- Setelah itu **semua** refresh (`App` boot `loadFromCloud(true)`) menarik baris yang sama → "di-refresh berkali-kali tetap muncul" = **perilaku konsisten**, bukan gagal sync.
+- Pemicu lain: `resetToDefault` (F9), atau device lain pasca `factoryReset` tanpa flag (F8) yang mengisi ulang cloud.
+- **Verifikasi 1 menit**: SQL `SELECT id, name FROM menus;` — jika ada id `a0000000-…`, penyebabnya Q.2-A (data cloud benar-benar demo).
+
+### 🟠 Q.2-B — Fetch `menus` GAGAL diam-diam (null) → seed lokal tampil tanpa indikasi
+- F4 + F5: error apa pun pada `fetchMenusFromCloud` (RLS salah konfigurasi, network intermiten, tabel bermasalah) → `null` → store diam; banner tetap "connected" karena hanya ping `settings`.
+- Gejala persis: katalog = seed demo, "Cloud Sync connected", refresh berulang tidak mengubah apa pun (setiap boot gagal lagi).
+- **Verifikasi**: DevTools console — ada log `[cloudSync] fetch cloud gagal …`? Atau layar Katalog tampak "kosong" tetapi POS menampilkan menu (tanda source lokal).
+
+### 🟡 Q.2-C — DELETE menu demo tidak pernah sampai / tidak permanen
+- F6: tanpa tombstone, menu demo yang dihapus di Katalog (a) tertunda saat offline & gagal flush antrean, atau (b) dihapus di device lain → kembali muncul saat fetch berikutnya (realtime/boot).
+- **Verifikasi**: badge "N sync gagal" (failed ops O-3) di Layout; SQL `SELECT count(*) FROM menus WHERE id LIKE 'a0000000-%'`.
+
+### 🟢 Q.2-D — Bukan penyebab (eksklusi)
+- `demoMode` settings (F11), printer/status banner pada screenshot (banner "Refresh memutus koneksi printer" = PrinterStatusBanner — tidak terkait), validasi stok, dsb.
+
+**Kesimpulan awal**: kombinasi **F3 (push seed saat cloud kosong) + F4/F5 (gagal fetch tak terlihat) + F6 (tanpa tombstone)** membuat menu demo "bandel" terhadap refresh. F3 adalah akar yang membuat demo menjadi data cloud permanen; F4 membuat masalah tak terdeteksi; F6 membuat penghapusan tidak definitif.
+
+---
+
+## Q.3 — Langkah verifikasi lapangan (urut)
+
+1. **Cek isi cloud**: `SELECT id, name, is_available FROM menus ORDER BY id;` → ada `a0000000-…`? → Q.2-A.
+2. **Cek log fetch**: DevTools → Console → cari `[cloudSync] fetch cloud gagal` atau error Supabase pada tabel `menus` → Q.2-B.
+3. **Cek antrean gagal**: badge "N operasi gagal sinkron" (Layout) → retry → Q.2-C.
+4. **Cek localStorage device**: `rempah-menus` (IndexedDB/localStorage) masih berisi seed? → baseline lokal (F1).
+5. **Uji kontrol**: di Katalog, nonaktifkan (toggle) satu menu demo → POS menyembunyikannya seketika (F10) — memisahkan "data lokal" vs "data cloud".
+
+---
+
+## Q.4 — Keputusan desain yang perlu diambil
+
+- [ ] **Q.4-1** — Kebijakan cloud kosong saat boot: (a) JANGAN pernah push lokal otomatis (hanya via aksi eksplisit seperti Import CSV / Reset ke Default), atau (b) push hanya bila store lokal **bukan** seed (tandai `menus` hasil seed vs hasil aksi user), atau (c) konfirmasi dialog "Cloud kosong — unggah katalog lokal (N menu)?".
+- [ ] **Q.4-2** — Perilaku fetch gagal: diam + tampilkan peringatan terlihat (toast/banner "Katalog gagal dimuat dari cloud — menampilkan data lokal"), atau blokir checkout? (rekomendasi: peringatan saja — POS harus tetap jalan offline).
+- [ ] **Q.4-3** — Tombstone menu: implementasi penuh (pola `deletedLocalIds` transactions: exclude saat merge + hapus tombstone saat DELETE cloud terkonfirmasi) vs SOP "nonaktifkan via `is_available=false`" saja.
+
+---
+
+## Q.5 — Rekomendasi fix (prioritas eksekusi)
+
+1. **R1 (akar Q.2-A) — Hapus cabang "cloud kosong → push lokal" dari jalur boot/realtime** di `menuStore.loadFromCloud` (±207-215): push seed lokal ke cloud hanya boleh terjadi lewat aksi eksplisit user (Import CSV / resetToDefault). Ini memutus satu-satunya mekanisme yang menjadikan seed demo **data cloud permanen**. Alternatif minimal: guard dengan penanda "katalog lokal bukan seed" (Q.4-1).
+2. **R2 (akar Q.2-B) — Pisahkan "fetch gagal" vs "cloud kosong"**: `fetchMenusFromCloud` mengembalikan status/error eksplisit; `loadFromCloud` (a) tidak menyentuh state saat gagal, (b) memunculkan peringatan terlihat; konsisten dengan pola peringatan sync lain (t
+oast/banner). Tambah log error yang bisa didiagnosis.
+3. **R3 (akar Q.2-C) — Tombstone untuk `menus`** mengikuti pola `deletedLocalIds` transactions (id + exclude saat merge cloud + prune saat DELETE cloud terkonfirmasi) — DELETE menu demo menjadi permanen lintas device & offline.
+4. **R4 (Q.2-A lintas device) — Factory reset lintas device**: simpan penanda di CLOUD (mis. row `settings` id=0 `factory_wiped_at`) agar SEMUA device tahu cloud sengaja dikosongkan (tidak seed ulang), bukan flag localStorage per device (`factoryResetFlag.ts`).
+5. **R5 (SOP jangka pendek, tanpa kode) — Nonaktifkan bukan hapus**: toggle `is_available=false` pada menu demo sambil menunggu R1-R4 — langsung tersinkron & disembunyikan POS (F10), tidak bergantung tombstone.
+
+**Estimasi**: R1+R2 = ±3-4 file (`menuStore.ts`, `cloudSync.ts`) + ±5 test; R3 = `menuStore.ts` + `cloudSync.ts` + ±4 test; R4 = `dataManager.ts` + ±3 test. Tidak menyentuh engine transaksi.
+
+---
+
+## Q.6 — Audit ulang solusi R1–R5: DETEKSI SIDE EFFECT terhadap fitur yang sudah berjalan
+
+> Ditulis setelah verifikasi ulang kode (bukan asumsi). Tujuan: memastikan rekomendasi Q.5 tidak merusak perilaku yang sudah benar.
+
+### Verifikasi fakta baru yang mengubah penilaian
+
+| Fakta baru | Lokasi | Dampak terhadap rekomendasi |
+|---|---|---|
+| **Pola "cloud kosong → push lokal" ADA JUGA di inventoryStore** (`else { for item of localItems syncInventoryItem }` — cabang identik dgn menus) | `src/store/inventoryStore.ts:373-385` | R1 harus diperluas konsisten ke inventory — kalau hanya menus yang dihentikan push-nya, katalog tidak ter-push tapi **stok/persediaan tetap ter-push seed** (inkonsisten & sama-sama mengotori cloud) |
+| **Pola auto-push yang sama untuk customCategories** (`cloudCategories kosong → syncCustomCategories(localCategories)` — kategori demo seed ikut ter-push) | `src/store/menuStore.ts:219-226` | R1 belum menyebut kategori — kategori seed `['Jamu Murni','Wedang',…]` akan tetap ter-upload → tab kategori POS tetap "demo" walau menu sudah bersih |
+| **`safeStorage` = localStorage SINKRON** (bukan IndexedDB async) → zustand persist menuStore rehydrate sinkron saat store dibuat | `src/utils/safeStorage.ts` (wrapper localStorage), `menuStore.ts` persist | **TIDAK ada race hydrasi** untuk menuStore (beda dengan transactionStore yang pakai idbStorage async + `whenHydrated`) — argumen "push seed karena belum hydrasi" TIDAK berlaku; jangan dipakai sebagai justifikasi |
+| `fetchMenusFromCloud` hanya dipanggil oleh `menuStore` di kode produksi, TAPI di-*mock* oleh **13 file test** | `src/lib/cloudSync.ts:1540`; `src/test/*` (13 file) | R2 yang mengubah *signature* (mis. kembalikan objek `{menus, error}`) mewajibkan update 13 mock test — hindari ubah signature; pertahankan `Menu[] \| null` |
+| Sudah ada `console.warn('[cloudSync] fetch cloud gagal …')` saat fetch error | `src/lib/cloudSync.ts:1560` | Bagian "tidak ada indikasi" R2 sebenarnya hanya di level console — yang kurang adalah indikasi USER-VISIBLE |
+| `fetchMenusFromCloud` juga `return null` saat `!isSupabaseConfigured` (mode standalone tanpa cloud = normal) | `src/lib/cloudSync.ts:1542` | R2 dengan warning buta akan **memunculkan false alarm setiap boot** di instalasi yang memang tanpa Supabase — harus dibedakan: not-configured = diam (normal), error asli = peringatan |
+| `factoryResetSeedSkip` hanya dibaca/dikonsumsi oleh cabang push yang akan dihapus R1 | `menuStore.ts:206-210`, `inventoryStore.ts:373-377`, `utils/factoryResetFlag.ts`, `utils/dataManager.ts:238` | Bila R1 menghapus cabang total, flag jadi **dead code** — perlu keputusan: hapus flag + `setFactoryResetSeedSkip()` atau biarkan (tidak berbahaya, tapi basi) |
+| `reseedCloudData('demo')` (Reset ke Default) adalah jalur EKSPLISIT yang meng-upload seed menu+inventory+user+settings | `src/utils/dataManager.ts:329-362` | Jalur sah untuk demo/testing TIDAK terpengaruh R1 — seed tetap bisa di-upload via aksi eksplisit |
+
+### Audit per rekomendasi
+
+**R1 — Hapus cabang "cloud kosong → push lokal" (menuStore)**
+- ⚠️ **Side effect TERBESAR: onboarding fresh deployment rusak bila dihapus total.** Saat ini cabang itulah yang meng-upload katalog ke cloud pada boot device pertama (deploy baru dengan cloud kosong). Tanpa R1 yang lebih halus, device pertama tidak lagi mengisi cloud → device lain tidak melihat katalog apa pun sampai ada aksi eksplisit (Import CSV / Reset ke Default yang menghapus data operasional). **Rekomendasi revisi: jangan hapus total — ganti guard-nya** (opsi Q.4-1b): push hanya bila katalog lokal **bukan seed murni** (mis. penanda `catalogTouched` diset saat user tambah/edit/hapus/import menu), atau opsi Q.4-1c (konfirmasi dialog "Cloud kosong — unggah katalog lokal (N menu)?"). Onboarding devisi tetap jalan, bug seed-murni terblokir.
+- ⚠️ Wajib konsisten ke `inventoryStore.ts:373-385` dan `syncCustomCategories` (`menuStore.ts:225`) — kalau tidak, fix tidak lengkap (stok & kategori demo tetap di-upload).
+- ℹ️ `isFactoryResetSeedSkip` jadi tidak terbaca → putuskan hapus flag beserta pemanggilnya (`dataManager.ts:238`) atau biarkan sebagai no-op terdokumentasi.
+- ✅ Efek positif sampingan: menghilangkan satu-satunya jalur "resurrect seed lintas device pasca factory reset" → **R4 menjadi redundan** (lihat R4).
+
+**R2 — Pisahkan "fetch gagal" vs "cloud kosong" + peringatan**
+- ⚠️ JANGAN ubah signature `fetchMenusFromCloud` (13 file test mock harus update; hanya menuStore pemanggilnya — untung kecil). **Rekomendasi: pertahankan `Menu[] | null`**, dan indikasi gagal disalurkan lewat return-value `loadFromCloud` (boolean) atau state khusus — tidak merusak mock yang mengembalikan `[]`.
+- ⚠️ Wajib bedakan `!isSupabaseConfigured` (mode standalone = normal, TANPA peringatan) dari error asli — kalau tidak, instalasi tanpa cloud dapat false alarm tiap boot.
+- ⚠️ Realtime `subscribeToMenus` → `loadFromCloud(true)` bisa memicu peringatan berulang (spam) saat jaringan tidak stabil — peringatan hanya pada boot/fullSync pertama atau dengan dedupe/debounce.
+- ℹ️ `console.warn` sudah ada; sisa pekerjaan hanya lapisan user-visible + mungkin log yang lebih kaya (status RLS/network).
+
+**R3 — Tombstone `deletedLocalIds` untuk menus**
+- ⚠️ Penempatan exclude KUNCI: tombstone harus mengecualikan id dari **`cloudMenus` saat merge** (sebelum `[…mergedMenus, …localOnly]`), bukan hanya dari `localOnly` — karena `fullSync=true` menetapkan `localOnly=[]` sehingga menu yang di-tombstone akan tetap masuk via `cloudMenus` bila exclude salah tempat.
+- ⚠️ Terapkan cap (pola `DEFAULT_TOMBSTONE_CAP` transactions) + prune saat id sudah tiada dari cloud (`pruneConfirmedTombstones`) — hindari tombstones abadi yang membengkak localStorage. Urutan prune aman: id masih ada di cloud = operasi delete offline belum flush → tombstone dipertahankan; sudah hilang = flush sukses → aman diprune.
+- ℹ️ Batasan intrinsik (sama dgn transactions): tombstone **per-device** — tidak menyelesaikan delete lintas device; itu tetap bergantung keberhasilan `smartDelete` cloud. Nilai R3 = mencegah resurrect saat delete gagal/terantre; bukan pengganti delete yang benar.
+
+**R4 — Penanda cloud factory-wipe (`settings` id=0 `factory_wiped_at`)**
+- ⚠️ **REDUNDAN bila R1 diterapkan**: satu-satunya mekanisme device lain *mem-push seed* ke cloud kosong adalah cabang yang dihapus R1 — dengan R1, cloud kosong tidak pernah diisi ulang otomatis oleh device mana pun, jadi penanda lintas device tidak lagi diperlukan.
+- ⚠️ Biaya/risiko: butuh migrasi DB (kolom baru di `settings` id=0 — row yang sekarang khusus "jangan-dihapus"), jalur baca di semua store + App boot, dan interaksi dgn `reseedCloudData`. **Rekomendasi: DROP R4** (catat sebagai tidak diperlukan); tunda hanya bila keputusan produk memilih opsi Q.4-1a (hapus total tanpa aksi eksplisit).
+
+**R5 — SOP nonaktifkan menu demo (`is_available=false`)**
+- ✅ Tanpa kode → tanpa side effect. POS menyembunyikan (`filteredMenus` `m.isAvailable !== false`), Katalog tetap menampilkan dengan indikasi, engine/checkout/struk tidak terpengaruh. Tetap berlaku sebagai mitigasi jangka pendek.
+
+### Kesimpulan audit ulang
+
+| Rekomendasi | Verdict | Syarat tambahan |
+|---|---|---|
+| R1 | **TERIMA, direvisi** | Jangan hapus total — guard "bukan seed murni" / konfirmasi; perluas ke inventoryStore & customCategories; putuskan nasib `factoryResetSeedSkip` |
+| R2 | **TERIMA, direvisi** | Pertahankan signature `Menu[] \| null`; bedakan `!isSupabaseConfigured`; hindari spam realtime |
+| R3 | **TERIMA** | Exclude dari `cloudMenus` saat merge (bukan hanya localOnly); cap + prune tombstone |
+| R4 | **DROP** | Redundan bila R1 ship; dicatat sebagai opsional cadangan |
+| R5 | **TERIMA** | Tanpa perubahan |
+
+**Urutan eksekusi paling aman**: R5 (sekarang, tanpa kode) → R3 (perbaikan delete) → R1-revisi (bersama inventory & kategori, paling berdampak) → R2 (indikasi user-visible). Menyentuh hanya `menuStore.ts`, `inventoryStore.ts`, `cloudSync.ts` (+ test), tidak menyentuh engine transaksi/printer/laporan.
+
+---
+
+# 🔎 R. AUDIT PASCA-PERUBAHAN — Fitur Item Non-Menu (P.4) & Perbaikan Banner Printer
+
+> **Latar**: setelah dua kelompok perubahan dieksekusi — (1) **Item Non-Menu / Item Manual di POS** (tombol, `isCustom`, guard tiket dapur, bucket laporan, promo, customHpp; test 693/693) dan (2) **perbaikan banner sambungkan printer** (tombol hubungkan per-printer, hapus `reconnectAll`) — dilakukan audit ulang untuk mendeteksi potensi bug/error baru yang diperkenalkan perubahan tersebut.
+> **Metode**: pembacaan ulang diff & kode final `POS.tsx`, `cartStore`, `hpp.ts`, `printer.ts`, `promoDiscount.ts`, `customItem.ts`, `menuSalesSummary.ts`, `menuProfitability.ts`, `Dashboard.tsx`, `Layout.tsx`, `PrinterStatusBanner.tsx`, `usePrinterMonitor.ts`, `Kitchen.tsx`, `Reports.tsx`.
+> **Status**: 🟢 **SELESAI** — SEMUA rekomendasi R-A1..R-A6 & R-B1..R-B3 dieksekusi (✅ bertanda). Test: 730/730 (customItem.test.ts +2 kasus R-A2; kdsCustomFilter.test.ts +13 kasus R-A3; printerReconnect.test.ts +6 kasus R-B2; customItemReports.test.ts +7 kasus R-A4/R-A5; reconnectPlan.test.ts +9 kasus R-B1/R-B3).
+
+---
+
+## R.1 — Ringkasan temuan
+
+| # | Temuan | Severity | Kelompok | Perlu fix? |
+|---|--------|----------|----------|------------|
+| R-A1 | Shortcut **F1 bisa membuka modal Checkout DI ATAS modal Item Manual** (`kbGuardRef` tidak menyertakan `showManualItem`) | 🟠 Sedang | Item Custom | Ya — 1 baris |
+| R-A2 | Deteksi `isCustom` **inkonsisten antar lapisan**: guard printer pakai flag `isCustom` saja, promo/laporan pakai helper (`flag || prefix custom:`) | 🟡 Sedang (defensif) | Item Custom | Ya — unifikasi |
+| R-A3 | Item custom **tampil di antrean KDS** walau tidak dicetak ke dapur (filter KDS hanya `!isBundle`) | 🟡 Sedang (keputusan) | Item Custom | Keputusan produk |
+| R-A4 | Laporan **Reports: revenue item custom masuk kategori "Lainnya"** (bukan bucket "Item Non-Menu" seperti Dashboard/shift) | 🟢 Rendah | Item Custom | ✅ SELESAI |
+| R-A5 | Collision nama: menu sungguhan bernama **"Item Non-Menu"** tergabung ke bucket di ringkasan shift | 🟢 Rendah | Item Custom | ✅ SELESAI |
+| R-A6 | `menuProfitability` Dashboard kini recompute tiap `today` berubah (tick 1 menit) — dulu hanya saat data berubah | 🟢 Rendah | Item Custom | Opsional (perf) |
+| R-B1 | Banner printer: **tombol per-printer tanpa batas jumlah** (cap ≤3 + fallback "Sambungkan Semua" dihapus) — banner bisa overflow pada konfigurasi >3 printer offline | 🟢 Rendah | Banner printer | ✅ SELESAI |
+| R-B2 | Pesan **"Refresh memutus koneksi"** juga muncul untuk putus NON-refresh (printer mati/jauh) & banner agresif tidak bisa di-dismiss | 🟡 Sedang (pra-existing, relevan) | Banner printer | ✅ SELESAI |
+| R-B3 | `disabled={reconnecting !== null}` — semua tombol nonaktif saat satu printer sedang menghubungkan | 🟢 Rendah | Banner printer | ✅ SELESAI |
+
+---
+
+## R.2 — Detail temuan Item Non-Menu (P.4)
+
+### R-A1 (🟠 Sedang) — F1 membuka Checkout di atas modal Item Manual — ✅ SELESAI
+- **Status**: `kbGuardRef` kini memuat `manualItem: showManualItem` (state manual item dipindah ke atas agar tersedia sebelum cermin guard) + kondisi F1 `g.manualItem` → F1 tidak membuka checkout saat modal Item Manual terbuka. `POS.tsx`.
+- **Lokasi**: `src/pages/POS.tsx` — `kbGuardRef` (baris 210 & 590) hanya memuat `{ checkout, menu, split, finalizing }`; handler F1 (baris 553-558) hanya guard empat flag itu; modal Item Manual (`showManualItem`) TIDAK termasuk.
+- **Fakta**: F1 ditekan saat modal "Item Non-Menu (Manual)" terbuka → `handleCheckoutCb()` dieksekusi → modal Pembayaran terbuka DI ATAS modal manual (urutan render JSX: manual sebelum checkout → checkout di atas; sama-sama z-[100]). Kasir harus menutup dua modal; input manual yang sudah diketik tetap ada (tidak hilang) tapi layar membingungkan.
+- **Usulan**: tambah `manualItem: showManualItem` ke `kbGuardRef` + kondisi F1 (`g.manualItem`). Satu baris + test/perubahan kecil.
+
+### R-A2 (🟡 Sedang, defensif) — Deteksi isCustom tidak satu sumber ✅ SELESAI
+- **Status**: `printer.ts` kini memakai `isCustomItem(item)` (helper `customItem.ts` — flag ATAU prefix `menuId 'custom:'`) di guard tiket dapur; konsisten dgn promo/laporan. +2 test (`customItem.test.ts`): fallback prefix tanpa flag tetap tidak dicetak; regresi item menu biasa tetap dicetak ke semua dapur.
+- **Fakta**: item custom tersimpan di cart persist (`rempah-cart`) dan JSONB `transactions.items` dengan flag `isCustom`. Bila flag hilang (row dibuat versi/build lama, transformasi data pihak lain, atau bug parsial lintas device) → guard printer **tidak aktif** → item tanpa kitchenTarget dianggap "semua dapur" → **tiket nyasar ke semua printer dapur** (persis bug yang P.4 ingin cegah). Promo/laporan tetap benar karena fallback prefix.
+- **Usulan**: guard printer (dan KDS bila diputuskan di R-A3) memakai `isCustomItem(item)` — helper sudah ada & murni; menyatukan satu sumber kebenaran.
+
+### R-A3 (✅ SELESAI — keputusan produk: opsi b) — Item custom tampil di KDS
+- **Lokasi**: `src/pages/Kitchen.tsx` (filter item hanya `!i.isBundle` di beberapa tempat, baris 251-307, 368-380).
+- **Fakta**: item manual (dengan atau tanpa `kitchenTarget`) masuk kartu order dapur ber-status `'new'` — padahal tanpa target tidak dicetak. Dapur "melihat" sambal/nasi yang bukan pesanan mereka; tombol Proses/Selesai batch ikut menghitungnya.
+- **Keputusan**: (b) filter — item non-menu TANPA target → sembunyi; custom BERTARGET eksplisit → tetap tampil.
+- **Eksekusi**: helper baru `shouldShowInKitchen(item)` di `customItem.ts` (menu biasa true; custom tanpa target/`kitchenTarget` kosong false; custom bertarget true — memakai `isCustomItem` satu sumber). Diterapkan di Kitchen.tsx: guard `activeOrders` (transaksi tanpa item layak tampil tidak masuk KDS sama sekali), filter kolom Waiting/Processing/Done, tombol "Proses Semua"/"Selesai Semua", deteksi `hasPreviousItems`, dan filter render per-item.
+- **Side effect yang ditemukan & diperbaiki selama eksekusi**: `transactionStore.updateItemKitchenStatus` menghitung status efektif dari SEMUA item `!isBundle` — item custom tersembunyi (tanpa `kitchenItemStatus`) membuat `allDone=false, hasNew=true` → transaksi campuran **macet 'Waiting' selamanya** di KDS. Perhitungan kini memakai predikat kitchen-visible yang sama (`!isBundle && shouldShowInKitchen(i)`), jadi hidden item tidak pernah menahan/menggerakkan status. Kecuali transaksi yang visible item-nya tidak punya kitchenItemStatus tetap lewat jalur legacy `t.kitchenStatus` (perilaku lama dipertahankan).
+- **Test**: +13 kasus di `src/test/kdsCustomFilter.test.ts` (unit helper, store nyata, mirror kolom KDS: custom-hidden-only tidak masuk kolom mana pun walau `kitchenStatus Waiting`; menu done → kolom Done walau custom hidden ada; custom bertarget ikut menentukan kolom).
+
+### R-A4 (🟢 Rendah) — Reports: kategori "Lainnya" untuk custom — ✅ SELESAI
+- **Status**: logika `categorySales` diekstrak ke helper murni `src/utils/categorySales.ts` (`buildCategorySales`), item non-menu dikelompokkan ke bucket **"Item Non-Menu"** (konsisten dengan Dashboard & ringkasan shift), bukan "Lainnya". Satu perubahan mencakup P&L breakdown, tabel kategori, dan PDF (semua lewat `categorySales`). Perilaku lain dipertahankan: child bundle dilewati, sub-bill split equal dinormalisasi divisor, urut by revenue desc, menu tanpa kategori tetap "Lainnya" (custom tidak tercampur). +4 test di `customItemReports.test.ts`.
+- **Lokasi**: `src/pages/Reports.tsx` `categorySales` (baris 200-207, `menu?.category || 'Lainnya'`; dipakai P&L breakdown + PDF, baris 489/700/1010).
+- **Fakta**: item custom tidak punya menu di katalog → masuk bucket "Lainnya" — inkonsisten dengan Dashboard (`Item Non-Menu`) & ringkasan shift. Tidak salah secara akuntansi (revenue tetap benar), hanya klasifikasi berbeda.
+- **Usulan (opsional)**: petakan ke "Item Non-Menu" bila ingin konsisten; atau dokumentasikan "Lainnya" sebagai perilaku.
+
+### R-A5 (🟢) — Collision nama bucket di ringkasan shift — ✅ SELESAI
+- **Status**: key agregasi bucket custom kini memakai id sintetis `CUSTOM_ITEM_BUCKET_KEY` (`__custom_bucket__`) di `menuSalesSummary.ts` + `customItemReportKey` (helper `customItem.ts`) — nama tampilan tetap "Item Non-Menu". Menu nyata bernama "Item Non-Menu" tidak pernah tercampur ke bucket (terbukti test: dua baris terpisah dengan hpp/revenue masing-masing). +2 test di `customItemReports.test.ts`.
+- **Lokasi**: `src/utils/menuSalesSummary.ts` — keyed by nama untuk menu, `CUSTOM_ITEM_BUCKET_NAME` untuk custom.
+- **Fakta**: menu nyata yang kebetulan bernama "Item Non-Menu" akan tergabung ke baris bucket (qty/revenue/hpp tercampur). Peluang praktis sangat kecil; struktur tetap aman di Dashboard (by menuId).
+- **Usulan**: key bucket custom memakai id sintetis khusus (mis. `__custom_bucket__`) agar tidak pernah bentrok dengan nama menu — 1 baris.
+
+### R-A6 (🟢 Rendah) — Recompute profitabilitas tiap tick ✅ SELESAI
+- **Lokasi**: `src/pages/Dashboard.tsx` — `menuProfitability = useMemo(..., [transactions, menus, inventory, today])` (ekstraksi helper menambahkan dep `today`).
+- **Fakta**: `today` berubah tiap `nowTick` (jam berjalan) → tabel profitabilitas 30-hari recompute tiap menit walau data statis. Tidak salah hasil, hanya boros kecil (koleksi kecil → dampak minimal).
+- **Usulan**: gunakan `new Date()` di dalam helper tanpa dep `today` (perilaku lama), atau biarkan (dampak terukur minimal).
+
+### ✅ Yang TERVERIFIKASI TIDAK bermasalah (Item Custom)
+- Engine/checkout/pending/refund: stok tidak tersentuh di semua jalur (test integrasi `customItemIntegration.test.ts` 8 kasus membuktikan) — termasuk delta pending dengan edit cart dan hapus custom.
+- HPP: `customHpp` tercatat sebagai pseudo `manual_custom_*` (prefix `manual_` di-skip deduksi) → tidak pernah memotong stok; laba kotor laporan benar.
+- Tiket dapur: custom bertarget eksplisit dicetak hanya ke target; custom tanpa target diblok di `printReceipt` (guard tunggal mencakup checkout/pending/split/reprint).
+- Resume pending: spec key `getItemSpecKey` memakai `menuId` yang TERSIMPAN di snapshot → custom item di-resume match → tidak trigger cetak ulang/duplikat (kecuali dihapus lalu ditambah ulang via modal — menuId baru → dianggap item baru; perilaku wajar).
+- Merge keranjang custom (nama+harga) tidak pernah mencampur dengan item menu; diskon transaksi scope 'all' tetap berlaku (keputusan P.6-2).
+
+---
+
+## R.3 — Detail temuan Banner Printer ("perbaikan banner sambungkan printer")
+
+### R-B1 (🟢 Rendah) — Tombol per-printer tanpa batas, fallback massal hilang — ✅ SELESAI
+- **Status**: tombol individual dicap ≤ `RECONNECT_BUTTON_CAP` (3) oleh helper murni baru `src/utils/reconnectPlan.ts` (`buildReconnectButtonPlan`); sisa → tombol fallback "Sambungkan Semua (N)" yang memanggil `reconnectAll` (dikembalikan ke `usePrinterMonitor`, iterasi `offlinePrinters` satu per satu). Container tombol kini pakai `flex-wrap` sebagai defensif. +9 test di `reconnectPlan.test.ts` (cap, fallback, per-id disabled).
+- **Lokasi**: `src/components/PrinterStatusBanner.tsx` (`renderReconnectButtons` — render tombol utk SEMUA `offlinePrinters`); `src/hooks/usePrinterMonitor.ts` (`reconnectAll` dihapus dari return — tidak ada pemanggil tersisa, tsc 0).
+- **Fakta**: perilaku lama menampilkan tombol individual hanya bila `totalDisconnected <= 3`, sisanya tombol "Sambungkan Semua". Sekarang tombol dirender tanpa cap → konfigurasi 5-6 printer BT offline membuat banner melebar (flex row `flex-shrink-0` tanpa wrap) dan kasir wajib klik satu per satu.
+- **Eksekusi**: `buildReconnectButtonPlan` mengembalikan `{ buttons, showAllButton, allCount, allDisabled }` — tombol pertama ≤cap + fallback bila `offlinePrinters.length > cap`. State `reconnectingAll` terpisah dari `reconnecting` (tunggal); `handleReconnectAll` mengunci tombol lain saat iterasi berjalan (Bluetooth picker satu pada satu waktu).
+
+### R-B2 (✅ SELESAI) — Pesan "Refresh memutus koneksi" untuk penyebab non-refresh & banner tak bisa di-dismiss
+- **Lokasi**: `PrinterStatusBanner.tsx` `wasConnectedBeforeRefresh` (`status.offlinePrinters.some(p => getPrinterSessionState()[p.id] !== undefined)`); `sessionStorage` `markPrinterSession` hanya menandai "pernah tersambung di sesi ini" — tidak mencatat PENYEBAB putus.
+- **Fakta**: printer yang mati listrik/kehilangan jarak di tengah shift tetap menampilkan teks "Refresh memutus koneksi … — klik untuk menyambungkan kembali" (menyesatkan). Banner ini TIDAK bisa di-dismiss selama kondisi terpenuhi — bila printer rusak permanen, banner menetap tanpa jalan keluar selain memperbaiki printer / mematikan konfigurasi BT. (Perilaku ini tidak diperkenalkan oleh diff terbaru — sudah ada — tapi memengaruhi kualitas perbaikan banner.)
+- **Eksekusi**: konsisten dengan usulan — helper murni baru `isPrinterSessionRecent(printerId, now?, windowMs?)` + konstanta `PRINTER_SESSION_REFRESH_WINDOW_MS` (5 menit) di `src/utils/printer.ts`, memakai `connectedAt` yang sudah tersimpan di session state. Banner (`PrinterStatusBanner.tsx`) kini membedakan penyebab: putus dengan sesi BARU (≤5 menit, hampir pasti pasca-refresh) → banner agresif "Refresh memutus koneksi …" tetap (tidak bisa di-dismiss, butuh user gesture re-pair); sesi LAMA (printer mati listrik/jauh) atau tanpa entri sesi → banner netral "{Nama} Offline" + tombol **X "Sembunyikan sesi ini"** (state `dismissedOffline` terpisah dari dismiss toast sukses; otomatis muncul lagi bila semua printer tersambung lalu putus lagi — di-reset saat allConnected).
+- **Test**: +6 kasus di `printerReconnect.test.ts` (helper: tanpa sesi → false; dalam jendela & tepat di ambang → true; 5 jam kemudian → false; jendela kustom; clearPrinterSession → false; campuran sesi lama+baru diklasifikasikan terpisah).
+- **Catatan**: printer yang tersambung lama lalu user refresh → pesan netral (bukan "pasca-refresh") — lebih jujur; tombol Hubungkan tetap tersedia di kedua varian.
+
+### R-B3 (🟢 Rendah) — Semua tombol nonaktif saat satu printer menghubungkan — ✅ SELESAI
+- **Status**: `disabled` kini per-ID (`reconnecting === p.id` atau `reconnectingAll`) — hanya tombol printer yang sedang menghubungkan yang nonaktif; kasir bisa mengklik printer lain secara paralel. Fallback "Sambungkan Semua" tetap nonaktif selama ada koneksi berjalan (tunggal atau massal) karena `allDisabled = reconnectingId !== null || reconnectingAll`. Diuji langsung oleh 5 test R-B3 di `reconnectPlan.test.ts` (idle, per-id, luar cap, massal, nama dipertahankan).
+- **Lokasi**: `PrinterStatusBanner.tsx` `disabled={reconnecting !== null}` (bukan per-id).
+- **Fakta**: kasir tidak bisa mengklik printer kedua sampai printer pertama selesai (Bluetooth picker hanya muncul utk satu). Minor UX; tidak salah fungsi.
+
+### ✅ Yang TERVERIFIKASI aman (Banner Printer)
+- `handleReconnectSingle` tidak dapat throw (reconnect membungkus try/catch internal) + guard `reconnectingAll` mencegah tumpang tindih dengan iterasi massal.
+- `reconnectAll` dikembalikan ke `usePrinterMonitor` (bukan lagi dihapus) — iterasi `offlinePrinters` + `connectBluetoothPrinter`, tsc 0 error, kompatibel dengan R-B1 fallback.
+- Rotasi status (success 4s → hidden; offline → per-printer) & prioritas "pasca-refresh" bekerja; `allConnected` menangani silent re-pair boot (usePrinterMonitor) tanpa menampilkan banner agresif.
+
+---
+
+## R.4 — Rekomendasi eksekusi (menunggu keputusan)
+
+1. **R-A1** ✅ — `kbGuardRef` + guard F1 (state `showManualItem` dipindah ke atas — menghindari ReferenceError TDZ).
+2. **R-A2** ✅ — guard printer pakai `isCustomItem`; +2 test.
+3. **R-A3** ✅ — filter KDS (`shouldShowInKitchen` + store status fix anti macet); +13 test.
+4. **R-B2** ✅ — klasifikasi penyebab via `connectedAt` (`isPrinterSessionRecent`, jendela 5 menit) + dismiss "Sembunyikan sesi ini"; +6 test.
+5. **R-A4** ✅ — `buildCategorySales` (helper murni `categorySales.ts`): custom → bucket "Item Non-Menu" di Reports (P&L/tabel/PDF); +4 test.
+6. **R-A5** ✅ — key sintetis `CUSTOM_ITEM_BUCKET_KEY` anti-bentrok nama menu (ringkasan shift + `customItemReportKey`); +2 test.
+7. **R-A6** ✅ — hapus dep `today` dari memo `menuProfitability`.
+8. **R-B1 / R-B3** ✅ — cap tombol ≤3 + fallback "Sambungkan Semua" (`reconnectPlan.ts` + `usePrinterMonitor.reconnectAll`); disabled per-id (`reconnecting === p.id`); +9 test.
+
+**Dampak**: semua usulan kecil (total < 20 baris + ±3 test), TIDAK menyentuh engine transaksi / stok / struk.
+
+---
+
+*Selesai audit R — semua rekomendasi R-A1..R-A6 & R-B1..R-B3 telah dieksekusi.*
+
+# 🔎 S. AUDIT — PPN (Pajak Pertambahan Nilai) & Item Non-Menu
+
+> **Pertanyaan**: apakah revenue item non-menu (Item Manual) konsisten di laporan PPN, atau perlu pemetaan bucket "Item Non-Menu" seperti laporan lain?
+
+## S.1 — Temuan: PPN SUDAH KONSISTEN (tanpa perubahan kode)
+
+Laporan PPN (`src/utils/ppnReport.ts`) murni berbasis **transaksi** — bukan per-item atau per-kategori:
+
+| Fungsi | Logika |
+|--------|--------|
+| `isTaxableTransaction(t)` | `t.tax > 0` — transaksi-level, tidak peduli item mana |
+| `toPpnRow(t)` | DPP = `t.subtotal - t.discount`, PPN = `t.tax`, Total = `t.totalAmount` |
+| `summarizePpn(txs)` | Σ DPP & PPN semua transaksi kena pajak |
+| `aggregatePpnByDay(txs)` | Kelompok per tanggal, ascending |
+
+Revenue item non-menu sudah otomatis benar karena:
+1. `item.subtotal` (harga × qty) masuk ke `t.subtotal` saat checkout di engine
+2. Engine `atomicTransactionEngine` menghitung `t.tax` dari **seluruh** `t.subtotal` (termasuk item custom)
+3. Laporan PPN pakai `t.subtotal` langsung — tidak ada filtering per kategori
+
+**Tidak ada pengelompokan per kategori di PPN** — tidak ada tabel, PDF, atau ringkasan yang memecah DPP/PPN berdasarkan nama menu/kategori. Jadi tidak ada bucket yang perlu diperbaiki.
+
+## S.2 — Kapan masalah PPN item custom AKAN muncul
+
+Jika suatu saat laporan PPN diperluas ke **per-kategori** (mis. DPP Minuman vs DPP Makanan vs DPP Item Non-Menu), maka perlu petaan `isCustomItem` → bucket di laporan itu (konsisten dgn R-A4). Saat ini tidak ada kebutuhan tersebut — laporan PPN fokus pada total DPP/PPN untuk pelaporan pajak.
+
+## S.3 — Verifikasi tambahan
+
+- PDF export PPN (`exportPpnPDF`) menampilkan: ringkasan total, per-hari, per-transaksi — tidak ada breakdown kategori.
+- Table PPN di Reports menampilkan: rekap harian — tidak ada breakdown kategori.
+- Test `ppnReport.test.ts` menguji kasus campuran (tax > 0, tax = 0, diskon) — tidak ada kasus yang spesifik ke item type, tapi logika tidak bergantung padanya.
+
+**Verdict**: ✅ Tidak ada perubahan yang diperlukan. PPN konsisten dengan "Item Non-Menu" karena strukturnya transaksi-level.
+
+# 🔎 T. AUDIT REGRESI MENYELURUH — Semua Perubahan Item Non-Menu, Banner Printer & Helper
+
+> **Tujuan**: mendeteksi bug/error baru yang mungkin diperkenalkan oleh semua perubahan sebelumnya (P.4 Item Non-Menu, R-A1..R-A6, R-B1..R-B3, toast gagal sambung, helper baru).
+> **Metode**: pembacaan ulang seluruh diff produksi + analisis interaksi antar modul + verifikasi typecheck (0 error) & test suite (730/730 lulus).
+> **Status**: 🔎 ANALISA — temuan + rekomendasi (belum ada perubahan kode tambahan).
+
+## T.1 — Temuan bug/error baru
+
+### T-1 (🟡 Sedang) — `previouslyConnected` state di usePrinterMonitor tidak pernah dipakai banner (dead state) — ✅ SELESAI
+- **Status**: state `previouslyConnected` + field interface + effect reset dihapus dari `usePrinterMonitor.ts`. Banner sudah pakai `isPrinterSessionRecent` (sessionStorage langsung) sejak R-B2. +2 test di `reconnectPlan.test.ts` (status tanpa `previouslyConnected`).
+- **Lokasi**: `src/hooks/usePrinterMonitor.ts:96-97` — `previouslyConnected` state + effect reset (baris 176-181).
+- **Fakta**: setelah R-B2, banner tidak lagi membaca `previouslyConnected` (memakai `isPrinterSessionRecent` dari sessionStorage langsung). State ini hanya di-set dan di-reset tapi tidak pernah dikonsumsi. Tidak menyebabkan error, hanya dead code + satu effect useEffect yang berjalan sia-sia.
+- **Dampak**: minimal — tidak ada side effect fungsional, hanya cleanup kode.
+- **Rekomendasi**: hapus `previouslyConnected` state + effect reset-nya (3 baris deklarasi + 6 baris effect). Atau dokumentasikan bahwa ini untuk debugging.
+
+### T-2 (🟡 Sedang) — `reconnectingAll` tidak di-reset saat `status.allConnected` berubah (stale state potensial) — ✅ SELESAI
+- **Status**: `setReconnectingAll(false)` ditambahkan ke useEffect di `PrinterStatusBanner.tsx` saat `allConnected`. +3 test di `reconnectPlan.test.ts` (idle 0 offline, stale 0 offline, pasca-reset clean).
+- **Lokasi**: `src/components/PrinterStatusBanner.tsx` — useEffect baris 128-137.
+- **Fakta**: useEffect yang reset `dismissed`/`dismissedOffline`/`showSuccess` tidak mereset `reconnectingAll`. Skenario: user klik "Sambungkan Semua" → selama iterasi, satu printer tersambung → `status.allConnected` jadi true → useEffect trigger → banner sukses tampil → tapi `reconnectingAll` masih `true` (belum di-reset karena `reconnectAll()` promise belum resolve). Banner sukses tampil sementara tombol fallback masih "Menghubungkan...".
+- **Dampak**: edge case kecil — banner sukses tampil bersamaan dengan state spinner yang tersisa selama <1 detik (sampai `reconnectAll()` resolve dan finally block setReconnectingAll(false)). Visual minor, tidak menyebabkan error atau stuck.
+- **Rekomendasi**: tambah `setReconnectingAll(false)` di useEffect saat `allConnected` (defensif, 1 baris).
+
+### T-3 (🟢 Rendah) — `handleLogoutWithoutClose` di Layout.tsx — ✅ TERVERIFIKASI BUKAN DEAD CODE
+- **Lokasi**: `src/components/Layout.tsx:248` (definisi), `:954` (pemanggilan).
+- **Fakta**: fungsi ini dipanggil oleh tombol **"Keluar Tanpa Menutup Shift"** di modal tutup shift, hanya tampil untuk role Manager (`currentUser.role === 'Manager'`). Bukan dead code — fitur yang sah: manager boleh keluar tanpa menutup shift, shift tetap aktif untuk dilanjutkan kasir berikutnya.
+- **Status**: tidak perlu aksi.
+
+### T-4 (🟢 Rendah) — `manualKitchenTargets` di POS bisa kosong → select hanya 2 option
+- **Lokasi**: `src/pages/POS.tsx:933-938`.
+- **Fakta**: bila tidak ada kitchen printer aktif dengan `targetCategory`, `manualKitchenTargets` = `[]` → dropdown hanya menampilkan "Tidak dicetak" dan "Semua Dapur". Ini perilaku yang benar (tidak ada target spesifik), bukan bug. Hanya catatan UX: kasir mungkin bingung bila dropdown terlihat kosong.
+- **Dampak**: tidak ada — fungsionalitas tetap benar.
+- **Rekomendasi**: tidak perlu fix (perilaku benar).
+
+## T.2 — Terverifikasi AMAN (tidak ada bug)
+
+### Item Non-Menu (P.4) — semua jalur
+- **cartStore merge**: custom merge by (isCustom, name, basePrice, itemDiscount) — tidak pernah merge dengan item menu. `normalizedItem.isCustom || i.isCustom` guard benar: bila salah satu custom, masuk cabang custom; bila keduanya custom, cek nama+harga+diskon. Aman.
+- **hpp.ts**: `manual_custom_${item.lineId}` pseudo-ingredient → `calculateItemDeductions` melewati prefix `manual_` (baris 198) → stok tidak terpotong. `lineId` unik per baris → tidak bentrok. Aman.
+- **printer.ts guard**: `isCustomItem(item) && !itemTarget` → return false (skip cetak). Bila custom + target eksplisit → lanjut ke logika target normal. Konsisten dengan `shouldShowInKitchen`. Aman.
+- **promoDiscount.ts**: `isItemEligibleForMenuScope` = `!isCustomItem(item)` → custom dikecualikan dari scope menu/kategori/BOGO. Scope 'all' tetap menghitung custom dalam `eligibleItemQty` (baris 49-50). Aman.
+- **transactionStore.ts**: `kitchenVisible` predikat = `!i.isBundle && shouldShowInKitchen(i)` → item custom tanpa target dikecualikan dari perhitungan status. `allDone`/`hasNew`/`hasProcessing` hanya hitung visible items. Anti-macet. Aman.
+- **Kitchen.tsx**: 9 titik filter konsisten pakai `shouldShowInKitchen`. Guard `activeOrders` mencegah transaksi custom-only masuk KDS. Aman.
+
+### Banner Printer (R-B1/R-B3 + toast)
+- **buildReconnectButtonPlan**: pure function, cap `slice(0, cap)`, disabled per-id. Tidak ada side effect. Aman.
+- **reconnectAll di hook**: iterasi `offlinePrinters`, `connectBluetoothPrinter` satu per satu, try/catch per printer. Return boolean. Tidak ada race condition (state `reconnectingAll` guard). Aman.
+- **toast gagal**: `addToast` hanya dipanggil bila `!success` (single) atau `!anySuccess` (all). Tidak spam — maksimal 1 toast per aksi. Aman.
+
+### Helper Laporan (R-A4/R-A5 + profit)
+- **buildCategorySales**: konsisten dengan perilaku lama (skip `isBundleChild`, `splitContributionDivisor`), hanya ganti `menu?.category || 'Lainnya'` → `isCustomItem(item) ? BUCKET : menu?.category || 'Lainnya'`. Aman.
+- **buildMenuSalesSummary**: key sintetis `CUSTOM_ITEM_BUCKET_KEY` → tidak bentrok nama menu. `item.cogs ?? item.hpp ?? 0` → customHpp tercatat. Aman.
+- **buildMenuProfitability**: `customItemReportKey`/`customItemReportName` → bucket. Filter `!t.splitParentId && !t.refunded` dipertahankan. Aman.
+- **Dashboard Top Menu**: inline memo pakai `customItemReportKey` → konsisten dengan helper. Aman.
+
+### Typecheck & Test
+- `tsc --noEmit`: 0 error.
+- `vitest run`: 730/730 lulus (68 files).
+
+## T.3 — Rekomendasi
+
+| # | Temuan | Severity | Aksi |
+|---|--------|----------|------|
+| T-1 | `previouslyConnected` dead state di usePrinterMonitor | 🟡 Sedang | ✅ SELESAI — hapus state + field + effect |
+| T-2 | `reconnectingAll` tidak di-reset saat allConnected (edge case visual) | 🟡 Sedang | ✅ SELESAI — tambah setReconnectingAll(false) di useEffect |
+| T-3 | `handleLogoutWithoutClose` mungkin dead code | 🟢 Rendah | Verifikasi pemanggilan |
+| T-4 | `manualKitchenTargets` kosong → dropdown 2 option | 🟢 Rendah | Tidak perlu (perilaku benar) |
+
+**Verdict**: T-1 dan T-2 dieksekusi (735/735 test lulus, tsc 0 error). T-3/T-4 tidak perlu aksi. **Tidak ada bug/error baru yang merusak fungsionalitas** — semua perubahan sebelumnya berjalan sebagaimana mestinya.
+
