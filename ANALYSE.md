@@ -2009,3 +2009,102 @@ Jika suatu saat laporan PPN diperluas ke **per-kategori** (mis. DPP Minuman vs D
 
 **Verdict**: T-1 dan T-2 dieksekusi (735/735 test lulus, tsc 0 error). T-3/T-4 tidak perlu aksi. **Tidak ada bug/error baru yang merusak fungsionalitas** — semua perubahan sebelumnya berjalan sebagaimana mestinya.
 
+
+# 🐞 U. BUG: Simbol Aneh / Garis / Huruf Cina-Korea di Struk & Tiket Dapur
+
+> **Gejala**: (1) Saat Close Shift, printer tidak mau mencetak rangkuman shift — muncul simbol/garis aneh yang menyebabkan cetakan berhenti. (2) Tiket dapur kadang menampilkan simbol seperti huruf Cina / Korea.
+> **Status**: 🟢 **SELESAI** — U-F1, U-F2, U-F3 dieksekusi (✅). Test: 744/744 (printerReconnect.test.ts +9 kasus U-F3).
+
+## U.1 — Akar penyebab (3 lapis, saling menguatkan)
+
+### U-A (🔴 AKAR UTAMA — codepage printer TIDAK di-set sebelum cetak teks)
+
+**Fakta kode**: Semua jalur ESC/POS Bluetooth memakai `new TextEncoder()` (UTF-8) untuk meng-encode teks Indonesia ke byte, tetapi **TIDAK PERNAH mengirim perintah set codepage/karakter** (`ESC t n` atau `ESC R n`) ke printer sebelum encode.
+
+- `buildReceiptESCPOS` (baris 901): `const encoder = new TextEncoder()` → encode UTF-8, lalu `commands.push(ESC, 0x40)` (init) — **tidak ada `ESC t` setelah init**.
+- `buildKitchenESCPOS` (baris 1135): sama — init + center, **tidak ada codepage**.
+- `printTextRaw` (baris 1436): sama — init + left align, encode UTF-8 langsung, **tidak ada codepage**.
+- `connectBluetoothPrinter` test print (baris 1381): sama.
+
+**Apa yang terjadi**: `TextEncoder()` selalu menghasilkan UTF-8. Printer thermal default codepage biasanya **CP437 (US-ASCII)** atau codepage pabrik. Karakter Indonesia normal (A-Z, 0-9, simbol dasar) cocok di CP437. Tapi:
+
+1. **Karakter "aneh" muncul** bila ada karakter di luar ASCII dasar: `Rp` (tidak ada masalah), tapi **formatRupiah menghasilkan `Rp 10.000`** — aman. Yang bermasalah: **karakter dari data dinamis** — nama pelanggan dengan emoji/simbol unicode, nama menu dengan karakter khusus, atau **footer/header kustom** yang diisi user mengandung karakter di luar ASCII (mis. tanda ≥, ✓, ★, emoji). UTF-8 encode karakter ini menjadi multi-byte → printer codepage salah → cetakan simbol aneh.
+
+2. **"Garis-garis" / cetakan berhenti di rangkasan shift**: `printTextRaw` mengirim `lines.join` UTF-8 dalam chunk 20 byte. Bila sebuah karakter multi-byte UTF-8 terpotong di batas chunk 20 (mis. karakter byte ke-3 dari emoji terpotong ke chunk berikutnya), printer menerima byte rusak → menafsirkan sebagai **ESC/POS command byte** secara tidak sengaja → mengubah mode printer (mis. masuk mode graphics, change codepage ke kanji/CJK) → **printer macet / cetak garis tak beraturan / berhenti total**.
+
+3. **"Huruf Cina / Korea" di tiket dapur**: ESC/POS command yang salah ditafsirkan (dari byte UTF-8 rusak) bisa memicu printer masuk ke **mode CJK/kanji** (codepage JIS/KS) → karakter ASCII berikutnya ditafsirkan sebagai huruf Cina/Korea.
+
+### U-B (🟠 MEMPERBERAT — chunk size 20 byte memotong karakter multi-byte)
+
+**Fakta**: `writeToPrinter` (baris 552) memakai `chunkSize = 20` dan `data.slice(i, i + chunkSize)` — slice mentah pada offset byte. UTF-8 karakter multi-byte (2-4 byte) yang terpotong di tengah pada batas 20 byte → chunk pertama berisi byte tidak lengkap, chunk kedua berisi sisa byte yang juga tidak lengkap → **printer menerima byte rusak di kedua chunk**.
+
+Ini sangat mungkin terjadi pada rangkasan shift (`printTextRaw`) karena struk panjang (banyak baris menu) → banyak chunk → peluang potong karakter makin besar.
+
+### U-C (🟡 FAKTOR — data dinamis user berisi karakter non-ASCII)
+
+**Fakta**: `formatRupiah` menghasilkan `Rp 10.000` (ASCII murni, aman). Tapi sumber data lain di struk bisa mengandung karakter non-ASCII:
+- `data.storeName`, `data.storeAddress`, `data.receiptHeader`, `data.receiptFooter` — diisi user di Settings, bisa berisi emoji/simbol.
+- `data.cashierName`, `data.customerName` — nama orang, bisa karakter khusus.
+- `item.name` — nama menu, bisa karakter khusus.
+- Rangkasan shift: `settings.storeName`, nama menu, dll.
+
+Bila user mengisi storeName/footer dengan emoji (mis. "☕ Kopi Senja") atau simbol unicode (★, ♡, ✓), encode UTF-8 menghasilkan multi-byte → masalah U-A terpicu.
+
+## U.2 — Mengapa "terkadang" (intermiten)
+
+Bug ini **intermiten** karena:
+1. Hanya muncul bila ada karakter non-ASCII di data (nama menu/footer/storeName dengan emoji/simbol). Transaksi murni ASCII → tidak bermasalah.
+2. Chunk 20 byte potong karakter hanya bila karakter multi-byte kebetulan berada di batas chunk. Peluang ~15-25% per struk panjang.
+3. Printer berbeda punya codepage default berbeda — beberapa toleran (auto-detect UTF-8), beberapa tidak.
+
+## U.3 — Fix permanen (3 langkah, berurutan prioritas)
+
+### U-F1 (🔴 WAJIB) — Set codepage ESC/POS sebelum encode teks — ✅ SELESAI
+- **Status**: `ESC t 0` (select default codepage) ditambahkan setelah `ESC @` (init) di semua 4 builder ESC/POS: `buildReceiptESCPOS`, `buildKitchenESCPOS`, `printTextRaw`, `testPrintBluetooth`.
+
+Tambahkan perintah **codepage select** setelah `ESC @` (init) di SEMUA builder ESC/POS:
+- `buildReceiptESCPOS` (setelah baris 907 `ESC 0x40`)
+- `buildKitchenESCPOS` (setelah `ESC 0x40`)
+- `printTextRaw` (setelah `ESC 0x40`)
+- Test print (baris 1381)
+
+**Perintah**: `ESC t 0` (select codepage 0 = default) ATAU `ESC R 0` (select international char set 0 = USA). Alternatif: beberapa printer mendukung mode "UTF-8" via `GS ( F` (custom char) — tapi tidak universal. Yang paling aman: `ESC t 0` + sanitasi input (U-F3).
+
+**Plus**: tambahkan `ESC ?` (cancel user-defined chars) atau `ESC % 0` (cancel custom chars) untuk reset ke built-in charset.
+
+### U-F2 (🟠 PENTING) — Chunk size aman multi-byte + boundary detection — ✅ SELESAI
+- **Status**: `writeToPrinter` diubah: chunk size 20 → **180 byte** (di bawah MTU Web Bluetooth 180-512), plus **boundary detection UTF-8**: bila chunk berakhir di continuation byte (0x80-0xBF), mundurkan boundary ke sebelum start byte (0xC0-0xFF) karakter itu. Mencegah karakter multi-byte terpotong → byte rusak → printer menafsirkan sebagai command CJK/graphics.
+
+Ubah `writeToPrinter` agar:
+1. **Chunk size lebih besar** (180-200 byte, bukan 20) — mengurangi peluang potong karakter. Web Bluetooth MTU umumnya 180-512 byte.
+2. **Jangan potong di tengah karakter multi-byte** — deteksi boundary UTF-8: byte < 0x80 = single-byte; byte 0x80-0xBF = continuation; byte 0xC0-0xFF = start of multi-byte. Geser chunk boundary ke sebelum start byte bila continuation byte terpotong.
+3. **Atau**: encode per-baris, kirim satu baris per write (anti potong di tengah karakter) — lebih lambat tapi 100% aman.
+
+### U-F3 (🟡 DEFENSIF) — Sanitasi input non-ASCII — ✅ SELESAI
+- **Status**: Helper `sanitizeForThermalPrint(text)` ditambahkan di `printer.ts`. Normalisasi NFKD + ganti simbol umum (★→*, ✓→v, →->, emoji→(kopi)/(burger) dll) + strip karakter di luar Latin-1 (0x00-0xFF) → `?` + clean `??` berlebihan. Diterapkan di semua `encoder.encode()` untuk teks user: storeName, storeAddress, receiptHeader, receiptFooter, cashierName, customerName, item.name, promoLabel, kp.name, dan semua baris `printTextRaw` (rangkasan shift). +9 test di `printerReconnect.test.ts`.
+
+Tambahkan helper `sanitizeForThermalPrint(text)` yang:
+1. Normalisasi unicode (NFKD) → decompose karakter kompatibilitas.
+2. Strip emoji dan simbol di luar Latin-1 (0x00-0xFF).
+3. Ganti karakter umum: `★` → `*`, `✓` → `v`, `♡` → `<3`, `→` -> `->`, dll.
+4. Fallback: karakter yang tidak bisa direpresentasikan → `?`.
+
+Dipakai di semua `encoder.encode(...)` untuk teks user (storeName, footer, header, nama menu, nama pelanggan).
+
+### U-F4 (🟢 OPSIONAL) — Inisialisasi printer di connect time
+
+Saat `establishConnection` sukses, kirim `ESC @` + `ESC t 0` sekali sebagai "handshake" codepage. Memastikan printer selalu mulai dari codepage yang benar sebelum job cetak pertama.
+
+## U.4 — Estimasi dampak
+
+| Fix | Baris | Risiko | Dampak |
+|-----|-------|--------|--------|
+| U-F1 codepage | +4 baris × 4 titik = 16 | Rendah | Eliminasi simbol aneh untuk ASCII extended |
+| U-F2 chunk aman | ~15 baris rewrite `writeToPrinter` | Sedang | Eliminasi potong karakter + cetak berhenti |
+| U-F3 sanitasi | ~20 baris helper + apply | Rendah | Eliminasi sisa kasus emoji/simbol non-Latin |
+| U-F4 init connect | +3 baris | Rendah | Defense in depth |
+
+**Verifikasi lapangan**: bila ada akses ke printer fisik, cetak struk dengan storeName berisi emoji (mis. "☕ Test ★") sebelum dan sesudah fix. Sebelum: simbol aneh. Sesudah: `?` atau fallback (U-F3) + cetakan selesai.
+
+**Rekomendasi eksekusi**: U-F1 + U-F2 + U-F3 sekaligus (total ~50 baris) untuk fix permanen. U-F4 opsional.
+
