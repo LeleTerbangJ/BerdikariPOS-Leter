@@ -8,7 +8,7 @@ import { useShiftStore } from '../store/shiftStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { usePromoStore } from '../store/promoStore';
 import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
-import { splitContributionDivisor } from '../utils/splitAllocation';
+import { buildCategorySales } from '../utils/categorySales';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
 // v4.7 TO DO 18.6: indikator "laporan belum final" saat ada data belum tersinkron (reuse badge O-5)
@@ -197,21 +197,8 @@ export default function Reports() {
   // Category sales
   // v4.5 TO DO 5.11: sub-bill split equal membawa semua item di tiap bagian → revenue/qty
   // per kategori ter-inflasi N×. Bagi kontribusi dengan totalSplitCount (deteksi isEqualSplitSubBill).
-  const categorySales = useMemo(() => {
-    const map: Record<string, { revenue: number; qty: number }> = {};
-    filteredTx.forEach((t) => {
-      const div = splitContributionDivisor(t);
-      t.items.forEach((item) => {
-        if (item.isBundleChild) return; // Child bundle items are operational records only
-        const menu = menus.find((m) => m.id === item.menuId);
-        const cat = menu?.category || 'Lainnya';
-        if (!map[cat]) map[cat] = { revenue: 0, qty: 0 };
-        map[cat].revenue += item.subtotal / div;
-        map[cat].qty += item.quantity / div;
-      });
-    });
-    return Object.entries(map).sort((a, b) => b[1].revenue - a[1].revenue);
-  }, [filteredTx, menus]);
+  // v4.10 R-A4: item non-menu (Item Manual) → bucket "Item Non-Menu" (bukan "Lainnya").
+  const categorySales = useMemo(() => buildCategorySales(filteredTx, menus), [filteredTx, menus]);
 
   // v4.7 TO DO 11.2 (P0.1): PPN — transaksi kena pajak (tax > 0), DPP = subtotal − diskon
   const ppnTaxable = useMemo(() => filteredTx.filter(isTaxableTransaction), [filteredTx]);

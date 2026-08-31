@@ -153,7 +153,7 @@ Panduan ini memverifikasi bahwa **alur Pesanan Pending (Gantung), Penambahan Men
 **Tujuan**: Memastikan banner peringatan *Printer Offline* hanya muncul pada user yang relevan (Manager dan Kasir) dan tidak mengganggu layar operasional Dapur/Barista (Acaraki).
 
 1. **Login sebagai Kasir / Manager**:
-   - Jika ada printer bluetooth terkonfigurasi namun belum tersambung / offline, banner `[Nama Printer] Offline [Sambungkan Ulang]` tampil di bagian atas layar.
+   - Jika ada printer bluetooth terkonfigurasi namun belum tersambung / offline, banner `[Nama Printer] Offline` + tombol nama printer (satu tombol per printer, mis. `Dapur`) tampil di bagian atas layar (rincian di `TESTING-PRINTER.md` §G).
 2. **Login sebagai Acaraki (Dapur / Barista)**:
    - **Hasil yang diharapkan**: ✅ Banner printer offline di bagian atas aplikasi **TIDAK MUNCUL sama sekali**.
    - **Hasil yang diharapkan**: ✅ Header KDS tetap menampilkan tombol indikator printer senyap mandiri tanpa mengganggu operasional memasak.

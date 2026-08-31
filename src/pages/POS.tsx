@@ -207,7 +207,7 @@ export default function POS() {
   // checkout di tengah proses bayar; F1 tidak membuka checkout dari konteks lain.
   const [finalizeInFlight, setFinalizeInFlight] = useState(false);
   // Cermin state untuk handler keyboard global (dibaca via ref → tanpa re-subscribe listener)
-  const kbGuardRef = useRef({ checkout: false, menu: false, split: false, finalizing: false });
+  const kbGuardRef = useRef({ checkout: false, menu: false, split: false, finalizing: false, manualItem: false });
 
   // v4.1 TO DO 3.1: selector primitive yang stabil — hasil number, re-render hanya saat count berubah
   // (s.transactions + useMemo malah re-render pada tiap mutasi transaksi, termasuk kitchenStatus KDS).
@@ -553,8 +553,9 @@ export default function POS() {
         e.preventDefault();
         e.stopPropagation();
         // S1 fix: F1 hanya membuka checkout dari konteks POS bersih — bukan saat modal
-        // checkout/customisasi/split terbuka atau finalisasi sedang berjalan.
-        if (g.checkout || g.menu || g.split || g.finalizing) return;
+        // checkout/customisasi/split terbuka, modal Item Manual terbuka, atau finalisasi berjalan.
+        // v4.10 R-A1: anti F1 membuka modal Pembayaran DI ATAS modal Item Non-Menu (Manual).
+        if (g.checkout || g.menu || g.split || g.finalizing || g.manualItem) return;
         handleCheckoutCb();
       }
       if (e.key === 'Escape') {
@@ -562,6 +563,7 @@ export default function POS() {
         // sudah berjalan — menutup di tengah bisa membingungkan/menggagalkan alur).
         if (!g.finalizing) setShowCheckout(false);
         setSelectedMenu(null);
+        setShowManualItem(false); // v4.10 P.4: Item Manual modal ikut ditutup oleh Escape
         setMobileCartOpen(false);
       }
     };
@@ -585,12 +587,25 @@ export default function POS() {
   const [selectedMenu, setSelectedMenu] = useState<Menu | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [checkoutTxId, setCheckoutTxId] = useState<string>(() => uuid());
+
+  // v4.10 P.4: ITEM NON-MENU (Item Manual) — nama & harga bebas, tanpa menu katalog/stok.
+  // Dideklarasikan SEBELUM kbGuardRef.current agar state tersedia untuk cermin guard keyboard.
+  const [showManualItem, setShowManualItem] = useState(false);
+  const [manualItemName, setManualItemName] = useState('');
+  const [manualItemPrice, setManualItemPrice] = useState('');
+  const [manualItemQty, setManualItemQty] = useState('1');
+  const [manualKitchenTarget, setManualKitchenTarget] = useState('');
+  const [manualItemHpp, setManualItemHpp] = useState('');
+  const [manualItemError, setManualItemError] = useState('');
+
   // S1 fix: sinkronkan cermin guard keyboard setiap render
   kbGuardRef.current = {
     checkout: showCheckout,
     menu: selectedMenu !== null,
     split: showSplitModal,
     finalizing: finalizeInFlight,
+    // v4.10 R-A1: modal Item Manual ikut di-guard — F1 tidak membuka checkout di atasnya
+    manualItem: showManualItem,
   };
 
   // Mobile cart toggle
@@ -871,6 +886,56 @@ export default function POS() {
     setSelectedMenu(null);
     addToast(`${selectedMenu.name} ditambahkan ke keranjang`, 'success');
   };
+
+  // v4.10 P.4: tambah ITEM NON-MENU (Item Manual) — nama & harga bebas, qty bebas, tanpa
+  // resep (stok & HPP tidak terpotong), tanpa tiket dapur kecuali kitchenTarget dipilih eksplisit.
+  const addManualItemToCart = () => {
+    const price = Math.floor(parseFloat(manualItemPrice) || 0);
+    const qtyManual = Math.max(1, Math.floor(parseInt(manualItemQty) || 1));
+    const hpp = Math.max(0, Math.floor(parseFloat(manualItemHpp) || 0));
+
+    if (price <= 0) {
+      setManualItemError('Harga jual wajib diisi dan harus lebih dari 0.');
+      return;
+    }
+
+    const name = manualItemName.trim() || 'Item Custom';
+    const item: CartItem = {
+      lineId: uuid(),
+      // menuId sintetis 'custom:<uuid>' — unik per baris, tidak bentrok dengan id menu UUID v4
+      menuId: `custom:${uuid()}`,
+      name,
+      basePrice: price,
+      quantity: qtyManual,
+      temperature: 'Hangat',
+      sugar: 'None',
+      addons: [],
+      subtotal: price * qtyManual,
+      kitchenTarget: manualKitchenTarget || undefined,
+      showSugarLevel: false,
+      showTemperature: false,
+      isCustom: true,
+      customHpp: hpp > 0 ? hpp : undefined,
+    };
+    cart.addItem(item);
+
+    setShowManualItem(false);
+    setManualItemName('');
+    setManualItemPrice('');
+    setManualItemQty('1');
+    setManualKitchenTarget('');
+    setManualItemHpp('');
+    setManualItemError('');
+    addToast(`Item Non-Menu "${name}" ditambahkan ke keranjang`, 'success');
+  };
+
+  // Opsi target dapur utk Item Manual — dari konfigurasi printer dapur aktif (Settings)
+  const manualKitchenTargets = useMemo(() => {
+    return [...new Set((settings.kitchenPrinters || [])
+      .filter((k) => k.enabled)
+      .map((k) => k.targetCategory)
+      .filter((t): t is string => !!t))];
+  }, [settings.kitchenPrinters]);
 
   const toggleAddon = (addon: AddOn) => {
     setSelectedAddons((prev) =>
@@ -1260,6 +1325,19 @@ export default function POS() {
                 {pendingCount}
               </span>
             </button>
+            {/* v4.10 P.4: tombol Item Manual (non-menu) — nama & harga bebas, tanpa katalog */}
+            <button
+              onClick={() => {
+                setManualItemError('');
+                setShowManualItem(true);
+              }}
+              title="Item Non-Menu — barang di luar katalog (nama & harga bebas, tanpa potong stok)"
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold border transition whitespace-nowrap bg-white dark:bg-slate-800 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 shadow-sm"
+            >
+              <Plus size={15} />
+              <span className="hidden md:inline">Item Manual</span>
+              <span className="md:hidden">Manual</span>
+            </button>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
             {categories.map((cat) => {
@@ -1476,7 +1554,12 @@ export default function POS() {
                 <div key={item.lineId} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3">
                   <div className="flex justify-between items-start mb-1">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate">{item.name}</p>
+                      <p className="font-medium text-sm text-slate-800 dark:text-slate-200 truncate flex items-center gap-1.5">
+                        <span>{item.name}</span>
+                        {item.isCustom && (
+                          <span className="badge bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[10px] px-1.5 py-0.5">MANUAL</span>
+                        )}
+                      </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         {item.showTemperature !== false ? item.temperature : ''}{item.showTemperature !== false && item.showSugarLevel !== false ? ' • ' : ''}{item.showSugarLevel !== false ? `Gula ${item.sugar}` : ''}
                         {item.addons.length > 0 && ` • +${item.addons.map((a) => a.name).join(', ')}`}
@@ -1848,6 +1931,9 @@ export default function POS() {
                         <span>{item.name}</span>
                         {item.isBundle && (
                           <span className="badge bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] px-1.5 py-0.5">📦 PAKET</span>
+                        )}
+                        {item.isCustom && (
+                          <span className="badge bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[10px] px-1.5 py-0.5">MANUAL</span>
                         )}
                       </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -2250,6 +2336,109 @@ export default function POS() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* v4.10 P.4: Modal Item Manual (Item Non-Menu) */}
+      <Modal
+        open={showManualItem}
+        onClose={() => setShowManualItem(false)}
+        title="➕ Item Non-Menu (Manual)"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Barang di luar katalog dengan harga & jumlah bebas (mis. sambal Rp 10.000).
+            Tidak memotong stok & tidak dicetak ke dapur kecuali target dapur dipilih.
+          </p>
+
+          <div>
+            <label className="label text-slate-700 dark:text-slate-300">Nama Item <span className="text-slate-400 font-normal">(kosong = "Item Custom")</span></label>
+            <input
+              type="text"
+              value={manualItemName}
+              onChange={(e) => setManualItemName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addManualItemToCart()}
+              placeholder="Item Custom"
+              className="input"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label text-slate-700 dark:text-slate-300">Harga Jual (Rp) *</label>
+              <input
+                type="number"
+                min="1"
+                value={manualItemPrice}
+                onChange={(e) => {
+                  setManualItemPrice(e.target.value);
+                  setManualItemError('');
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && addManualItemToCart()}
+                placeholder="10000"
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label text-slate-700 dark:text-slate-300">Jumlah</label>
+              <input
+                type="number"
+                min="1"
+                value={manualItemQty}
+                onChange={(e) => setManualItemQty(e.target.value.replace(/\D/g, '') || '1')}
+                onKeyDown={(e) => e.key === 'Enter' && addManualItemToCart()}
+                className="input"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label text-slate-700 dark:text-slate-300">Modal / HPP (Rp) <span className="text-slate-400 font-normal">opsional</span></label>
+              <input
+                type="number"
+                min="0"
+                value={manualItemHpp}
+                onChange={(e) => setManualItemHpp(e.target.value.replace(/\D/g, ''))}
+                placeholder="0"
+                className="input"
+              />
+            </div>
+            <div>
+              <label className="label text-slate-700 dark:text-slate-300">Cetak Tiket Dapur <span className="text-slate-400 font-normal">opsional</span></label>
+              <select
+                value={manualKitchenTarget}
+                onChange={(e) => setManualKitchenTarget(e.target.value)}
+                className="input"
+              >
+                <option value="">Tidak dicetak</option>
+                <option value="ALL">Semua Dapur</option>
+                {manualKitchenTargets.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {manualItemError && (
+            <p className="text-xs text-red-500 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-lg px-3 py-2">
+              ⚠️ {manualItemError}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700">
+            <div>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Subtotal</p>
+              <p className="text-xl font-bold text-brand-700 dark:text-brand-400">
+                {formatRupiah((Math.floor(parseFloat(manualItemPrice) || 0)) * Math.max(1, Math.floor(parseInt(manualItemQty) || 1)))}
+              </p>
+            </div>
+            <button onClick={addManualItemToCart} className="btn-primary">
+              <Plus size={16} /> Tambah ke Keranjang
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Checkout Modal */}

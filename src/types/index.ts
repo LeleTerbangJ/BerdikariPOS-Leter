@@ -139,6 +139,13 @@ export interface CartItem {
   isBundleChild?: boolean;  // true = Child item generated from Bundle
   parentLineId?: string;   // Line ID of parent Bundle item
   bundleComponentsSnapshot?: BundleComponentSnapshot[];
+
+  // v4.10 P.4: ITEM NON-MENU (Item Manual di POS) — qty & harga bebas tanpa menu katalog.
+  // menuId sintetis 'custom:<uuid>' (unik per baris — tidak bentrok dengan id menu UUID v4),
+  // tanpa resep (recipeSnapshot kosong → stok & HPP tidak terpotong), tersimpan di dalam
+  // JSONB items transaksi (nol migrasi DB), TIDAK dicetak ke dapur tanpa kitchenTarget eksplisit.
+  isCustom?: boolean;       // true = item manual non-menu (eksplisit, robust walau menu dihapus nanti)
+  customHpp?: number;       // opsional: modal/HPP manual untuk akuntansi barang non-menu
 }
 
 export type TransactionLifecycleState = 

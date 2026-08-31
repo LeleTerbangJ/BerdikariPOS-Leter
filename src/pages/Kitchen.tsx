@@ -4,6 +4,7 @@ import { useShiftStore } from '../store/shiftStore';
 import { useAuthStore } from '../store/authStore';
 import { formatRupiah, formatTime } from '../utils/format';
 import { isSplitSubBill } from '../utils/splitAllocation';
+import { shouldShowInKitchen } from '../utils/customItem';
 import { playNewOrderSound, playAlertSound } from '../utils/sound';
 import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud, mapCloudRowToTransaction } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -104,6 +105,10 @@ export default function Kitchen() {
     // 'Waiting') agar tidak memicu duplikasi antrean di dapur. Tiket dapur split fresh sudah dicetak
     // sekali saat sub-bill pertama sesi dibayar.
     if (isSplitSubBill(t)) return false;
+    // v4.10 R-A3: hanya tampilkan di KDS bila transaksi punya minimal satu item yang layak tampil
+    // (menu biasa atau item non-menu BERTARGET dapur). Item non-menu tanpa target dapur tidak
+    // dicetak ke dapur (guard printer P.4/R-A2) — sembunyikan juga dari antrean KDS.
+    if (!t.items.some((i) => !i.isBundle && shouldShowInKitchen(i))) return false;
     // Only show today's orders
     if (new Date(t.date) < today) return false;
     // Hide Done orders that were cleared
@@ -248,13 +253,13 @@ export default function Kitchen() {
               
               // Per-column item check:
               if (status === 'Waiting') {
-                return t.items.some((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new');
+                return t.items.some((i) => !i.isBundle && shouldShowInKitchen(i) && (i.kitchenItemStatus || 'new') === 'new');
               }
               if (status === 'Processing') {
-                return t.items.some((i) => !i.isBundle && i.kitchenItemStatus === 'processing');
+                return t.items.some((i) => !i.isBundle && shouldShowInKitchen(i) && i.kitchenItemStatus === 'processing');
               }
               if (status === 'Done') {
-                return t.items.some((i) => !i.isBundle && i.kitchenItemStatus === 'done');
+                return t.items.some((i) => !i.isBundle && shouldShowInKitchen(i) && i.kitchenItemStatus === 'done');
               }
               return false;
             })
@@ -270,7 +275,7 @@ export default function Kitchen() {
                   <button
                     onClick={() => {
                       orders.forEach((o) => {
-                        o.items.filter((i) => !i.isBundle && (i.kitchenItemStatus || 'new') === 'new').forEach((i) => {
+                        o.items.filter((i) => !i.isBundle && shouldShowInKitchen(i) && (i.kitchenItemStatus || 'new') === 'new').forEach((i) => {
                           updateItemKitchenStatus(o.id, i.lineId, 'processing');
                         });
                       });
@@ -285,7 +290,7 @@ export default function Kitchen() {
                     onClick={() => {
                       orders.forEach((o) => {
                         // v4.8 FIX 24.2: hanya tandai item 'processing' (bukan 'new') sebagai done
-                        o.items.filter((i) => !i.isBundle && i.kitchenItemStatus === 'processing').forEach((i) => {
+                        o.items.filter((i) => !i.isBundle && shouldShowInKitchen(i) && i.kitchenItemStatus === 'processing').forEach((i) => {
                           updateItemKitchenStatus(o.id, i.lineId, 'done');
                         });
                       });
@@ -304,7 +309,7 @@ export default function Kitchen() {
                   const waitMins = getWaitingMinutes(order);
                   // v4.8.4: Deteksi apakah pesanan ini memiliki item lama yang sudah diproses atau selesai
                   const hasPreviousItems = order.items.some(
-                    (i) => !i.isBundle && (i.kitchenItemStatus === 'processing' || i.kitchenItemStatus === 'done')
+                    (i) => !i.isBundle && shouldShowInKitchen(i) && (i.kitchenItemStatus === 'processing' || i.kitchenItemStatus === 'done')
                   );
 
                   return (
@@ -367,6 +372,8 @@ export default function Kitchen() {
                         {/* v4.8 FIX 24.5 & v4.8.4: filter item strictly berdasarkan kolom saat ini */}
                         {order.items.filter((item) => {
                           if (item.isBundle) return false;
+                          // v4.10 R-A3: sembunyikan item non-menu tanpa target dapur dari antrean KDS
+                          if (!shouldShowInKitchen(item)) return false;
                           const itemStatus = item.kitchenItemStatus || 'new';
                           // Di kolom Waiting: hanya tampilkan item 'new'
                           if (status === 'Waiting') return itemStatus === 'new';

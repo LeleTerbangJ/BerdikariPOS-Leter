@@ -7,8 +7,11 @@ import { useMenuStore } from '../store/menuStore';
 import { useCustomerStore } from '../store/customerStore';
 import { useStockLogStore } from '../store/stockLogStore';
 import { formatRupiah, isSameDay } from '../utils/format';
-import { calculateMenuHPP } from '../utils/hpp';
 import { splitContributionDivisor } from '../utils/splitAllocation';
+// v4.10 P.4: item non-menu (Item Manual) — bucket "Item Non-Menu" di Top Menu & Profitability
+import { customItemReportKey, customItemReportName } from '../utils/customItem';
+// v4.10 P.4: profitabilitas menu (30 hari) — helper murni (bucket non-menu + laba kotor customHpp)
+import { buildMenuProfitability } from '../utils/menuProfitability';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -110,8 +113,11 @@ export default function Dashboard() {
     todayTx.forEach((t) => {
       const div = splitContributionDivisor(t);
       t.items.forEach((i) => {
-        if (!map[i.menuId]) map[i.menuId] = { name: i.name, qty: 0 };
-        map[i.menuId].qty += i.quantity / div;
+        // v4.10 P.4: item non-menu dikelompokkan ke satu bucket "Item Non-Menu"
+        // (menuId sintetis unik per baris → tanpa bucket, 100 nama acak membanjiri Top Menu)
+        const key = customItemReportKey(i);
+        if (!map[key]) map[key] = { name: customItemReportName(i), qty: 0 };
+        map[key].qty += i.quantity / div;
       });
     });
     return Object.values(map).sort((a, b) => b.qty - a.qty);
@@ -302,51 +308,13 @@ export default function Dashboard() {
     return { total, returning, newCustomers, retentionRate, topLoyal };
   }, [customers]);
 
-  // Modul 4: Menu Profitability Table
-  const menuProfitability = useMemo(() => {
-    const map: Record<string, { name: string; qty: number; revenue: number; hpp: number }> = {};
-    
-    // Group only last 30 days for fresh profitability insight
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(today.getDate() - 30);
-
-    const filterTxs = transactions.filter(
-      (t) => new Date(t.date) >= thirtyDaysAgo && t.txStatus === 'Selesai' && !t.splitParentId && !t.refunded
-    );
-
-    filterTxs.forEach((t) => {
-      // v4.5 TO DO 5.11: sub-bill split equal membawa semua item cart di tiap bagian dengan
-      // subtotal/hpp penuh → qty/revenue/hpp per menu ter-inflasi N×. Bagi dengan totalSplitCount.
-      const div = splitContributionDivisor(t);
-      t.items.forEach((item) => {
-        if (!map[item.menuId]) {
-          map[item.menuId] = { name: item.name, qty: 0, revenue: 0, hpp: 0 };
-        }
-        
-        // Priority: Read permanent Snapshot HPP (item.hpp / item.cogs).
-        // Fallback for legacy transactions created before snapshot feature.
-        const menuObj = menus.find((m) => m.id === item.menuId);
-        let itemHpp = item.cogs ?? item.hpp;
-        if (itemHpp === undefined) {
-          const menuHpp = menuObj ? calculateMenuHPP(menuObj, inventory) : 0;
-          const baseHpp = menuObj && menuObj.price > 0 ? (item.basePrice / menuObj.price) * menuHpp : 0;
-          itemHpp = baseHpp * item.quantity;
-        }
-
-        map[item.menuId].qty += item.quantity / div;
-        map[item.menuId].revenue += item.subtotal / div;
-        map[item.menuId].hpp += itemHpp / div;
-      });
-    });
-
-    return Object.values(map)
-      .map((m) => {
-        const profit = m.revenue - m.hpp;
-        const margin = m.revenue > 0 ? Math.round((profit / m.revenue) * 100) : 0;
-        return { ...m, profit, margin };
-      })
-      .sort((a, b) => b.profit - a.profit);
-  }, [transactions, menus, inventory]);
+  // Modul 4: Menu Profitability Table — helper murni (bisa diuji) di utils/menuProfitability.ts
+  // v4.10 R-A6: tanpa dep `today` (nowTick jam berjalan) → tabel tidak recompute tiap menit
+  // walau data statis; `now` default new Date() di dalam helper (perilaku pra-ekstraksi).
+  const menuProfitability = useMemo(
+    () => buildMenuProfitability(transactions, menus, inventory),
+    [transactions, menus, inventory]
+  );
 
   // Modul 5: Stock Forecast (days until depletion based on 30-day average)
   const stockForecast = useMemo(() => {

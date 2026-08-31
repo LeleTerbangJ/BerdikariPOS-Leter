@@ -149,3 +149,59 @@ describe('Printer reconnect sesi (TO DO 14.1 P-1/P-2)', () => {
     expect(mod.getPrinterSessionState()[mod.CASHIER_PRINTER_ID]).toBeUndefined();
   });
 });
+
+// ======================================================================
+// R-B2 — Klasifikasi penyebab putus: refresh (content) vs non-refresh
+// (printer mati listrik / kehilangan jarak) via usia connectedAt, sehingga
+// banner tidak menyesatkan dan non-refresh bisa di-dismiss.
+// ======================================================================
+describe('isPrinterSessionRecent (R-B2) — klasifikasi penyebab putus', () => {
+  it('tanpa entri sesi → false (belum pernah tersambung di sesi ini)', async () => {
+    const mod = await loadPrinterModule();
+    expect(mod.isPrinterSessionRecent('kp-baru', 1_000_000)).toBe(false);
+  });
+
+  it('connectedAt baru (dalam jendela refresh default) → true → pesan "akibat refresh"', async () => {
+    const mod = await loadPrinterModule();
+    mod.markPrinterSession('kp-1', 'dev-1', 'Printer Dapur');
+    const connectedAt = mod.getPrinterSessionState()['kp-1'].connectedAt;
+    // 1 menit setelah connect — masih dalam 5 menit → refresh
+    expect(mod.isPrinterSessionRecent('kp-1', connectedAt + 60_000)).toBe(true);
+    // Tepat di ambang jendela → masih recent
+    expect(mod.isPrinterSessionRecent('kp-1', connectedAt + mod.PRINTER_SESSION_REFRESH_WINDOW_MS)).toBe(true);
+  });
+
+  it('connectedAt lama (di luar jendela) → false → pesan netral "terputus"', async () => {
+    const mod = await loadPrinterModule();
+    mod.markPrinterSession('kp-1', 'dev-1', 'Printer Dapur');
+    const connectedAt = mod.getPrinterSessionState()['kp-1'].connectedAt;
+    // Printer connect jam 09:00, mati listrik 14:00 → sesi berumur 5 jam → BUKAN refresh
+    expect(mod.isPrinterSessionRecent('kp-1', connectedAt + 5 * 60 * 60 * 1000)).toBe(false);
+  });
+
+  it('jendela kustom dihormati (parameter windowMs)', async () => {
+    const mod = await loadPrinterModule();
+    mod.markPrinterSession('kp-1', 'dev-1', 'Printer Dapur');
+    const connectedAt = mod.getPrinterSessionState()['kp-1'].connectedAt;
+    expect(mod.isPrinterSessionRecent('kp-1', connectedAt + 60_000, 30_000)).toBe(false);
+    expect(mod.isPrinterSessionRecent('kp-1', connectedAt + 60_000, 120_000)).toBe(true);
+  });
+
+  it('clearPrinterSession (user memutus manual) → bukan lagi "recent"', async () => {
+    const mod = await loadPrinterModule();
+    mod.markPrinterSession('kp-1', 'dev-1', 'Printer Dapur');
+    mod.clearPrinterSession('kp-1');
+    expect(mod.isPrinterSessionRecent('kp-1', Date.now())).toBe(false);
+  });
+
+  it('campuran: printer sesi lama (non-refresh) + printer baru (refresh) diklasifikasikan terpisah', async () => {
+    const mod = await loadPrinterModule();
+    mod.markPrinterSession('kp-lama', 'dev-1', 'Printer Barista');
+    const connectedAtLama = mod.getPrinterSessionState()['kp-lama'].connectedAt;
+    mod.markPrinterSession('kp-baru', 'dev-2', 'Printer Dapur');
+    const connectedAtBaru = mod.getPrinterSessionState()['kp-baru'].connectedAt;
+    // Sesi lama (5 jam) → non-refresh; sesi baru (30 detik) → refresh
+    expect(mod.isPrinterSessionRecent('kp-lama', connectedAtLama + 5 * 60 * 60 * 1000)).toBe(false);
+    expect(mod.isPrinterSessionRecent('kp-baru', connectedAtBaru + 30_000)).toBe(true);
+  });
+});

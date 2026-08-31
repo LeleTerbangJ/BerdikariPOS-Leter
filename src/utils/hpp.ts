@@ -59,6 +59,20 @@ export const buildItemRecipeSnapshot = (
       subtotalCost: item.quantity * menu.manualHpp,
       source: 'menu',
     });
+  } else if (item.isCustom && item.customHpp && item.customHpp > 0) {
+    // v4.10 P.4: ITEM NON-MENU — modal manual opsional (customHpp) dicatat sebagai pseudo-
+    // ingredient `manual_custom_*` (pola manualHpp/`manual_`). Masuk HPP transaksi & laba
+    // kotor laporan, TAPI TIDAK memotong stok (calculateItemDeductions melewati prefix `manual_`).
+    snapshots.push({
+      inventoryId: `manual_custom_${item.lineId}`,
+      inventoryName: `Modal (${item.name})`,
+      unit: 'pcs',
+      qty: 1,
+      totalQty: item.quantity,
+      unitCost: item.customHpp,
+      subtotalCost: item.quantity * item.customHpp,
+      source: 'menu',
+    });
   }
 
   // 2. Bahan baku dari Addons yang dipilih
