@@ -2108,3 +2108,132 @@ Saat `establishConnection` sukses, kirim `ESC @` + `ESC t 0` sekali sebagai "han
 
 **Rekomendasi eksekusi**: U-F1 + U-F2 + U-F3 sekaligus (total ~50 baris) untuk fix permanen. U-F4 opsional.
 
+
+# 🔎 V. AUDIT PASCA-EKSEKUSI MENYELURUH — Semua Perubahan (Item Non-Menu, Printer, Seed Guard, Tombstone)
+
+**Tanggal audit**: 2026-09-01  
+**Baseline**: 763/763 test lulus, `tsc --noEmit` 0 error.  
+**Scope**: 2 commit (HEAD + HEAD~1) — 14 file produksi dimodifikasi, 10 file baru dibuat (5 helper + 5 test), +3 file tambahan (seedGuard, reconnectPlan, categorySales).
+
+---
+
+## V.1 — Metodologi
+
+Audit dilakukan dengan:
+1. Pembacaan ulang seluruh diff produksi (git show HEAD + HEAD~1).
+2. Typecheck (`tsc --noEmit`) + full suite (763 test).
+3. Analisis edge case per file: printer.ts, menuStore.ts, inventoryStore.ts, seedGuard.ts, customItem.ts, hpp.ts, promoDiscount.ts, cartStore.ts, POS.tsx, PrinterStatusBanner.tsx, usePrinterMonitor.ts, Kitchen.tsx, transactionStore.ts, Reports.tsx, Dashboard.tsx, Layout.tsx, dan 5 helper murni (categorySales, menuSalesSummary, menuProfitability, reconnectPlan, customItem).
+
+---
+
+## V.2 — Temuan bug/error baru
+
+### V-1 (🟡 Sedang) — `sanitizeForThermalPrint` TIDAK diterapkan ke baris DETAIL item (addon/sugar/temperature)
+
+**Lokasi**: `src/utils/printer.ts` — `buildReceiptESCPOS` (baris ~990) dan `buildKitchenESCPOS` (baris ~1230).
+
+**Masalah**: U-F3 diterapkan ke `item.name`, `storeName`, `cashierName`, `customerName`, `receiptHeader`, `receiptFooter`, `kp.name`, `promoLabel`, dan semua baris `printTextRaw` — TETAPI baris detail item (`detailStr` = `${tempStr}${sugarStr}${addonStr}`) di-encode TANPA sanitasi:
+
+```ts
+// buildReceiptESCPOS — baris ~990
+const detailStr = `${tempStr}${sugarStr}${addonStr}`.trim();
+if (detailStr) {
+  commands.push(...encoder.encode(`  ${detailStr}\n`));  // ← TIDAK sanitize!
+}
+```
+
+Addon name (`a.name`) bersumber dari data user — bisa berisi emoji/simbol non-ASCII. `item.temperature` dan `item.sugar` bersumber dari konstanta kode ('Dingin', 'Normal', dll — ASCII), tetapi addon name tidak dijamin ASCII.
+
+**Dampak**: Bila user membuat addon dengan emoji di nama (mis. "Extra Shot ⚡"), byte UTF-8 multi-byte dari emoji itu dikirim mentah ke printer → simbol aneh / mode CJK — **bug yang sama yang U-F3 coba perbaiki**.
+
+**Severity**: 🟡 Sedang — jarang terjadi (addon dengan emoji tidak lazim), tapi bila terjadi, efeknya persis bug asli U. Fix U-F3 tidak lengkap tanpa ini.
+
+**Fix**: Bungkus `detailStr` dengan `sanitizeForThermalPrint()` sebelum encode di kedua builder.
+
+#### V-1.a — Hasil scan menyeluruh emoji/simbol non-ASCII di seluruh codebase
+
+Scan node.js (range: emoji U+1F000-1FFFF, misc symbols U+2600-27BF, arrows U+2190-21FF, CJK U+3000-9FFF, Korean U+AC00-D7AF, variation selectors U+FE00-FE0F) terhadap semua file `.ts`/`.tsx` di `src/`:
+
+| Kategori | Jumlah | Aman? | Keterangan |
+|----------|--------|-------|-----------|
+| **Seed data** (`seed.ts` — nama menu, addon, inventaris) | 0 emoji | ✅ Aman | Semua nama menu/addon/inventaris seed murni ASCII. Tidak ada emoji di data bawaan. |
+| **Tabel replacement `sanitizeForThermalPrint`** (`printer.ts:1608-1620`) | 7 baris, ~30 simbol | ✅ Aman by design | Ini ADALAH sanitizer itu sendiri — emoji adalah KEY yang dipetakan ke ASCII (★→*, ☕→(kopi), dll). Tidak dikirim ke printer mentah. |
+| **Toast messages** (`addToast('...🎉', ...)` ) | 15 instance di 8 file | ✅ Aman | Toast dirender di React/HTML (bukan printer). Emoji tampil normal di browser. Tidak mengalir ke ESC/POS. |
+| **JSX page titles & labels** (`📦 Katalog`, `📊 Dashboard`, dll) | ~30 instance | ✅ Aman | Dirender di HTML/React, bukan printer. |
+| **Modal titles** (`title="🖨️ ..."` ) | ~8 instance | ✅ Aman | Atribut HTML, bukan printer. |
+| **`console.log` / `console.warn`** | ~5 instance | ✅ Aman | Output developer console, bukan user-facing. |
+| **`→` di komentar kode** (`// ... → ...`) | ~1000+ baris | ✅ Aman | Komentar tidak dieksekusi/dicetak. |
+| **`→` di deskripsi test** (`it('... → ...')` ) | ~400+ baris | ✅ Aman | String deskripsi test, bukan output runtime. |
+| **`→` di inline comment setelah kode** | ~50 baris | ✅ Aman | Komentar inline. |
+
+**Verdict scan**: Tidak ada emoji/simbol non-ASCII di data seed, tidak ada di tabel replacement (by design), dan semua emoji di toast/JSX dirender di HTML (aman). **Satu-satunya jalur di mana emoji user bisa mencapai printer TANPA sanitasi adalah V-1** — baris `detailStr` (addon name) di `buildReceiptESCPOS` dan `buildKitchenESCPOS`. Seed addon names semua ASCII, jadi bug ini hanya trigger bila user membuat addon dengan emoji di Catalog.
+
+### V-2 (🟢 Rendah) — `cloudComponents` gagal tidak ada indikasi (asymmetric dengan cloudMenus)
+
+**Lokasi**: `src/store/menuStore.ts` — `loadFromCloud` (baris ~193-200).
+
+**Masalah**: 28.2 menambahkan toast warning saat `cloudMenus === null` (fetch gagal) dan return `false`. Namun `cloudComponents` di-fetch pada baris yang sama dan TIDAK diberi penanganan yang sama — bila `cloudComponents === null` (fetch gagal) tapi `cloudMenus` berhasil, kode diam-diam pakai `s.menuComponents` (fallback lokal, baris ~221) tanpa memberi tahu user bahwa data komponen mungkin stale.
+
+```ts
+const cloudMenus = await fetchMenusFromCloud();
+const cloudComponents = await fetchComponentsFromCloud();
+// 28.2: hanya cek cloudMenus
+if (cloudMenus === null) { ... return false; }
+// cloudComponents === null? → diam, pakai s.menuComponents (baris 221)
+```
+
+**Dampak**: User melihat menu dari cloud (segar) tapi komponen bundle dari lokal (mungkin stale). Tidak ada error, tidak crash — hanya potensi data bundle sedikit outdated. Risiko rendah karena komponen jarang berubah.
+
+**Severity**: 🟢 Rendah — fallback lokal aman (data tidak hilang), tapi user tidak tahu komponen mungkin stale.
+
+**Fix** (opsional): tambahkan toast info terpisah bila `cloudComponents === null && cloudMenus !== null`, atau sertakan dalam toast yang sama.
+
+### V-3 (🟢 Rendah) — `importMenus` menghapus semua tombstone
+
+**Lokasi**: `src/store/menuStore.ts` — `importMenus` (baris ~68).
+
+**Masalah**: `importMenus` melakukan `set({ menus, deletedMenuIds: [] })` — menghapus semua tombstone. Bila user memiliki tombstone untuk menu yang dihapus dari cloud, lalu melakukan import CSV, tombstone itu hilang. Pada `loadFromCloud` berikutnya, menu yang tadinya di-tombstone bisa kembali dari cloud (jika cloud belum menghapusnya).
+
+**Dampak**: Sangat kecil — import CSV adalah operasi yang menggantikan seluruh katalog, jadi masuk akal untuk reset tombstone. Selain itu, `setCatalogTouched()` dipanggil sebelumnya, sehingga `isPureSeedCatalog` returns false. Tombstone yang hilang hanya relevan bila cloud masih punya menu yang user ingin hapus permanen — kasus yang sangat jarang setelah import.
+
+**Severity**: 🟢 Rendah — perilaku ini bisa dibilang correct (import = fresh start). Tidak ada fix yang diperlukan.
+
+---
+
+## V.3 — Terverifikasi AMAN (tidak ada bug)
+
+| Area | Pemeriksaan | Hasil |
+|------|-------------|-------|
+| **U-F1 codepage** | `ESC t 0` di 4 builder (receipt, kitchen, printTextRaw, testPrint) | ✅ Konsisten — semua builder set codepage setelah `ESC @` |
+| **U-F2 chunk boundary** | Chunk 180 byte + UTF-8 boundary detection di `writeToPrinter` | ✅ Loop aman — edge case `end === i` (seluruh chunk continuation) ditangani dengan `Math.min` fallback, tidak ada infinite loop |
+| **U-F3 sanitize** | `sanitizeForThermalPrint` pure function, NFKD + replacements + strip non-Latin-1 | ✅ Null/empty aman, `??` berlebihan dibersihkan, tidak ubah ASCII murni |
+| **28.1 seed guard** | `isPureSeedCatalog` + `catalogTouched` di menuStore & inventoryStore | ✅ Empty array → true (aman: tidak push empty ke cloud); `setCatalogTouched` dipanggil di semua mutasi (add/update/delete/import) |
+| **28.2 fetch indicator** | `loadFromCloud` return `Promise<boolean>`, toast saat `null` | ✅ Signature kompatibel (pemanggil tidak baca nilai balikan lama); `!isSupabaseConfigured` tetap diam |
+| **28.3 tombstone** | `filterTombstoned` dari cloudMenus saat merge + `pruneConfirmedTombstones` | ✅ fullSync=true → localOnly=[] tapi cloudFiltered tetap di-filter; persist bersama `rempah-menus` |
+| **customItem** | `isCustomItem` (flag ATAU prefix), `shouldShowInKitchen`, `customItemReportKey` | ✅ Satu sumber kebenaran, 9 titik filter KDS konsisten |
+| **hpp.ts** | Pseudo-ingredient `manual_custom_*` dilewati `calculateItemDeductions` (prefix `manual_`) | ✅ Stok tidak tersentuh; HPP tercatat untuk laba kotor |
+| **promoDiscount** | `isItemEligibleForMenuScope` exclude custom dari scope menu/kategori/BOGO | ✅ Scope 'all' tetap hitung custom; gate minQty tetap hitung custom |
+| **cartStore merge** | Custom merge by (isCustom, name, basePrice, itemDiscount) | ✅ Tidak pernah merge dengan item menu; batch-aware |
+| **POS.tsx** | `kbGuardRef.manualItem`, F1 guard, Escape tutup modal, badge MANUAL | ✅ F1 tidak tumpuk modal; Escape menutup Item Manual; badge tampil mobile+desktop |
+| **PrinterStatusBanner** | `buildReconnectButtonPlan` cap ≤3, per-id disabled, `reconnectingAll` reset (T-2) | ✅ Pure function; state reset saat allConnected; toast error saat gagal |
+| **usePrinterMonitor** | `reconnectAll` try/catch per printer, `reconnectSilent` boot, T-1 hapus dead state | ✅ Tidak ada race; `previouslyConnected` sudah dihapus; status return boolean |
+| **Kitchen.tsx** | `shouldShowInKitchen` filter 9 titik + transactionStore `kitchenVisible` anti-macet | ✅ Custom tanpa target disembunyikan; status tidak macet |
+| **Reports.tsx** | `buildCategorySales` → bucket "Item Non-Menu" (P&L, tabel, PDF) | ✅ Satu perubahan mencakup 3 output; split equal dinormalisasi |
+| **Dashboard.tsx** | `buildMenuProfitability` tanpa dep `today` (R-A6) | ✅ useMemo tidak recompute tiap menit; `now` default di helper |
+| **Layout.tsx** | `handleLogoutWithoutClose` T-3 terverifikasi dipakai tombol Manager | ✅ Bukan dead code |
+| **reconnectPlan.ts** | Pure function, cap, fallback, per-id disabled | ✅ No side-effect, deterministic |
+| **categorySales.ts** | Pure function, skip bundle child, split normalization | ✅ Perilaku lama dipertahankan + bucket custom |
+| **menuSalesSummary.ts** | Key sintetis `CUSTOM_ITEM_BUCKET_KEY` (R-A5) | ✅ Tidak bentrok nama menu nyata |
+| **menuProfitability.ts** | `customItemReportKey` + `customItemReportName` | ✅ Konsisten dengan Dashboard & ringkasan shift |
+
+---
+
+## V.4 — Rekomendasi
+
+| # | Temuan | Severity | Aksi | Estimasi |
+|---|--------|----------|------|----------|
+| **V-1** | Baris detail item (addon) tidak di-sanitize di ESC/POS | 🟡 Sedang | Bungkus `detailStr` dengan `sanitizeForThermalPrint()` di `buildReceiptESCPOS` + `buildKitchenESCPOS` | 2 baris |
+| **V-2** | `cloudComponents` gagal tanpa indikasi | 🟢 Rendah | (Opsional) tambah toast info bila `cloudComponents === null && cloudMenus !== null` | 3 baris |
+| **V-3** | `importMenus` hapus semua tombstone | 🟢 Rendah | Tidak perlu aksi — perilaku correct (import = fresh start) | — |
+
+**Verdict**: Hanya **V-1** yang perlu dieksekusi — 2 baris fix melengkapi U-F3 agar sanitasi konsisten di SEMUA teks user yang dikirim ke printer. V-2 dan V-3 bersifat opsional/kosmetik.
