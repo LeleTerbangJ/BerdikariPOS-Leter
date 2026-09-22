@@ -14,7 +14,7 @@ import { useToastStore } from '../store/toastStore';
 import { usePromoStore } from '../store/promoStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { AtomicTransactionEngine } from '../lib/atomicTransactionEngine';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: Subscription duplikat dihapus — realtime sync sudah ditangani global di App.tsx
 import { formatRupiah } from '../utils/format';
 import { createSnapshotForCartItems, calculateItemDeductions } from '../utils/hpp';
 import { releaseSplitReserveForCart, computeCartSignature } from '../utils/splitStockSession';
@@ -449,78 +449,10 @@ export default function POS() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // GAP-3 fix: Real-time sync for menus, inventory, and customers (with GAP-2 auto-reconnect)
-  // So Kasir sees changes from Manager's device even without navigating away
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
+  // EGRESS-OPT: Subscription duplikat (menus, inventory, customers, settings) + visibilitychange
+  // handler telah dihapus. Realtime sync ditangani secara global di App.tsx untuk menghindari
+  // duplicate fetch yang menyebabkan egress tinggi. Lihat App.tsx subscriptions.
 
-    let menuChannel: any;
-    let invChannel: any;
-    let custChannel: any;
-    let settingsChannel: any;
-
-    const setupSubscriptions = () => {
-      if (menuChannel) supabase.removeChannel(menuChannel);
-      if (invChannel) supabase.removeChannel(invChannel);
-      if (custChannel) supabase.removeChannel(custChannel);
-      if (settingsChannel) supabase.removeChannel(settingsChannel);
-
-      menuChannel = supabase
-        .channel('pos-menus-rt-' + Math.random().toString(36).substring(2, 9))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => {
-          useMenuStore.getState().loadFromCloud(true);
-        })
-        .subscribe();
-
-      invChannel = supabase
-        .channel('pos-inventory-rt-' + Math.random().toString(36).substring(2, 9))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
-          useInventoryStore.getState().loadFromCloud(true);
-        })
-        .subscribe();
-
-      custChannel = supabase
-        .channel('pos-customers-rt-' + Math.random().toString(36).substring(2, 9))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, () => {
-          useCustomerStore.getState().loadFromCloud(true);
-        })
-        .subscribe();
-
-      settingsChannel = supabase
-        .channel('pos-settings-rt-' + Math.random().toString(36).substring(2, 9))
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => {
-          useSettingsStore.getState().loadFromCloud();
-          usePromoStore.getState().loadFromCloud(true);
-          useMenuStore.getState().loadFromCloud(true);
-        })
-        .subscribe();
-    };
-
-    setupSubscriptions();
-
-    const handleReconnect = () => {
-      if (document.visibilityState === 'visible' || navigator.onLine) {
-        console.log('[POS] Visibility or online restored, reconnecting subscriptions...');
-        useMenuStore.getState().loadFromCloud(true);
-        useInventoryStore.getState().loadFromCloud(true);
-        useCustomerStore.getState().loadFromCloud(true);
-        useSettingsStore.getState().loadFromCloud();
-        setupSubscriptions();
-      }
-    };
-
-    window.addEventListener('visibilitychange', handleReconnect);
-    window.addEventListener('online', handleReconnect);
-
-    return () => {
-      if (menuChannel) supabase.removeChannel(menuChannel);
-      if (invChannel) supabase.removeChannel(invChannel);
-      if (custChannel) supabase.removeChannel(custChannel);
-      if (settingsChannel) supabase.removeChannel(settingsChannel);
-      window.removeEventListener('visibilitychange', handleReconnect);
-      window.removeEventListener('online', handleReconnect);
-    };
-  }, []);
 
   // BUG-C5 fix: useCallback + proper dependency array instead of re-binding every render
   const handleCheckoutCb = useCallback(() => {

@@ -8,7 +8,7 @@ import { useCustomerStore } from '../store/customerStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
-import { subscribeToTransactions, unsubscribeChannel, fetchTransactionsFromCloud, mapCloudRowToTransaction } from '../lib/cloudSync';
+import { fetchTransactionsFromCloud } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
@@ -92,6 +92,8 @@ export default function Transactions() {
   const [perPage, setPerPage] = useState(10);
 
   // Sync with cloud on mount + real-time subscription
+  // EGRESS-OPT: subscribeToTransactions dihapus — ditangani global di App.tsx.
+  // handleOnline dipertahankan untuk memperbarui confirmedSyncIds saat koneksi pulih (v4.7 O-5).
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -101,23 +103,12 @@ export default function Transactions() {
       });
     };
 
-    // 🏷️ v4.9.2: Direct Ingestion dari WebSocket (< 300ms)
-    const channel = subscribeToTransactions((payload: any) => {
-      if (payload?.eventType === 'DELETE' && payload.old?.id) {
-        deleteTransactionLocal(payload.old.id);
-      } else if (payload?.new) {
-        const tx = mapCloudRowToTransaction(payload.new);
-        upsertTransactionFromRealtime(tx);
-      }
-    });
-
     // v4.7 TO DO 13.7 (O-5): saat koneksi pulih, tarik cloud → confirmedSyncIds diperbarui
     // (badge "Belum Sync" hilang untuk transaksi yang baru saja ter-flush dari offline queue)
     const handleOnline = () => refreshFromCloud(true);
     window.addEventListener('online', handleOnline);
 
     return () => {
-      if (channel) unsubscribeChannel(channel);
       window.removeEventListener('online', handleOnline);
     };
   }, []);

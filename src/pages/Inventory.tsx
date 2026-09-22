@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useStockOpnameStore } from '../store/stockOpnameStore';
 import { useAuthStore } from '../store/authStore';
 import { useAuditLogStore } from '../store/auditLogStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { subscribeToStockOpnames, unsubscribeChannel } from '../lib/cloudSync';
+// EGRESS-OPT: Realtime subscription untuk inventory & stock_opnames ditangani global di App.tsx
 import { formatRupiah } from '../utils/format';
 import type { ParsedImportRow } from '../utils/stockImport';
 import type { InventoryItem } from '../types';
@@ -34,26 +33,7 @@ export default function Inventory() {
   const { addLog } = useAuditLogStore();
   const [activeTab, setActiveTab] = useState<'inventory' | 'opname'>('inventory');
 
-  // LOGIC-06 fix: Real-time sync for inventory and stock opnames
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    const channelName = 'inv-page-rt-' + Math.random().toString(36).substring(2, 9);
-    const invChannel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
-        loadFromCloud(true);
-      })
-      .subscribe();
-
-    const opnameChannel = subscribeToStockOpnames(() => {
-      useStockOpnameStore.getState().loadFromCloud();
-    });
-
-    return () => {
-      if (invChannel) try { supabase.removeChannel(invChannel); } catch (e) {}
-      if (opnameChannel) unsubscribeChannel(opnameChannel);
-    };
-  }, []);
+  // EGRESS-OPT: Realtime sync inventory dan stock_opnames sudah ditangani global di App.tsx
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'low'>('all');
