@@ -4,7 +4,7 @@ import { useCustomerStore } from '../store/customerStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useAuthStore } from '../store/authStore';
 import { useAuditLogStore } from '../store/auditLogStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { formatRupiah } from '../utils/format';
 import type { Customer } from '../types';
 import Modal from '../components/Modal';
@@ -18,18 +18,8 @@ export default function Customers() {
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
 
-  // Real-time sync for customers
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    const channelName = 'cust-rt-' + Math.random().toString(36).substring(2, 9);
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, () => {
-        loadFromCloud(true); // fullSync: cloud is authoritative
-      })
-      .subscribe();
-    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
-  }, []);
+  // EGRESS-OPT: Subscription customers dihapus — ditangani global di App.tsx
+
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);

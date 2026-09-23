@@ -5,7 +5,7 @@ import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useSettingsStore } from '../store/settingsStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { formatRupiah } from '../utils/format';
 import { calculateMenuHPP } from '../utils/hpp';
 import { validateMenuComponent } from '../lib/bundleValidation';
@@ -49,18 +49,7 @@ export default function Catalog() {
     return Array.from(targets);
   }, [settings.kitchenPrinters]);
 
-  // Real-time sync for menus
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    const channelName = 'cat-menus-rt-' + Math.random().toString(36).substring(2, 9);
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => {
-        loadFromCloud(true);
-      })
-      .subscribe();
-    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
-  }, []);
+  // EGRESS-OPT: Subscription menus dihapus — ditangani global di App.tsx
 
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('Semua');

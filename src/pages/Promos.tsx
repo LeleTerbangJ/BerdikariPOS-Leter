@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { v4 as uuid } from 'uuid';
 import { usePromoStore } from '../store/promoStore';
 import { useMenuStore } from '../store/menuStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { formatRupiah } from '../utils/format';
 import { validatePromoForm } from '../utils/promoValidation';
 import type { Promo, PromoType, PromoScope } from '../types';
@@ -24,18 +24,8 @@ export default function Promos() {
   const { promos, addPromo, updatePromo, deletePromo, loyaltySettings, updateLoyaltySettings, loadFromCloud } = usePromoStore();
   const { getCategories, menus } = useMenuStore();
 
-  // Real-time sync for promos
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    const channelName = 'promos-rt-' + Math.random().toString(36).substring(2, 9);
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'promos' }, () => {
-        loadFromCloud(true);
-      })
-      .subscribe();
-    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
-  }, []);
+  // EGRESS-OPT: Subscription promos dihapus — ditangani global di App.tsx
+
 
   const [activeSection, setActiveSection] = useState<'promos' | 'loyalty'>('promos');
   const [showForm, setShowForm] = useState(false);

@@ -1012,6 +1012,40 @@ export function subscribeToShifts(callback: (payload: any) => void) {
   return channel;
 }
 
+// EGRESS-OPT: Global Realtime subscription untuk customers — menggantikan subscription
+// duplikat di POS.tsx dan Customers.tsx. Satu subscription untuk semua halaman.
+export function subscribeToCustomers(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+  const channelName = `customers-rt-${Math.random().toString(36).substring(2, 9)}`;
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'customers' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
+// EGRESS-OPT: Global Realtime subscription untuk promos — menggantikan subscription
+// di Promos.tsx. Satu subscription untuk semua halaman.
+export function subscribeToPromos(callback: (payload: any) => void) {
+  if (!isSupabaseConfigured) return null;
+  const channelName = `promos-rt-${Math.random().toString(36).substring(2, 9)}`;
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'promos' },
+      callback
+    )
+    .subscribe();
+
+  return channel;
+}
+
 export function subscribeToMenuComponents(callback: (payload: any) => void) {
   if (!isSupabaseConfigured) return null;
   const channelName = `menu-components-rt-${Math.random().toString(36).substring(2, 9)}`;

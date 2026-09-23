@@ -64,24 +64,47 @@ export default function Kitchen() {
     fetchData();
     setupSubscription();
 
-    // Listen to visibilitychange and online events to auto-reconnect (GAP-2 fix)
-    const handleReconnect = () => {
-      if (document.visibilityState === 'visible' || navigator.onLine) {
-        console.log('[KDS] Visibility or online restored, reconnecting subscription...');
-        fetchTransactionsFromCloud().then((cloudTx) => {
-          if (cloudTx) loadFromCloud(cloudTx, true);
-        });
-        setupSubscription();
+    // EGRESS-OPT: visibilitychange handler dengan debounce + channel state check.
+    // Hanya fetch ulang jika channel Realtime terputus (browser bisa membunuh WebSocket saat tab idle).
+    // Debounce 5 detik mencegah burst request saat user berpindah tab cepat.
+    let lastReconnect = 0;
+    const RECONNECT_DEBOUNCE_MS = 5000;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastReconnect < RECONNECT_DEBOUNCE_MS) return;
+      lastReconnect = now;
+
+      // Cek apakah channel masih aktif — jika ya, skip (data sudah ter-patch via Realtime)
+      const channelState = channel?.state;
+      if (channelState === 'joined') {
+        console.log('[KDS] Tab visible, channel still joined — skipping reconnect.');
+        return;
       }
+
+      console.log('[KDS] Tab visible, channel state:', channelState, '— reconnecting...');
+      fetchTransactionsFromCloud().then((cloudTx) => {
+        if (cloudTx) loadFromCloud(cloudTx, true);
+      });
+      setupSubscription();
     };
 
-    window.addEventListener('visibilitychange', handleReconnect);
-    window.addEventListener('online', handleReconnect);
+    const handleOnline = () => {
+      console.log('[KDS] Online restored, reconnecting subscription...');
+      fetchTransactionsFromCloud().then((cloudTx) => {
+        if (cloudTx) loadFromCloud(cloudTx, true);
+      });
+      setupSubscription();
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
 
     return () => {
       if (channel) unsubscribeChannel(channel);
-      window.removeEventListener('visibilitychange', handleReconnect);
-      window.removeEventListener('online', handleReconnect);
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 

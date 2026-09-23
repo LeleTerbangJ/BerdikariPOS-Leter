@@ -4,7 +4,7 @@ import { useToastStore } from '../store/toastStore';
 import { useAuthStore } from '../store/authStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useAuditLogStore } from '../store/auditLogStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { formatRupiah, formatDate } from '../utils/format';
 import type { CashMovement, CashMovementType } from '../types';
 import Modal from '../components/Modal';
@@ -49,17 +49,10 @@ export default function CashMovements() {
   const { activeShift } = useShiftStore();
   const { addLog } = useAuditLogStore();
 
-  // Real-time sync for cash movements + retry otomatis saat kembali online (v4.6 fix #3)
+  // EGRESS-OPT: Subscription cash_movements dihapus — ditangani global di App.tsx.
+  // loadFromCloud saat mount + online handler dipertahankan (v4.6 fix #3: retry entri "Belum Sync").
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
     loadFromCloud(true);
-    const channelName = 'cm-page-rt-' + Math.random().toString(36).substring(2, 9);
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_movements' }, () => {
-        loadFromCloud(true);
-      })
-      .subscribe();
     // v4.6 fix #3: saat koneksi pulih, tarik ulang dari cloud — entri "Belum Sync"
     // didorong ke cloud (via offline queue/loadFromCloud) dan badge otomatis hilang.
     const handleOnline = () => {
@@ -67,7 +60,6 @@ export default function CashMovements() {
     };
     window.addEventListener('online', handleOnline);
     return () => {
-      try { supabase.removeChannel(channel); } catch (e) {}
       window.removeEventListener('online', handleOnline);
     };
   }, []);

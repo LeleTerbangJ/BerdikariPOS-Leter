@@ -6,7 +6,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useAuditLogStore } from '../store/auditLogStore';
 import { useShiftStore } from '../store/shiftStore';
 import { useToastStore } from '../store/toastStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+// EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { connectBluetoothPrinter, disconnectBluetoothPrinter, isBluetoothConnected, CASHIER_PRINTER_ID, getBluetoothStatus, getDuplicateDeviceInfo, testPrintBluetooth } from '../utils/printer';
 import { resetToDefault, clearOperationalData, factoryReset, type ResetActor } from '../utils/dataManager';
 import { BackupService, downloadBlob } from '../lib/backupService';
@@ -49,18 +49,8 @@ export default function SettingsPage() {
   // v4.7 TO DO 12.1.3 / P-A1: backup otomatis sebelum aksi reset (default ON)
   const [backupBeforeReset, setBackupBeforeReset] = useState(true);
 
-  // Real-time sync for users
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    const channelName = 'settings-users-rt-' + Math.random().toString(36).substring(2, 9);
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
-        loadUsersFromCloud(true);
-      })
-      .subscribe();
-    return () => { try { supabase.removeChannel(channel); } catch (e) {} };
-  }, []);
+  // EGRESS-OPT: Subscription users dihapus — ditangani global di App.tsx
+
 
   // Store settings
   const [storeName, setStoreName] = useState(settings.storeName);

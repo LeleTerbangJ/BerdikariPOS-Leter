@@ -16,7 +16,8 @@ import { useToastStore } from './store/toastStore';
 import { updateFavicon, updatePageTitle } from './utils/favicon';
 import { hexToRgbValues } from './utils/theme';
 import { initOfflineQueue } from './lib/offlineQueue';
-import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToShifts, subscribeToTransactions, unsubscribeChannel, mapCloudRowToTransaction } from './lib/cloudSync';
+import { isSupabaseConfigured } from './lib/supabase';
+import { fetchTransactionsFromCloud, runMigrations, subscribeToUsers, subscribeToSettings, subscribeToMenus, subscribeToInventory, subscribeToCashMovements, subscribeToShifts, subscribeToTransactions, subscribeToCustomers, subscribeToPromos, subscribeToStockOpnames, unsubscribeChannel, mapCloudRowToTransaction } from './lib/cloudSync';
 import { startAutoBackupScheduler, stopAutoBackupScheduler } from './lib/autoBackupScheduler';
 import Layout from './components/Layout';
 import OpenShiftModal from './components/OpenShiftModal';
@@ -177,65 +178,191 @@ export default function App() {
   }, []);
 
   // Subscribe to realtime users table changes to prevent multi-device logins
+  // Subscribe to realtime changes across tables (global single subscriptions)
+  // Subscribe to realtime changes across tables (global single subscriptions)
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !isSupabaseConfigured) return;
 
-    const userChannel = subscribeToUsers((payload: any) => {
-      if (payload.new && payload.new.id === currentUser.id) {
-        const localActiveSessionId = currentUser.activeSessionId;
-        const newActiveSessionId = payload.new.active_session_id;
+    let userChannel: any;
+    let settingsChannel: any;
+    let menuChannel: any;
+    let inventoryChannel: any;
+    let cashMovementChannel: any;
+    let shiftChannel: any;
+    let customerChannel: any;
+    let promoChannel: any;
+    let stockOpnameChannel: any;
 
-        // If there's a different session ID active in cloud, log out local session
-        if (newActiveSessionId && localActiveSessionId && newActiveSessionId !== localActiveSessionId) {
-          // v4.7 TO DO 20.2: alert → toast (konsisten dengan konvensi UI)
-          useToastStore.getState().addToast('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.', 'warning');
-          useAuthStore.getState().logout();
-          window.location.href = '/';
-        }
-      }
-    });
-
-    // Realtime settings subscription: sync Manager PIN & app settings immediately across devices
-    const settingsChannel = subscribeToSettings(() => {
-      useSettingsStore.getState().loadFromCloud();
-    });
-
-    // Global Realtime subscription for menus across all devices
-    const menuChannel = subscribeToMenus(() => {
-      useMenuStore.getState().loadFromCloud(true);
-    });
-
-    // Global Realtime subscription for inventory across all devices
-    const inventoryChannel = subscribeToInventory(() => {
-      useInventoryStore.getState().loadFromCloud(true);
-    });
-
-    // Global Realtime subscription for cash movements (Rekap Kas) across all devices
-    const cashMovementChannel = subscribeToCashMovements((payload: any) => {
-      if (payload?.eventType === 'DELETE' && payload.old?.id) {
-        useCashMovementStore.getState().deleteMovementLocal(payload.old.id);
-      } else {
-        useCashMovementStore.getState().loadFromCloud(true);
-      }
-    });
-
-    // H.3 Pilar 3 (v4.9.3): Global Realtime subscription untuk shifts — tutup shift
-    // (normal / force close Manager) di perangkat mana pun langsung tercermin di semua
-    // device. Merge LWW ditangani shiftStore.loadFromCloud (clear activeShift bila versi
-    // cloud 'closed' + restore shift terbuka paling awal) — TIDAK ada set mentah.
-    const shiftChannel = subscribeToShifts(() => {
-      useShiftStore.getState().loadFromCloud();
-    });
-
-    return () => {
+    const cleanupSubscriptions = () => {
       if (userChannel) unsubscribeChannel(userChannel);
       if (settingsChannel) unsubscribeChannel(settingsChannel);
       if (menuChannel) unsubscribeChannel(menuChannel);
       if (inventoryChannel) unsubscribeChannel(inventoryChannel);
       if (cashMovementChannel) unsubscribeChannel(cashMovementChannel);
       if (shiftChannel) unsubscribeChannel(shiftChannel);
+      if (customerChannel) unsubscribeChannel(customerChannel);
+      if (promoChannel) unsubscribeChannel(promoChannel);
+      if (stockOpnameChannel) unsubscribeChannel(stockOpnameChannel);
     };
-  }, [currentUser]);
+
+    const setupSubscriptions = () => {
+      cleanupSubscriptions();
+
+      userChannel = subscribeToUsers((payload: any) => {
+        // Multi-device login check & deletion check
+        if (payload?.eventType === 'DELETE' && payload.old?.id === currentUser.id) {
+          useToastStore.getState().addToast('Akun Anda telah dinonaktifkan.', 'error');
+          useAuthStore.getState().logout();
+          window.location.href = '/';
+          return;
+        }
+
+        if (payload.new && payload.new.id === currentUser.id) {
+          const localActiveSessionId = currentUser.activeSessionId;
+          const newActiveSessionId = payload.new.active_session_id;
+
+          // If there's a different session ID active in cloud, log out local session
+          if (newActiveSessionId && localActiveSessionId && newActiveSessionId !== localActiveSessionId) {
+            useToastStore.getState().addToast('Akun Anda telah masuk di perangkat lain. Sesi ini akan ditutup.', 'warning');
+            useAuthStore.getState().logout();
+            window.location.href = '/';
+            return;
+          }
+        }
+
+        // EGRESS-OPT: Hanya sinkronisasi ulang tabel users jika ada mutasi kredensial/role/user baru/penghapusan.
+        // Bandingkan payload.new dengan data user lokal di authStore (bukan payload.old, karena default Postgres
+        // REPLICA IDENTITY hanya mengirim primary key pada payload.old).
+        const existingUsers = useAuthStore.getState().users;
+        const targetUser = existingUsers.find((u) => u.id === (payload.new?.id || payload.old?.id));
+
+        const isAuthCredentialMutation =
+          payload?.eventType === 'DELETE' ||
+          (payload?.eventType === 'INSERT' && !existingUsers.some((u) => u.id === payload.new?.id)) ||
+          (payload?.new && targetUser && (
+            payload.new.username !== targetUser.username ||
+            payload.new.role !== targetUser.role ||
+            payload.new.password !== targetUser.password ||
+            payload.new.name !== targetUser.name
+          ));
+
+        if (isAuthCredentialMutation) {
+          useAuthStore.getState().loadFromCloud(true);
+        }
+      });
+
+      // Realtime settings subscription: sync Manager PIN & app settings immediately across devices
+      settingsChannel = subscribeToSettings(() => {
+        useSettingsStore.getState().loadFromCloud();
+      });
+
+      // Global Realtime subscription for menus across all devices
+      menuChannel = subscribeToMenus(() => {
+        useMenuStore.getState().loadFromCloud(true);
+      });
+
+      // Global Realtime subscription for inventory across all devices
+      inventoryChannel = subscribeToInventory(() => {
+        useInventoryStore.getState().loadFromCloud(true);
+      });
+
+      // Global Realtime subscription for cash movements (Rekap Kas) across all devices
+      cashMovementChannel = subscribeToCashMovements((payload: any) => {
+        if (payload?.eventType === 'DELETE' && payload.old?.id) {
+          useCashMovementStore.getState().deleteMovementLocal(payload.old.id);
+        } else {
+          useCashMovementStore.getState().loadFromCloud(true);
+        }
+      });
+
+      // H.3 Pilar 3 (v4.9.3): Global Realtime subscription untuk shifts — tutup shift
+      // (normal / force close Manager) di perangkat mana pun langsung tercermin di semua
+      // device. Merge LWW ditangani shiftStore.loadFromCloud (clear activeShift bila versi
+      // cloud 'closed' + restore shift terbuka paling awal) — TIDAK ada set mentah.
+      shiftChannel = subscribeToShifts(() => {
+        useShiftStore.getState().loadFromCloud();
+      });
+
+      // EGRESS-OPT: Global Realtime subscription untuk customers across all devices
+      customerChannel = subscribeToCustomers(() => {
+        useCustomerStore.getState().loadFromCloud(true);
+      });
+
+      // EGRESS-OPT: Global Realtime subscription untuk promos across all devices
+      promoChannel = subscribeToPromos(() => {
+        usePromoStore.getState().loadFromCloud(true);
+      });
+
+      // EGRESS-OPT: Global Realtime subscription untuk stock_opnames across all devices
+      stockOpnameChannel = subscribeToStockOpnames(() => {
+        useStockOpnameStore.getState().loadFromCloud();
+      });
+    };
+
+    setupSubscriptions();
+
+    // EGRESS-OPT: visibilitychange handler dengan debounce + channel state check + channel re-subscribe.
+    // Hanya fetch ulang jika ada channel Realtime yang terputus (WebSocket tertidur/mati saat tab idle/background).
+    // Jika semua channel masih 'joined', tidak perlu fetch ulang (menghemat egress dari burst tab switching).
+    let lastReconnect = 0;
+    const RECONNECT_DEBOUNCE_MS = 5000;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastReconnect < RECONNECT_DEBOUNCE_MS) return;
+      lastReconnect = now;
+
+      const channels = [
+        userChannel,
+        settingsChannel,
+        menuChannel,
+        inventoryChannel,
+        cashMovementChannel,
+        shiftChannel,
+        customerChannel,
+        promoChannel,
+        stockOpnameChannel,
+      ];
+
+      // Channel dianggap putus jika statusnya jelas 'closed'/'errored', ATAU jika pernah terhubung (joinedOnce)
+      // tetapi sekarang tidak lagi 'joined'. Status 'joining' di awal tidak dianggap putus agar handshake awal tidak terinterupsi.
+      const hasDisconnected = channels.some(
+        (ch) => ch && (ch.state === 'closed' || ch.state === 'errored' || (ch.joinedOnce && ch.state !== 'joined'))
+      );
+      if (!hasDisconnected) {
+        // Channel masih 'joined' — event Realtime tetap masuk, tidak perlu re-fetch full tabel
+        return;
+      }
+
+      console.log('[App] Disconnected realtime channel detected on visibility change, reconnecting channels & refreshing data...');
+      // Re-subscribe channel yang mati agar event realtime berikutnya tetap diterima
+      setupSubscriptions();
+
+      useSettingsStore.getState().loadFromCloud();
+      useMenuStore.getState().loadFromCloud(true);
+      useInventoryStore.getState().loadFromCloud(true);
+      useCustomerStore.getState().loadFromCloud(true);
+      usePromoStore.getState().loadFromCloud(true);
+      useShiftStore.getState().loadFromCloud();
+      useCashMovementStore.getState().loadFromCloud(true);
+      useStockOpnameStore.getState().loadFromCloud();
+    };
+
+    const handleOnline = () => {
+      console.log('[App] Online restored, checking connection state...');
+      handleVisibilityChange();
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      cleanupSubscriptions();
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [currentUser?.id]);
 
   return (
     <>
