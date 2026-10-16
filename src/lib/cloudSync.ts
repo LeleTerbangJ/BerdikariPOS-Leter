@@ -875,6 +875,58 @@ export async function fetchTransactionsFromCloud(): Promise<Transaction[] | null
 }
 
 // ============================================================
+// ON-DEMAND HISTORICAL DATE-RANGE FETCH (for Reports & Riwayat Transaksi)
+// ============================================================
+// Arsitektur Dua Jalur — jalur ini HANYA dipanggil saat user membuka laporan
+// dengan filter tanggal yang melampaui jangkauan 500 transaksi terbaru.
+// Menggunakan kolom selektif (bukan SELECT *) untuk menekan Egress Supabase.
+
+export async function fetchTransactionsByDateRange(
+  startDate: string,
+  endDate: string,
+  limit = 2000
+): Promise<Transaction[] | null> {
+  if (!isSupabaseConfigured) return null;
+  const SELECT_COLUMNS =
+    'id, queue_number, date, items, subtotal, discount, total_amount, payment_method, cash_received, change, kitchen_status, tx_status, cashier_id, cashier_name, customer_id, customer_name, hpp, tax, order_type, table_number, table_name, split_parent_id, split_index, total_split_count, refunded, refunded_at, refunded_amount, refund_note, refunded_by_id, refunded_by_name, pending_notes, paid_amount, applied_promo_id, voucher_code, promo_name, promo_amount, kitchen_ticket_printed_at, updated_at';
+
+  try {
+    let { data, error } = await supabase
+      .from('transactions')
+      .select(SELECT_COLUMNS)
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .order('date', { ascending: false })
+      .limit(limit);
+
+    // Defense-in-depth: jika query kolom selektif gagal karena ada kolom yang belum dimigrasi di DB Supabase klien,
+    // fallback otomatis ke select('*') agar laporan historis tidak blank/gagal total.
+    if (error && (error.message?.includes('column') || error.message?.includes('does not exist'))) {
+      console.warn('[CloudSync] fetchTransactionsByDateRange query selektif gagal, fallback ke select(*):', error.message);
+      const fallback = await supabase
+        .from('transactions')
+        .select('*')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false })
+        .limit(limit);
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error) {
+      console.error('[CloudSync] fetchTransactionsByDateRange error:', error.message);
+      throw error;
+    }
+    console.log(`[CloudSync] Fetched ${data?.length || 0} historical transactions (${startDate} → ${endDate}, limit ${limit})`);
+    return data?.map(mapCloudRowToTransaction) || [];
+  } catch (e) {
+    console.error('[CloudSync] fetchTransactionsByDateRange EXCEPTION:', e);
+    return null;
+  }
+}
+
+// ============================================================
 // REAL-TIME SUBSCRIPTION (for KDS)
 // ============================================================
 

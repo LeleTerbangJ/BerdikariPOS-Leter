@@ -8,7 +8,7 @@ import { useCustomerStore } from '../store/customerStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { useCashMovementStore } from '../store/cashMovementStore';
-import { fetchTransactionsFromCloud } from '../lib/cloudSync';
+import { fetchTransactionsFromCloud, fetchTransactionsByDateRange } from '../lib/cloudSync';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatRupiah, formatDate, buildCustomDateRange } from '../utils/format';
 import { calculateItemDeductions } from '../utils/hpp';
@@ -49,10 +49,7 @@ import {
 type DateFilterType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
 export default function Transactions() {
-  // v4.7 TO DO 13.7 (O-5): confirmedSyncIds — badge "Belum Sync" per transaksi
   const { transactions, updateTxStatus, deleteTransaction, loadFromCloud, updateTxMeta, confirmedSyncIds, deleteTransactionLocal, upsertTransactionFromRealtime } = useTransactionStore();
-  // v4.7 TO DO 18.2 (Prioritas 18): nomor antrean yang muncul > 1× di hari yang sama (2 kasir offline)
-  const dupQueueNumbers = useMemo(() => findDuplicateQueueNumbers(transactions), [transactions]);
   const { currentUser } = useAuthStore();
   const { addLog } = useAuditLogStore();
   const { menus } = useMenuStore();
@@ -91,6 +88,13 @@ export default function Transactions() {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(10);
 
+  // ============================================================
+  // On-Demand Historical Date-Range Fetch (Arsitektur Dua Jalur)
+  // ============================================================
+  const [historicalTx, setHistoricalTx] = useState<Transaction[]>([]);
+  const [isLoadingHistorical, setIsLoadingHistorical] = useState(false);
+  const fetchIdRef = useRef(0);
+
   // Sync with cloud on mount + real-time subscription
   // EGRESS-OPT: subscribeToTransactions dihapus — ditangani global di App.tsx.
   // handleOnline dipertahankan untuk memperbarui confirmedSyncIds saat koneksi pulih (v4.7 O-5).
@@ -113,11 +117,97 @@ export default function Transactions() {
     };
   }, []);
 
+  // Gabungkan transaksi lokal (store) dengan historis (cloud on-demand) — anti duplikasi via Map
+  const allTransactions = useMemo(() => {
+    if (historicalTx.length === 0) return transactions;
+    const map = new Map<string, Transaction>();
+    transactions.forEach((t) => map.set(t.id, t));
+    historicalTx.forEach((t) => { if (!map.has(t.id)) map.set(t.id, t); });
+    return Array.from(map.values());
+  }, [transactions, historicalTx]);
+
+  const historicalIdSet = useMemo(() => new Set(historicalTx.map((t) => t.id)), [historicalTx]);
+  // v4.7 TO DO 18.2 (Prioritas 18): nomor antrean yang muncul > 1× di hari yang sama (2 kasir offline)
+  const dupQueueNumbers = useMemo(() => findDuplicateQueueNumbers(allTransactions), [allTransactions]);
+
+  // Hitung dateFrom/dateTo untuk trigger on-demand historical fetch
+  const { dateFrom, dateTo } = useMemo(() => {
+    const now = new Date();
+    switch (dateFilter) {
+      case 'today': {
+        const from = new Date(now); from.setHours(0, 0, 0, 0);
+        const to = new Date(now); to.setHours(23, 59, 59, 999);
+        return { dateFrom: from, dateTo: to };
+      }
+      case 'week': {
+        const from = new Date(now); from.setDate(from.getDate() - 7);
+        return { dateFrom: from, dateTo: now };
+      }
+      case 'month': {
+        const from = new Date(now.getFullYear(), now.getMonth(), 1);
+        const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        return { dateFrom: from, dateTo: to };
+      }
+      case 'all':
+        return { dateFrom: new Date(0), dateTo: new Date(2099, 11, 31) };
+      case 'custom': {
+        const { from, to } = buildCustomDateRange(customDateFrom, customDateTo);
+        return { dateFrom: from, dateTo: to };
+      }
+      default:
+        return { dateFrom: new Date(0), dateTo: new Date() };
+    }
+  }, [dateFilter, customDateFrom, customDateTo]);
+
+  // On-Demand Historical Fetch — dipicu saat filter tanggal berubah
+  useEffect(() => {
+    // 1. 'today' selalu ada di 500 transaksi terbaru — reset & skip fetch
+    if (dateFilter === 'today' || dateFilter === 'all') {
+      setHistoricalTx([]);
+      return;
+    }
+    // 2. Guard 'custom': jika user belum mengisi tanggal mulai, jangan fetch dari epoch 1970
+    if (dateFilter === 'custom' && !customDateFrom) {
+      setHistoricalTx([]);
+      return;
+    }
+    if (!isSupabaseConfigured) return;
+
+    // Hitung tanggal transaksi tertua dari store lokal secara imperatif
+    const storeTx = useTransactionStore.getState().transactions;
+    const localDates = storeTx
+      .filter((t) => !t.splitParentId)
+      .map((t) => new Date(t.date).getTime());
+    const oldestLocalTime = localDates.length > 0
+      ? localDates.reduce((min, d) => Math.min(min, d), Infinity)
+      : Date.now();
+
+    // Jika dateFrom >= oldestLocalTime — semua data yang diminta sudah ada di memori lokal
+    if (dateFrom.getTime() >= oldestLocalTime) {
+      setHistoricalTx([]);
+      return;
+    }
+
+    const currentFetchId = ++fetchIdRef.current;
+    setIsLoadingHistorical(true);
+
+    fetchTransactionsByDateRange(dateFrom.toISOString(), dateTo.toISOString())
+      .then((data) => {
+        if (fetchIdRef.current !== currentFetchId) return;
+        if (data) setHistoricalTx(data);
+        setIsLoadingHistorical(false);
+      })
+      .catch(() => {
+        if (fetchIdRef.current !== currentFetchId) return;
+        setIsLoadingHistorical(false);
+      });
+  }, [dateFilter, dateFrom.getTime(), dateTo.getTime(), customDateFrom]);
+
   // BUG-03 fix: Filter transactions dynamically based on Date Filter, Status Filter & Search Query
   const filteredTx = useMemo(() => {
     const now = new Date();
 
-    return transactions.filter((t) => {
+    return allTransactions.filter((t) => {
       // v4.5 Perbaikan 4.3: Sembunyikan sub-bill (anak split) dari daftar transaksi — cukup tampilkan induk saja
       if (t.splitParentId) return false;
 
@@ -175,7 +265,12 @@ export default function Transactions() {
 
       return true;
     });
-  }, [transactions, dateFilter, customDateFrom, customDateTo, searchQuery, statusFilter]);
+  }, [allTransactions, dateFilter, customDateFrom, customDateTo, searchQuery, statusFilter]);
+
+  const historicalCount = useMemo(
+    () => filteredTx.filter((t) => historicalIdSet.has(t.id)).length,
+    [filteredTx, historicalIdSet]
+  );
 
   // Pagination calculation
   const totalPages = Math.ceil(filteredTx.length / perPage) || 1;
@@ -226,7 +321,7 @@ export default function Transactions() {
   // v4.1 TO DO 1.6: Transaksi anak hasil split bill, atau transaksi induk yang memiliki anak split,
   // tidak boleh di-revert/deduct stok otomatis — stok dikelola sesi split (reserve penuh di sub-bill pertama).
   const hasSplitChildren = (tx: Transaction): boolean =>
-    !!tx.splitParentId || transactions.some((t) => t.splitParentId === tx.id);
+    !!tx.splitParentId || allTransactions.some((t) => t.splitParentId === tx.id);
 
   // v4.7 TO DO 8.1 & 8.2: Satu-satunya jalur efek stok/kunjungan untuk transisi status & delete
   // (sebelumnya dua rantai if-else identik di onConfirmAction & onPinSuccess — Demo→Selesai
@@ -256,12 +351,15 @@ export default function Transactions() {
   const onConfirmAction = () => {
     if (!confirmAction) return;
     if (confirmAction.type === 'status' && confirmAction.status) {
-      const tx = transactions.find((t) => t.id === confirmAction.id);
+      const tx = allTransactions.find((t) => t.id === confirmAction.id);
       if (tx) {
         // TO DO 8.1: termasuk Demo → Selesai (sebelumnya hanya Cancel → Selesai yang deduct)
         applyStockEffects(tx, confirmAction.status);
       }
       updateTxStatus(confirmAction.id, confirmAction.status);
+      setHistoricalTx((prev) =>
+        prev.map((t) => (t.id === confirmAction.id ? { ...t, txStatus: confirmAction.status!, updatedAt: new Date().toISOString() } : t))
+      );
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'void_transaction', `Ubah status transaksi #${confirmAction.queueNumber || '?'} menjadi ${confirmAction.status}`, { transactionId: confirmAction.id, newStatus: confirmAction.status });
       }
@@ -269,11 +367,12 @@ export default function Transactions() {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
       // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
       // v4.7 TO DO 8.2: hapus Pending juga me-revert stok reserve (sebelumnya hanya Selesai).
-      const tx = transactions.find((t) => t.id === confirmAction.id);
+      const tx = allTransactions.find((t) => t.id === confirmAction.id);
       if (tx) {
         applyStockEffects(tx, 'DELETE');
       }
       deleteTransaction(confirmAction.id);
+      setHistoricalTx((prev) => prev.filter((t) => t.id !== confirmAction.id));
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_transaction', `Hapus transaksi #${confirmAction.queueNumber || '?'}`, { transactionId: confirmAction.id });
       }
@@ -284,12 +383,15 @@ export default function Transactions() {
   const onPinSuccess = () => {
     if (!pinAction) return;
     if (pinAction.type === 'status' && pinAction.status) {
-      const tx = transactions.find((t) => t.id === pinAction.id);
+      const tx = allTransactions.find((t) => t.id === pinAction.id);
       if (tx) {
         // TO DO 8.1: termasuk Demo → Selesai (sebelumnya hanya Cancel → Selesai yang deduct)
         applyStockEffects(tx, pinAction.status);
       }
       updateTxStatus(pinAction.id, pinAction.status);
+      setHistoricalTx((prev) =>
+        prev.map((t) => (t.id === pinAction.id ? { ...t, txStatus: pinAction.status!, updatedAt: new Date().toISOString() } : t))
+      );
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'void_transaction', `Ubah status transaksi ${pinAction.id} menjadi ${pinAction.status}`, { transactionId: pinAction.id, newStatus: pinAction.status });
       }
@@ -297,11 +399,12 @@ export default function Transactions() {
       // ISSUE-1 fix: Revert stock & customer before deleting a completed transaction
       // v4.1 TO DO 1.6: Guard stok transaksi split (anak / induk beranak) — dikelola sesi split.
       // v4.7 TO DO 8.2: hapus Pending juga me-revert stok reserve (sebelumnya hanya Selesai).
-      const tx = transactions.find((t) => t.id === pinAction.id);
+      const tx = allTransactions.find((t) => t.id === pinAction.id);
       if (tx) {
         applyStockEffects(tx, 'DELETE');
       }
       deleteTransaction(pinAction.id);
+      setHistoricalTx((prev) => prev.filter((t) => t.id !== pinAction.id));
       if (currentUser) {
         addLog(currentUser.id, currentUser.name, currentUser.role, 'delete_transaction', `Hapus transaksi ${pinAction.id}`, { transactionId: pinAction.id });
       }
@@ -346,11 +449,11 @@ export default function Transactions() {
   // Konfirmasi ber-state processing + disable tombol Refund saat PIN pending.
   const executeRefund = (tx: Transaction, note: string) => {
     if (!currentUser) return;
-    // v4.7 TO DO 18.8 (A4): guard anti double-refund — cek ulang `refunded` dari STORE
+    // v4.7 TO DO 18.8 (A4): guard anti double-refund — cek ulang `refunded` dari STORE / allTransactions
     // (salinan render bisa basi) + in-flight guard + split guard; pakai TARGET terbaru.
     const target = canExecuteRefund(
       tx,
-      useTransactionStore.getState().transactions,
+      allTransactions,
       hasSplitChildren,
       refundingRef.current
     );
@@ -372,14 +475,30 @@ export default function Transactions() {
       addMovement('out', amount, REFUND_CASH_CATEGORY, refundMovementNotes(target, note), currentUser.id, currentUser.name);
 
       // 4) Tandai refunded + sync ke cloud (device lain melihat status refund & eksklusi omset)
+      const nowIso = new Date().toISOString();
       updateTxMeta(target.id, {
         refunded: true,
-        refundedAt: new Date().toISOString(),
+        refundedAt: nowIso,
         refundedAmount: amount,
         refundNote: note || undefined,
         refundedById: currentUser.id,
         refundedByName: currentUser.name,
       });
+      setHistoricalTx((prev) =>
+        prev.map((t) =>
+          t.id === target.id
+            ? {
+                ...t,
+                refunded: true,
+                refundedAt: nowIso,
+                refundedAmount: amount,
+                refundNote: note || undefined,
+                refundedById: currentUser.id,
+                refundedByName: currentUser.name,
+              }
+            : t
+        )
+      );
 
       // 5) Audit log
       addLog(currentUser.id, currentUser.name, currentUser.role, 'refund_transaction',
@@ -477,7 +596,7 @@ export default function Transactions() {
     const base = `Ubah status transaksi #${confirmAction.queueNumber || '?'} menjadi "${statusLabel}"?`;
     // v4.1 TO DO 1.7: informasikan konsekuensi stok pada void pesanan gantung
     if (confirmAction.status === 'Cancel') {
-      const tx = transactions.find((t) => t.id === confirmAction.id);
+      const tx = allTransactions.find((t) => t.id === confirmAction.id);
       if (tx?.txStatus === 'Pending') {
         return `${base} Stok bahan baku yang di-reserve akan dikembalikan.`;
       }
@@ -489,9 +608,9 @@ export default function Transactions() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <h1 className="text-2xl font-bold text-center sm:text-left w-full sm:w-auto">📋 Riwayat Transaksi</h1>
-        {/* v4.7 TO DO 13.7 (O-5): hitung transaksi yang belum terkonfirmasi sync */}
+        {/* v4.7 TO DO 13.7 (O-5): hitung transaksi yang belum terkonfirmasi sync (kecualikan arsip cloud) */}
         {(() => {
-          const unsynced = filteredTx.filter((t) => !confirmedSyncIds.includes(t.id)).length;
+          const unsynced = filteredTx.filter((t) => !historicalIdSet.has(t.id) && !confirmedSyncIds.includes(t.id)).length;
           return unsynced > 0 ? (
             <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 whitespace-nowrap">
               <Clock size={12} /> ⚠️ {unsynced} belum sync
@@ -627,6 +746,17 @@ export default function Transactions() {
         )}
       </div>
 
+      {/* Historical data loading indicator */}
+      {isLoadingHistorical && (
+        <div className="card flex items-center gap-2 px-4 py-2.5 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-sm text-blue-700 dark:text-blue-300 animate-pulse">
+          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          Memuat data transaksi historis dari cloud...
+        </div>
+      )}
+
       {/* Transaction List */}
       {filteredTx.length === 0 ? (
         <div className="card p-12 text-center text-slate-400 dark:text-slate-500">
@@ -671,8 +801,8 @@ export default function Transactions() {
                     {tx.refunded && (
                       <span className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"><RotateCcw size={12} /> Refund</span>
                     )}
-                    {/* v4.7 TO DO 13.7 (O-5): badge "Belum Sync" per transaksi */}
-                    {!confirmedSyncIds.includes(tx.id) && (
+                    {/* v4.7 TO DO 13.7 (O-5): badge "Belum Sync" per transaksi (kecualikan arsip cloud) */}
+                    {!historicalIdSet.has(tx.id) && !confirmedSyncIds.includes(tx.id) && (
                       <span
                         className="badge bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300"
                         title="Transaksi ini belum tersinkron ke cloud — akan dikirim otomatis saat online"
@@ -854,7 +984,7 @@ export default function Transactions() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between card p-3 text-xs">
           <span className="text-slate-500 dark:text-slate-400">
-            Halaman {page} dari {totalPages} ({filteredTx.length} item)
+            Halaman {page} dari {totalPages} ({filteredTx.length} item{historicalCount > 0 ? ` • ${historicalCount} dari cloud` : ''})
           </span>
           <div className="flex items-center gap-2">
             <button
