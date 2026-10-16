@@ -1,6 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 // EGRESS-OPT: supabase import dihapus — subscription ditangani global di App.tsx
 import { useTransactionStore } from '../store/transactionStore';
+import { fetchTransactionsByDateRange } from '../lib/cloudSync';
+import { isSupabaseConfigured } from '../lib/supabase';
+import type { Transaction } from '../types';
 import { useInventoryStore } from '../store/inventoryStore';
 import { useAuthStore } from '../store/authStore';
 import { useMenuStore } from '../store/menuStore';
@@ -78,10 +81,31 @@ export default function Reports() {
   const { records: opnameRecords } = useStockOpnameStore();
   const { promos } = usePromoStore();
 
+  // ============================================================
+  // On-Demand Historical Date-Range Fetch
+  // ============================================================
+  // State untuk menyimpan transaksi historis yang di-fetch on-demand dari cloud
+  // saat user memilih filter tanggal yang melampaui jangkauan 500 transaksi terbaru.
+  const [historicalTx, setHistoricalTx] = useState<Transaction[]>([]);
+  const [isLoadingHistorical, setIsLoadingHistorical] = useState(false);
+  // Ref untuk mencegah race condition pada concurrent fetches
+  const fetchIdRef = useRef(0);
+
+  // Gabungkan transaksi lokal (store) dengan historis (cloud on-demand) — anti duplikasi via Map
+  const allTransactions = useMemo(() => {
+    if (historicalTx.length === 0) return transactions;
+    const map = new Map<string, Transaction>();
+    transactions.forEach((t) => map.set(t.id, t));
+    historicalTx.forEach((t) => { if (!map.has(t.id)) map.set(t.id, t); });
+    return Array.from(map.values());
+  }, [transactions, historicalTx]);
+
+  const historicalIdSet = useMemo(() => new Set(historicalTx.map((t) => t.id)), [historicalTx]);
+
   // Filter transactions by date
   const filteredTx = useMemo(() => {
     const now = new Date();
-    return transactions.filter((t) => {
+    return allTransactions.filter((t) => {
       if (t.txStatus !== 'Selesai') return false;
       // v4.1 TO DO 1.6: Sub-bill hasil split bill (anak) tidak dihitung lagi — omset sudah tercatat
       // di transaksi induk (parent). Tanpa ini, omset & HPP terhitung ganda (double accounting).
@@ -115,7 +139,12 @@ export default function Reports() {
           return true;
       }
     });
-  }, [transactions, dateFilterType, customDateFrom, customDateTo, filterMonth]);
+  }, [allTransactions, dateFilterType, customDateFrom, customDateTo, filterMonth]);
+
+  const historicalCount = useMemo(
+    () => filteredTx.filter((t) => historicalIdSet.has(t.id)).length,
+    [filteredTx, historicalIdSet]
+  );
 
   // Compute date range for reuse in other tabs (opname, etc.)
   const { dateFrom, dateTo } = useMemo(() => {
@@ -152,6 +181,66 @@ export default function Reports() {
         return { dateFrom: new Date(0), dateTo: new Date() };
     }
   }, [dateFilterType, customDateFrom, customDateTo, filterMonth]);
+
+  // ============================================================
+  // On-Demand Historical Fetch — dipicu saat filter tanggal berubah
+  // ============================================================
+  // Cek apakah rentang tanggal yang diminta melampaui data lokal (500 transaksi terbaru).
+  // Jika ya, fetch data historis dari cloud hanya untuk periode yang diminta.
+  useEffect(() => {
+    // 1. 'today' selalu ada di 500 transaksi terbaru — reset & skip fetch
+    if (dateFilterType === 'today') {
+      setHistoricalTx([]);
+      return;
+    }
+    // 2. Filter 'all' menggunakan seluruh transaksi lokal (tanpa query epoch 1970 tanpa batas)
+    if (dateFilterType === 'all') {
+      setHistoricalTx([]);
+      return;
+    }
+    // 3. Guard 'custom': jika user belum mengisi tanggal mulai, jangan fetch dari epoch 1970
+    if (dateFilterType === 'custom' && !customDateFrom) {
+      setHistoricalTx([]);
+      return;
+    }
+    if (!isSupabaseConfigured) return;
+
+    // Hitung tanggal transaksi tertua dari store lokal secara imperatif
+    // (tidak memasukkan `transactions` ke deps agar transaksi baru di kasir hari ini tidak memicu download ulang bulan lalu)
+    const storeTx = useTransactionStore.getState().transactions;
+    const localDates = storeTx
+      .filter((t) => t.txStatus === 'Selesai' && !t.splitParentId && !t.refunded)
+      .map((t) => new Date(t.date).getTime());
+    const oldestLocalTime = localDates.length > 0
+      ? localDates.reduce((min, d) => Math.min(min, d), Infinity)
+      : Date.now();
+
+    // Jika dateFrom >= oldestLocalTime — semua data sudah tersedia di memori lokal, reset historical & skip fetch
+    if (dateFrom.getTime() >= oldestLocalTime) {
+      setHistoricalTx([]);
+      return;
+    }
+
+    const fetchStart = dateFrom.toISOString();
+    const fetchEnd = dateTo.toISOString();
+
+    const currentFetchId = ++fetchIdRef.current;
+    setIsLoadingHistorical(true);
+
+    fetchTransactionsByDateRange(fetchStart, fetchEnd)
+      .then((data) => {
+        // Race-condition guard: abaikan hasil fetch yang bukan dari request terbaru
+        if (fetchIdRef.current !== currentFetchId) return;
+        if (data) {
+          setHistoricalTx(data);
+        }
+        setIsLoadingHistorical(false);
+      })
+      .catch(() => {
+        if (fetchIdRef.current !== currentFetchId) return;
+        setIsLoadingHistorical(false);
+      });
+  }, [dateFilterType, dateFrom.getTime(), dateTo.getTime(), customDateFrom]);
 
   // Filter stock opname records by date range for P&L shrinkage calculation (BUG-02 fix)
   const filteredOpnameRecords = useMemo(() => {
@@ -250,8 +339,8 @@ export default function Reports() {
 
   const forceCloseStats = useMemo(() => {
     if (!forceCloseTarget) return null;
-    return computeShiftStats(forceCloseTarget, transactions, movements);
-  }, [forceCloseTarget, transactions, movements]);
+    return computeShiftStats(forceCloseTarget, allTransactions, movements);
+  }, [forceCloseTarget, allTransactions, movements]);
 
   const executeForceClose = () => {
     if (!currentUser || !forceCloseTarget) return;
@@ -328,7 +417,7 @@ export default function Reports() {
         {
           shift: targetShift,
           storeName: settings.storeName,
-          transactions,
+          transactions: allTransactions,
           movements,
           cashierName: emp.name,
           closingCash: emp.closingCash,
@@ -840,9 +929,20 @@ export default function Reports() {
           )}
         </div>
         <p className="text-xs text-slate-400 mt-2">
-          Menampilkan {filteredTx.length} transaksi • {getDateLabel()}
+          Menampilkan {filteredTx.length} transaksi{historicalCount > 0 ? ` (${historicalCount} dari arsip cloud)` : ''} • {getDateLabel()}
         </p>
       </div>
+
+      {/* Historical data loading indicator */}
+      {isLoadingHistorical && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-xl text-sm text-blue-700 dark:text-blue-300 animate-pulse">
+          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          Memuat data transaksi historis dari cloud untuk periode ini...
+        </div>
+      )}
 
       {/* Tabs (Responsive scrollable for mobile) */}
       <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl overflow-x-auto whitespace-nowrap scrollbar-none">
